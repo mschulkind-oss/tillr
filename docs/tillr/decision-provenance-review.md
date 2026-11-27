@@ -3,15 +3,15 @@ title: "Who made the decisions recorded in the tillr designs, and which of them 
 status: in-review
 stage: DESIGN
 tags: [tillr, review, provenance, decisions, design]
-summary: "The owner's rulings on decisions that agents made in the tillr designs without the owner's words, the ten questions of that kind still open, and the rule for how such decisions are recorded from here on (OQ-PR21 and OQ-PR22)."
-next: "The owner answers the ten open questions (OQ-PR6 to OQ-PR11, OQ-PR15, OQ-PR16, OQ-PR18 and OQ-PR19); then build the gate check and the loop rule of Section 6, which no check enforces yet."
+summary: "The owner's rulings on decisions that agents made in the tillr designs without the owner's words, the nine questions of that kind still open, and the rule for how such decisions are recorded from here on (OQ-PR21 and OQ-PR22)."
+next: "The owner answers the nine open questions (OQ-PR6, OQ-PR7, OQ-PR9 to OQ-PR11, OQ-PR15, OQ-PR16, OQ-PR18 and OQ-PR19); then build the gate check and the loop rule of Section 6, which no check enforces yet."
 depends-on:
   - ../design/tillr-queue-mirrors-designs.md#OQ-QM1
 ---
 
 # Who made the decisions recorded in the tillr designs, and which of them the owner should now rule on
 
-**Status:** Awaiting the owner's rulings on ten open questions. Twelve are settled in
+**Status:** Awaiting the owner's rulings on nine open questions. Thirteen are settled in
 [the ledger](#decision-ledger), whose Built column says what each ruling still owes. The rule
 in [Section 6](#6-how-this-stops-happening) is not enforced by any check:
 `rg 'Needs your ruling' tools/gate` returns nothing.
@@ -24,7 +24,7 @@ in [Section 6](#6-how-this-stops-happening) is not enforced by any check:
 **Why it matters.** A decision that changes the owner's documents, repository, spend, models
 or what the owner sees is the owner's to make. Several were made by agents and built on.
 
-**The shape.** [Ten open questions](#2-questions-for-the-owner), hardest to undo first;
+**The shape.** [Nine open questions](#2-questions-for-the-owner), hardest to undo first;
 then [the rule from here on](#6-how-this-stops-happening).
 
 **Cost.** Reading time. An answer that keeps today's behavior costs nothing more; one that
@@ -32,7 +32,7 @@ changes it becomes work.
 
 **Start at:** [OQ-PR6](#OQ-PR6).
 
-**Needs your ruling:** [OQ-PR6](#OQ-PR6), [OQ-PR7](#OQ-PR7), [OQ-PR8](#OQ-PR8),
+**Needs your ruling:** [OQ-PR6](#OQ-PR6), [OQ-PR7](#OQ-PR7),
 [OQ-PR9](#OQ-PR9), [OQ-PR10](#OQ-PR10), [OQ-PR11](#OQ-PR11), [OQ-PR15](#OQ-PR15),
 [OQ-PR16](#OQ-PR16), [OQ-PR18](#OQ-PR18), [OQ-PR19](#OQ-PR19) (plus the designer's decisions
 `D-PR1` to `D-PR4` in [the ledger](#decision-ledger), which the owner may overturn).
@@ -121,27 +121,7 @@ every tillr program ([OQ-SH2](../design/tillr-selfhosted-build.md#OQ-SH2)).
 
    > _(empty — fill in when decided)_
 
-3. 💬 **OQ-PR8: Should one unanswered question in a design hold all of that design's work?**
-
-   A design lists five build steps and has one question open for you, about the fifth. Today
-   tillr holds every piece of work written in a document that has a question open. You ruled
-   that questions live in documents, not that they stop work.
-
-   - **A — The whole design waits.** Nothing is built on a design you may still change. Four
-     steps that have nothing to do with the question sit idle until you answer.
-   - **B — Only what the question touches waits.** The steps that name the question wait, and
-     the other four are built. If your answer changes something they assumed, that work is
-     redone.
-
-   <!-- vantage: question id=OQ-PR8 leaning="B: today a step waits on a question that is not about it." -->
-
-   _Leaning:_ B: today a step waits on a question that is not about it.
-
-   **Answer:**
-
-   > _(empty — fill in when decided)_
-
-4. 💬 **OQ-PR9: Should renaming a heading in your roadmap be able to change the queue?**
+3. 💬 **OQ-PR9: Should renaming a heading in your roadmap be able to change the queue?**
 
    A roadmap heading that starts with `Icebox` or `Exploration` parks the designs linked under
    it (`parkedSections` in [`sync.go`](../../tools/tillr-item/item/sync.go)), so renaming
@@ -165,7 +145,7 @@ every tillr program ([OQ-SH2](../design/tillr-selfhosted-build.md#OQ-SH2)).
 
    > _(empty — fill in when decided)_
 
-5. 💬 **OQ-PR10: Should there be a way to queue work that has no document?**
+4. 💬 **OQ-PR10: Should there be a way to queue work that has no document?**
 
    You think of a small chore and want it in the queue without writing a design. Work enters
    only by being written in a document: `tillr item seed` refuses and points at
@@ -184,7 +164,7 @@ every tillr program ([OQ-SH2](../design/tillr-selfhosted-build.md#OQ-SH2)).
 
    > _(empty — fill in when decided)_
 
-6. 💬 **OQ-PR11: When you jot down an idea, should a design agent turn it into work without checking back with you?**
+5. 💬 **OQ-PR11: When you jot down an idea, should a design agent turn it into work without checking back with you?**
 
    You type a half-formed idea into the box on the observatory, and your words are saved. A
    design agent then takes one turn on the idea, the result of that turn lands, and titled
@@ -203,7 +183,7 @@ every tillr program ([OQ-SH2](../design/tillr-selfhosted-build.md#OQ-SH2)).
 
    > _(empty — fill in when decided)_
 
-7. 💬 **OQ-PR15: Should copies of your tillr designs be installed in every other workspace?**
+6. 💬 **OQ-PR15: Should copies of your tillr designs be installed in every other workspace?**
 
    [`tools/tillr/cmd/pack-docs`](../../tools/tillr/cmd/pack-docs) (`tools/tillr/packdocs`) copies every design that
    [the status index](./design-status.md) marks `shipped` into the pack, so every workspace
@@ -223,7 +203,7 @@ every tillr program ([OQ-SH2](../design/tillr-selfhosted-build.md#OQ-SH2)).
 
    > _(empty — fill in when decided)_
 
-8. 💬 **OQ-PR16: May tillr's web page change the queue without a login?**
+7. 💬 **OQ-PR16: May tillr's web page change the queue without a login?**
 
    You drag a piece of work up the queue on the observatory, or type an idea into its box.
    The server accepts those two kinds of change when it is started with `--write`. It checks
@@ -242,58 +222,61 @@ every tillr program ([OQ-SH2](../design/tillr-selfhosted-build.md#OQ-SH2)).
 
    > _(empty — fill in when decided)_
 
-9. 💬 **OQ-PR18: Should an agent's run have a time limit?**
+8. 💬 **OQ-PR18: Should an agent's run have a time limit?**
 
-    A run has no time limit unless one is set, a run that has committed is judged on its
-    commit before any set limit is looked at, and a run stopped at a set limit before
-    committing is resumed. An agent wrote those rules
-    ([run wall ruling](../reference/run-wall-ruling.md)). No dated quotation of yours rules on a
-    default limit or on how many times a stopped run resumes.
+   A run has no time limit unless one is set, a run that has committed is judged on its
+   commit before any set limit is looked at, and a run stopped at a set limit before
+   committing is resumed. An agent wrote those rules
+   ([run wall ruling](../reference/run-wall-ruling.md)). No dated quotation of yours rules on a
+   default limit or on how many times a stopped run resumes.
 
-    - **A — No limit, and a stopped run always resumes.** A long run finishes. A run that is
-      going nowhere keeps spending until something else notices.
-    - **B — A default limit.** You say how long. Runs past it are stopped.
+   - **A — No limit, and a stopped run always resumes.** A long run finishes. A run that is
+     going nowhere keeps spending until something else notices.
+   - **B — A default limit.** You say how long. Runs past it are stopped.
 
-    <!-- vantage: question id=OQ-PR18 leaning="A: a fixed limit kills finished work, and a cap on resumes is an arbitrary count." -->
+   <!-- vantage: question id=OQ-PR18 leaning="A: a fixed limit kills finished work, and a cap on resumes is an arbitrary count." -->
 
-    _Leaning:_ A: a fixed limit kills finished work, and a cap on resumes is an arbitrary count.
+   _Leaning:_ A: a fixed limit kills finished work, and a cap on resumes is an arbitrary count.
 
-    **Answer:**
+   **Answer:**
 
-    > _(empty — fill in when decided)_
+   > _(empty — fill in when decided)_
 
-10. 💬 **OQ-PR19: When a check hangs a second time, should the work be handed to you?**
+9. 💬 **OQ-PR19: When a check hangs a second time, should the work be handed to you?**
 
-    You ruled that a time budget is a target and only a stall ends a check: "target budgets,
-    watch for stalls, but don't let 'load is high' cause failures that would otherwise finish
-    just fine" (2026-11-17). That did not say what happens after a stall. An agent chose it:
-    the check runs once more, and a second stall on the same work hands the work to you
-    ("second stall on head tree" in
-    [`gate_stall.go`](../../tools/tillr-drain/drain/gate_stall.go)).
+   You ruled that a time budget is a target and only a stall ends a check: "target budgets,
+   watch for stalls, but don't let 'load is high' cause failures that would otherwise finish
+   just fine" (2026-11-17). That did not say what happens after a stall. An agent chose it:
+   the check runs once more, and a second stall on the same work hands the work to you
+   ("second stall on head tree" in
+   [`gate_stall.go`](../../tools/tillr-drain/drain/gate_stall.go)).
 
-    - **A — Restarted, never counted.** A stalled check is restarted while its cause is
-      diagnosed and fixed, and reaches you only when an agent raises an objection that names
-      you. A check that keeps stalling keeps spending until the cause is fixed.
-    - **B — Twice, then you.** As today.
+   - **A — Restarted, never counted.** A stalled check is restarted while its cause is
+     diagnosed and fixed, and reaches you only when an agent raises an objection that names
+     you. A check that keeps stalling keeps spending until the cause is fixed.
+   - **B — Twice, then you.** As today.
 
-    <!-- vantage: question id=OQ-PR19 leaning="A: a second hang is a tool or check fault for an agent to diagnose rather than a stop count for you, while the stall threshold stays as engineering detail." -->
+   <!-- vantage: question id=OQ-PR19 leaning="A: a second hang is a tool or check fault for an agent to diagnose rather than a stop count for you, while the stall threshold stays as engineering detail." -->
 
-    _Leaning:_ A: a second hang is a tool or check fault for an agent to diagnose rather than a stop count for you, while the stall threshold stays as engineering detail.
+   _Leaning:_ A: a second hang is a tool or check fault for an agent to diagnose rather than a stop count for you, while the stall threshold stays as engineering detail.
 
-    **Answer:**
+   **Answer:**
 
-    > _(empty — fill in when decided)_
+   > _(empty — fill in when decided)_
 
 ## 6. How this stops happening
 
 Two rules are the owner's rulings. Three more (`D-PR1` to `D-PR3`) are the designer's
 decisions, labeled as such; the owner may overturn any of them.
 
-**Owner's ruling ([OQ-PR21](#OQ-PR21)): nothing is built on unseen product or user-facing
-decisions.** Any decision that touches the owner's documents, repository, money,
-models or what the owner sees is put to the owner as an open question, and nothing is built on that design
-until the owner answers. Engineering detail is marked as the agent's decision and may be built on
-without stopping the queue.
+**Owner's ruling ([OQ-PR21](#OQ-PR21) and [OQ-PR8](#OQ-PR8)): nothing is built on unseen
+product or user-facing decisions, and an open question holds only the steps that depend on its
+answer.** Any decision that touches the owner's documents, repository, money, models or what
+the owner sees is put to the owner as an open question, and no work that depends on that
+question is built until the owner answers; steps of the design that do not depend on the
+question are built ([per-step question holds](../design/tillr-per-step-question-holds.md)).
+Engineering detail is marked as the agent's decision and may be built on without stopping the
+queue.
 
 **Owner's ruling ([OQ-PR22](#OQ-PR22)): an agent closes a question addressed to the owner
 only by quoting the owner.** The ledger row carries the exact quote and its date. An agent's own
@@ -318,8 +301,9 @@ It refuses:
   words.
 
 **What has to be built:** the gate check of `D-PR3` and its tests; and, for
-[OQ-PR21](#OQ-PR21), a rule in sync and the loop that holds building on a design with an
-unruled decision of the owner's kind while engineering detail does not hold it.
+[OQ-PR21](#OQ-PR21) and [OQ-PR8](#OQ-PR8), the sync and planner rules that hold the steps of
+a design that depend on an unruled owner question while letting independent steps and
+engineering detail build ([per-step question holds](../design/tillr-per-step-question-holds.md)).
 
 ## Decision Ledger
 
@@ -332,6 +316,7 @@ unruled decision of the owner's kind while engineering detail does not hold it.
 | OQ-PR3 | **Owner ruling:** A piece of work may run as a series of steps laid out in workflow files under `config/tillr/workflows/`, with a seat per step and file inclusion. The owner took option A: *"A: your rulings on the item graph, made after this was built, already assume it."* | 2026-11-20 | [Item graphs](../reference/tillr-item-graphs.md) | Yes |
 | OQ-PR4 | **Owner ruling:** How the loop steps through the queue is left to the engineers as engineering detail. The owner took option A: *"A: you have said engineering detail is the agent's to decide, and nothing you see changes with it."* | 2026-11-20 | [Drain successor reference](../reference/tillr-drain-successor.md) | Yes |
 | OQ-PR5 | **Owner ruling:** The observatory's layout (dedicated linked pages, stepping keys, home-page grouping by who must act, and fixed queue order) stays as the base, with changes requested as the owner uses it. The owner took option A: *"A: you use it daily and already ask for changes directly, which tests it better than rereading the alternatives."* | 2026-11-20 | [Observatory reference](../reference/observatory-redesign.md) | Yes |
+| <a id="OQ-PR8"></a>[OQ-PR8](#OQ-PR8) | **Owner ruling:** An unanswered question holds only the work that depends on its answer; the other steps of the design are built, and the owner accepts that an answer may cause some of that work to be redone. The owner took option B on 2026-11-27: *"B: today a step waits on a question that is not about it."* (*"B — Only what the question touches waits. The steps that name the question wait, and the other four are built. If your answer changes something they assumed, that work is redone."*) | 2026-11-27 | [Per-step question holds](../design/tillr-per-step-question-holds.md) | No: `questionState` in `tools/tillr-drain/drain/plan.go` still holds every item naming a document with an unanswered question |
 | OQ-PR12 | **Owner ruling:** Comments on a design in Vantage become work for that document's design agent, and while that comment work is open, unstarted steps of that design wait. The owner took option A: *"A: comment work closes quickly, and building on a design you have just objected to wastes runs."* | 2026-11-20 | [Designer sessions](../reference/tillr-designer-sessions.md) | Yes |
 | OQ-PR13 | **Owner ruling:** *"database only."* The hand-dragged queue order lives only in the store (`.tillr/state.db`), never in a tracked file. | 2026-11-20 | [Observatory actions](../reference/observatory-actions.md) | Yes: no tracked order file or setting remains, and `retired_order.go` in the drain retires an in-flight order record without landing it |
 | OQ-PR14 | **Owner ruling:** No cheap model rewrites wording inside the owner's human-read design documents; prose shaping happens only on tillr's side or inside the agent-only companion `<topic>-plan.md`. The owner took option B: *"B, already settled by [OQ-QM1](../design/tillr-queue-mirrors-designs.md#OQ-QM1); confirm: human-read design documents hold no build steps, so no cheap model rewrites wording inside them."* | 2026-11-20 | [Section 2](#2-questions-for-the-owner) | No: `[prose] rewrite = true` is set in `.tillr.toml` |

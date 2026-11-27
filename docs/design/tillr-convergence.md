@@ -47,7 +47,6 @@ triage of an unshared open item (`D-TC2`) is a design decision owed here,
 the [Decision Ledger](#decision-ledger) remain open to the owner's review and overturn (tracked in
 [`decision-provenance-review.md`](../tillr/decision-provenance-review.md):
 [`OQ-PR6`](../tillr/decision-provenance-review.md#OQ-PR6),
-[`OQ-PR8`](../tillr/decision-provenance-review.md#OQ-PR8),
 [`OQ-PR10`](../tillr/decision-provenance-review.md#OQ-PR10)).
 
 **Reads with:** [queue persistence](../reference/tillr-queue-persistence.md) (documents are the

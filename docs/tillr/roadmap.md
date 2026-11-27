@@ -100,12 +100,12 @@ longer exists. Both are removed, and the first needs a seam to move behind.
    - **Outcome:** declared checks are the only protocol, and replay scoping recognizes the
      declared `go-affected` id.
    - **Where:** [`fork_check_triage.go`](../../tools/tillr-drain/remotesync/fork_check_triage.go),
-     [`legacy_watches.go`](../../tools/tillr-drain/drain/legacy_watches.go),
+     [`legacy_watches.go`](../../tools/tillr-drain/internal/gatespans/legacy_watches.go),
      `heavy_legacy_progress.go` in
      [`tools/tillr-drain/heavyrun/`](../../tools/tillr-drain/heavyrun/), `runHeavyLegacy` in
-     [`heavy_steps.go`](../../tools/tillr-drain/drain/heavy_steps.go), and the `go-tool/`,
+     [`heavy_steps.go`](../../tools/tillr-drain/internal/gatespans/heavy_steps.go), and the `go-tool/`,
      `go-substrate/` and `gate-runner/` id prefixes in
-     [`replay_go_affected.go`](../../tools/tillr-drain/drain/replay_go_affected.go).
+     [`replay_go_affected.go`](../../tools/tillr-drain/internal/gatespans/replay_go_affected.go).
    - **Depends on:** nothing. It is behind entry 4 only because both edit the drain's
      heavy-check code and the fork removal deletes more of it.
 
@@ -270,9 +270,10 @@ Fifth by rule 3: the item model is the substrate of sections 6 and 7.
 35. [A design with no open questions moves straight to planning](../design/tillr-design-to-planning-transition.md):
     five slices wait on neither of its questions.
 
-36. [The queue mirrors the roadmap's outstanding designs](../design/tillr-queue-mirrors-designs.md):
-    every unfinished design a roadmap routes has exactly one item in the queue, and build steps
-    live in a companion plan.
+36. [The queue mirrors the roadmap's outstanding designs](../design/tillr-queue-mirrors-designs.md)
+    and [per-step question holds](../design/tillr-per-step-question-holds.md):
+    every unfinished design a roadmap routes has one item in the queue, build steps live in a
+    companion plan, and an unanswered question holds only the steps that depend on its answer.
 
 37. [Early design landing](../design/tillr-early-design-landing.md): a question and the design
     it is about land ahead of the item that raised them.
@@ -400,6 +401,7 @@ which entry waits. A question that blocks nothing yet is reached through its des
 | Limits and priority among concurrent test processes | [`OQ-GTC1`](../design/gate-test-capacity.md#OQ-GTC1) to [`OQ-GTC4`](../design/gate-test-capacity.md#OQ-GTC4) | Entry 11 |
 | Whether every new request is read for flaws before its first worker | [`OQ-RA1`](../design/tillr-request-amendment.md#OQ-RA1) | The last slices of entry 33 |
 | What happens to running slices when a review comment arrives, and how the existing backlog is treated | [`OQ-DT1`](../design/tillr-design-to-planning-transition.md#OQ-DT1), [`OQ-DT2`](../design/tillr-design-to-planning-transition.md#OQ-DT2) | The later slices of entry 35 |
+| What tillr does with unmarked prose questions in a design, and whether `SKETCH` and `draft` designs with open questions stay held before planning | [`OQ-PSH1`](../design/tillr-per-step-question-holds.md#OQ-PSH1), [`OQ-PSH2`](../design/tillr-per-step-question-holds.md#OQ-PSH2) | Unmarked-question and draft-boundary slices of entry 36; marked-question per-step holds do not wait |
 | Who writes a provisional design, and how it is marked | [`OQ-PD1`](../design/provisional-design-docs.md#OQ-PD1) to [`OQ-PD4`](../design/provisional-design-docs.md#OQ-PD4) | Entry 40 |
 | Where the companion-plan rulebook belongs | [`OQ-RJ5`](../design/tillr-review-rules.md#OQ-RJ5) | Part of entry 44 |
 | Whether a build run has a strict ceiling at the build tier | [`OQ-PSS3`](../design/tillr-plan-step-and-seat-selection.md#OQ-PSS3) | Entry 46 |
