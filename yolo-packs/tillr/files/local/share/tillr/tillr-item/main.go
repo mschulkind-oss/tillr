@@ -275,6 +275,18 @@ func syncFace(args []string) int {
 			return fail(openFailure(err))
 		}
 		defer s.Close()
+		var needsIndex bool
+		if err := s.ReadTx(ctx, func(r *store.Reader) error {
+			var err error
+			needsIndex, err = item.NeedsDesignIndex(r, in)
+			return err
+		}); err != nil {
+			return fail(err)
+		}
+		if needsIndex {
+			idx := vantage.ReadVantageIndex(ctx, in.Root, in.QuestionsCmd)
+			in.Index = &idx
+		}
 		if err := s.ReadTx(ctx, func(r *store.Reader) error {
 			var err error
 			report, err = item.Sync(ctx, r, nil, in)
@@ -288,6 +300,21 @@ func syncFace(args []string) int {
 			return fail(openFailure(err))
 		}
 		defer s.Close()
+		// Read whether design mirroring needs the external Vantage index in a
+		// short ReadTx and run the subprocess outside any SQLite transaction so
+		// tillr-item sync never holds the store write lock across vantage-check.
+		var needsIndex bool
+		if err := s.ReadTx(ctx, func(r *store.Reader) error {
+			var err error
+			needsIndex, err = item.NeedsDesignIndex(r, in)
+			return err
+		}); err != nil {
+			return fail(err)
+		}
+		if needsIndex {
+			idx := vantage.ReadVantageIndex(ctx, in.Root, in.QuestionsCmd)
+			in.Index = &idx
+		}
 		if err := s.WriteTx(ctx, func(tx *store.Tx) error {
 			var err error
 			report, err = item.Sync(ctx, tx.Reader(), tx, in)

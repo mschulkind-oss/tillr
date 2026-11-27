@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -281,5 +282,83 @@ func TestSyncFaceExitCodesAndOutput(t *testing.T) {
 	}
 	if code, out := run(t, "sync", "--help"); code != 0 || !strings.Contains(string(out), "sync") {
 		t.Fatalf("sync --help exited %d: %s", code, out)
+	}
+}
+
+// hangGuard is how long a test waits for an event that is certain to happen before it
+// treats the test as hung rather than slow.
+const hangGuard = 5 * time.Minute
+
+func TestSyncDoesNotHoldWriteLockDuringVantageIndex(t *testing.T) {
+	repo := syncRepo(t, map[string]string{
+		"docs/roadmap.md":       "# Roadmap\n\n1. [Sample](design/sample.md)\n",
+		"docs/design/sample.md": "---\ntitle: Sample Design\nstage: DECIDED\n---\n\n# Sample Design\n",
+	})
+	db := filepath.Join(scratch(t, "sync-lock-store"), "state.db")
+	// Initialize the store first so concurrent writers open an existing WAL store.
+	s, err := store.Open(context.Background(), db, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+
+	work := scratch(t, "sync-lock-signal")
+	started := filepath.Join(work, "started")
+	release := filepath.Join(work, "release")
+	script := filepath.Join(work, "questions.sh")
+	body := `#!/bin/sh
+touch "` + started + `"
+while [ ! -f "` + release + `" ]; do sleep 0.01; done
+cat <<'EOF'
+{"index":{"refused":false,"documents":[{"path":"docs/design/sample.md","status":"accepted","stage":"DECIDED","questions":[]}]}}
+EOF
+`
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(bin, "sync", "--store", db, "--root", repo, "--roadmap", "docs/roadmap.md", "--questions-cmd", script, "--json")
+	var outBuf strings.Builder
+	cmd.Stdout = &outBuf
+	cmd.Stderr = &outBuf
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		_ = os.WriteFile(release, nil, 0o600)
+		_ = cmd.Wait()
+	}()
+
+	deadline := time.Now().Add(hangGuard)
+	for {
+		if _, err := os.Stat(started); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("questions-cmd did not start in time")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// While tillr-item sync is waiting on the external Vantage index command,
+	// another writer must be able to acquire the store's write lock immediately.
+	concurrent, err := store.Open(context.Background(), db, false, store.WithBusyTimeout(0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer concurrent.Close()
+	if err := concurrent.WriteTx(context.Background(), func(*store.Tx) error { return nil }); err != nil {
+		t.Fatalf("concurrent write blocked while tillr-item sync ran vantage index: %v", err)
+	}
+
+	if err := os.WriteFile(release, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Wait(); err != nil {
+		t.Fatalf("tillr-item sync failed: %v\n%s", err, outBuf.String())
+	}
+	rec := decodeSync(t, []byte(outBuf.String()))
+	if len(rec.Payload.Created) != 1 || rec.Payload.Created[0] != "item-design-design-sample" {
+		t.Fatalf("created = %v, want [item-design-design-sample]", rec.Payload.Created)
 	}
 }

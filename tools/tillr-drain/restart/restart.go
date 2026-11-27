@@ -96,6 +96,12 @@ func validRole(role string) error {
 // File writes one request for role and returns it. It needs no running loop: the
 // next process of that role answers it at startup.
 func File(ctx context.Context, storePath, role string, at time.Time) (Request, error) {
+	return FileWithOptions(ctx, storePath, role, at)
+}
+
+// FileWithOptions is File with optional store.OpenOption values (used by tests to
+// control SQLite busy timeouts without changing production defaults).
+func FileWithOptions(ctx context.Context, storePath, role string, at time.Time, opts ...store.OpenOption) (Request, error) {
 	if err := validRole(role); err != nil {
 		return Request{}, err
 	}
@@ -106,7 +112,7 @@ func File(ctx context.Context, storePath, role string, at time.Time) (Request, e
 	request := Request{ID: fmt.Sprintf("restart-%s-%d-%x", role, at.UnixMilli(), suffix), Role: role, At: at.UTC()}
 	// The caller can already be the replacement build, while the old loop is
 	// still writing. Filing a request must never migrate its store.
-	s, err := store.Open(ctx, storePath, false)
+	s, err := store.Open(ctx, storePath, false, opts...)
 	if err != nil {
 		return Request{}, err
 	}
@@ -120,7 +126,7 @@ func File(ctx context.Context, storePath, role string, at time.Time) (Request, e
 		return err
 	})
 	if err != nil {
-		return Request{}, fmt.Errorf("recording the restart request: %v", err)
+		return Request{}, fmt.Errorf("recording the restart request: %w", err)
 	}
 	return request, nil
 }

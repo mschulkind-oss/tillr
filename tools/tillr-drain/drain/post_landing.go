@@ -247,7 +247,7 @@ func (l *Loop) rollChanged(ctx context.Context, r settings.Roll, changed, tip st
 					}
 				}
 				for _, role := range roles {
-					if _, err = restart.File(ctx, l.cfg.Store, role, time.Now()); err != nil {
+					if err = l.fileRestartRequest(ctx, role); err != nil {
 						l.alarmStoreRoll(ctx, tip, role+" restart request", err)
 						break
 					}
@@ -262,6 +262,36 @@ func (l *Loop) rollChanged(ctx context.Context, r settings.Roll, changed, tip st
 	}
 	if matchesExtensionRollPaths(changed) {
 		l.submitExtensionRoll(ctx, r.Command, tip)
+	}
+}
+
+// fileRestartRequest records one post-landing restart request for role, waiting
+// on a busy store the same way the loop's pass writes do (no retry count, no
+// time limit) until the write succeeds, ctx is cancelled, or a non-busy error
+// occurs.
+func (l *Loop) fileRestartRequest(ctx context.Context, role string) error {
+	now := l.cfg.Now
+	if now == nil {
+		now = time.Now
+	}
+	for {
+		start := time.Now()
+		_, err := restart.FileWithOptions(ctx, l.cfg.Store, role, now(), l.sessionOptions...)
+		if err == nil {
+			return nil
+		}
+		if !store.IsBusy(err) || ctx.Err() != nil {
+			return err
+		}
+		l.reportf("loop: store busy during %s restart request; will retry: %v\n", role, err)
+		l.recordBusyWrite(role+"-restart-request", time.Since(start), now())
+		delay := l.cfg.BackoffBase
+		if delay <= 0 {
+			delay = time.Second
+		}
+		if !waitFor(ctx, delay) {
+			return ctx.Err()
+		}
 	}
 }
 

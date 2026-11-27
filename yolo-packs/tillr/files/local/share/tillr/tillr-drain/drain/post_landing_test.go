@@ -841,3 +841,126 @@ func TestRollCommandWithNoPathsRunsOnlyForkRoll(t *testing.T) {
 		})
 	}
 }
+
+func TestPostLandingRollWaitsForBusyStoreOnViewRestartRequest(t *testing.T) {
+	l, _, commit := actionFixture(t)
+	ctx := context.Background()
+	report := &lockedBuffer{}
+	l.cfg.Report = report
+	l.cfg.BackoffBase = 5 * time.Millisecond
+	l.sessionOptions = []store.OpenOption{store.WithBusyTimeout(0)}
+
+	started := filepath.Join(l.cfg.Root, "roll-started")
+	goOn := filepath.Join(l.cfg.Root, "roll-go")
+	l.cfg.PostLanding.Roll = settings.Roll{
+		Paths:   []string{"tools/tillr*/"},
+		Command: `touch "` + started + `"; while [ ! -f "` + goOn + `" ]; do sleep 0.01; done`,
+	}
+
+	tip := commit("tools/tillr-one/busy-restart")
+	l.afterLanding(ctx, tip)
+
+	waitActionCondition(t, &l.rollAction, func() bool {
+		_, err := os.Stat(started)
+		return err == nil
+	})
+
+	holder, err := store.Open(ctx, l.cfg.Store, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holder.Close()
+	holding, release := make(chan struct{}), make(chan struct{})
+	held := make(chan error, 1)
+	go func() {
+		held <- holder.WriteTx(ctx, func(*store.Tx) error {
+			close(holding)
+			<-release
+			return nil
+		})
+	}()
+	<-holding
+	released := false
+	releaseLock := func() {
+		if !released {
+			released = true
+			close(release)
+		}
+	}
+	defer releaseLock()
+
+	if err := os.WriteFile(goOn, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Wait until the post-landing roll has attempted the view restart request and
+	// met the busy store while the roll action is still running (waiting, not failed).
+	waitActionCondition(t, &l.rollAction, func() bool {
+		return strings.Contains(report.String(), "store busy during view restart request")
+	})
+
+	releaseLock()
+	if err := <-held; err != nil {
+		t.Fatal(err)
+	}
+	waitAction(t, &l.rollAction)
+
+	if strings.Contains(report.String(), "failed:") {
+		t.Fatalf("expected roll to complete after lock release without failing; report:\n%s", report.String())
+	}
+
+	s, err := store.OpenRead(ctx, l.cfg.Store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	var viewState, drainState restart.State
+	if err := s.ReadTx(ctx, func(r *store.Reader) error {
+		var err error
+		viewState, err = restart.ReadState(r, restart.RoleView)
+		if err != nil {
+			return err
+		}
+		drainState, err = restart.ReadState(r, restart.RoleDrain)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(viewState.Pending) != 1 {
+		t.Fatalf("view restart requests = %d, want 1", len(viewState.Pending))
+	}
+	if len(drainState.Pending) != 1 {
+		t.Fatalf("drain restart requests = %d, want 1", len(drainState.Pending))
+	}
+
+	events, err := s.Events(ctx, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var actionDetail string
+	var sawAction bool
+	for _, e := range events {
+		if e.Kind == "drain.roll-failed" {
+			t.Fatalf("unexpected drain.roll-failed event: %s", string(e.Payload))
+		}
+		if e.Kind == postLandingKind {
+			var p struct {
+				Action string `json:"action"`
+				Detail string `json:"detail"`
+			}
+			if err := json.Unmarshal(e.Payload, &p); err != nil {
+				t.Fatal(err)
+			}
+			if p.Action == "roll" {
+				sawAction = true
+				actionDetail = p.Detail
+			}
+		}
+	}
+	if !sawAction {
+		t.Fatalf("missing %s roll event", postLandingKind)
+	}
+	if actionDetail != "" {
+		t.Fatalf("post-landing roll detail = %q, want empty", actionDetail)
+	}
+}

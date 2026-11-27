@@ -104,16 +104,27 @@ func isPairedCompanionPlan(target string, byPath map[string]SyncDocument) bool {
 	return exists
 }
 
-func planDesignMirror(ctx context.Context, r *store.Reader, in SyncInput, held map[string]storedState, finished func(string) bool) (designMirrorPlan, error) {
-	var out designMirrorPlan
-	if in.Partial && len(in.Roadmaps) == 0 {
-		return out, nil
-	}
+type routedDesigns struct {
+	byPath              map[string]SyncDocument
+	mirroredRoadmaps    []string
+	routed              map[string]bool
+	routedList          []string
+	spineLinked         map[string]bool
+	parkedLinked        map[string]bool
+	orderedSpineTargets []string
+	iceboxNoDoc         int
+}
 
-	byPath := make(map[string]SyncDocument, len(in.Documents))
+func collectRoutedDesigns(in SyncInput) routedDesigns {
+	rd := routedDesigns{
+		byPath:       make(map[string]SyncDocument, len(in.Documents)),
+		routed:       map[string]bool{},
+		spineLinked:  map[string]bool{},
+		parkedLinked: map[string]bool{},
+	}
 	var roadmaps []SyncDocument
 	for _, doc := range in.Documents {
-		byPath[doc.Path] = doc
+		rd.byPath[doc.Path] = doc
 		if isRoadmap(doc.Path, in.Roadmaps) {
 			roadmaps = append(roadmaps, doc)
 		}
@@ -135,14 +146,10 @@ func planDesignMirror(ctx context.Context, r *store.Reader, in SyncInput, held m
 		return roadmaps[i].Path < roadmaps[j].Path
 	})
 	for _, rm := range roadmaps {
-		out.mirroredRoadmaps = append(out.mirroredRoadmaps, rm.Path)
+		rd.mirroredRoadmaps = append(rd.mirroredRoadmaps, rm.Path)
 	}
 
-	routed := map[string]bool{}
-	spineLinked := map[string]bool{}
-	parkedLinked := map[string]bool{}
 	var perRoadmapSpine [][]string
-
 	for _, rm := range roadmaps {
 		var spine []string
 		heading := ""
@@ -159,14 +166,14 @@ func planDesignMirror(ctx context.Context, r *store.Reader, in SyncInput, held m
 				for _, m := range matches {
 					target := roadmapLink(rm.Path, m[1])
 					if target != "" {
-						if _, ok := byPath[target]; ok {
+						if _, ok := rd.byPath[target]; ok {
 							hasDoc = true
 							break
 						}
 					}
 				}
 				if !hasDoc {
-					out.iceboxNoDoc++
+					rd.iceboxNoDoc++
 				}
 			}
 			for _, m := range matches {
@@ -177,24 +184,24 @@ func planDesignMirror(ctx context.Context, r *store.Reader, in SyncInput, held m
 				if isRoadmap(target) || isRoadmap(target, in.Roadmaps) {
 					continue
 				}
-				targetDoc, exists := byPath[target]
+				targetDoc, exists := rd.byPath[target]
 				if !exists {
 					continue
 				}
-				if isPairedCompanionPlan(target, byPath) {
+				if isPairedCompanionPlan(target, rd.byPath) {
 					continue
 				}
 				if !strings.HasPrefix(target, "docs/design/") && designStage(targetDoc.Content) == "" {
 					continue
 				}
-				routed[target] = true
+				rd.routed[target] = true
 				if !inParked {
-					if !spineLinked[target] {
-						spineLinked[target] = true
+					if !rd.spineLinked[target] {
+						rd.spineLinked[target] = true
 						spine = append(spine, target)
 					}
 				} else {
-					parkedLinked[target] = true
+					rd.parkedLinked[target] = true
 				}
 			}
 		})
@@ -202,13 +209,12 @@ func planDesignMirror(ctx context.Context, r *store.Reader, in SyncInput, held m
 	}
 
 	// Interleave spine-linked designs across mirrored roadmaps.
-	var orderedSpineTargets []string
 	for i := 0; ; i++ {
 		any := false
 		for _, spine := range perRoadmapSpine {
 			if i < len(spine) {
 				any = true
-				orderedSpineTargets = append(orderedSpineTargets, spine[i])
+				rd.orderedSpineTargets = append(rd.orderedSpineTargets, spine[i])
 			}
 		}
 		if !any {
@@ -216,26 +222,29 @@ func planDesignMirror(ctx context.Context, r *store.Reader, in SyncInput, held m
 		}
 	}
 
-	routedList := make([]string, 0, len(routed))
-	for target := range routed {
-		routedList = append(routedList, target)
+	rd.routedList = make([]string, 0, len(rd.routed))
+	for target := range rd.routed {
+		rd.routedList = append(rd.routedList, target)
 	}
-	sort.Strings(routedList)
+	sort.Strings(rd.routedList)
+	return rd
+}
 
+func designIndexNeeded(rd routedDesigns, held map[string]storedState, finished func(string) bool) (map[string]bool, []string, bool, error) {
 	// Check slug collisions across all routed eligible designs before any read/write.
-	byID := make(map[string]string, len(routedList))
-	for _, target := range routedList {
+	byID := make(map[string]string, len(rd.routedList))
+	for _, target := range rd.routedList {
 		id := designItemID(target)
 		if prev, dup := byID[id]; dup && prev != target {
-			return out, Rejectionf("slug-collision", id, "design documents %q and %q collide on item id %q", prev, target, id)
+			return nil, nil, false, Rejectionf("slug-collision", id, "design documents %q and %q collide on item id %q", prev, target, id)
 		}
 		byID[id] = target
 	}
 
 	// Determine existing coverage by unfenced item blocks or other unfinished items.
-	covered := make(map[string]bool, len(routedList))
-	for _, target := range routedList {
-		doc := byPath[target]
+	covered := make(map[string]bool, len(rd.routedList))
+	for _, target := range rd.routedList {
+		doc := rd.byPath[target]
 		if blocks, _ := parseItemBlocks(doc.Path, doc.Content); len(blocks) > 0 {
 			covered[target] = true
 		}
@@ -252,7 +261,7 @@ func planDesignMirror(ctx context.Context, r *store.Reader, in SyncInput, held m
 	}
 
 	var uncovered []string
-	for _, target := range routedList {
+	for _, target := range rd.routedList {
 		if !covered[target] {
 			uncovered = append(uncovered, target)
 		}
@@ -264,6 +273,71 @@ func planDesignMirror(ctx context.Context, r *store.Reader, in SyncInput, held m
 			hasUnfinishedDesignItem = true
 			break
 		}
+	}
+
+	return covered, uncovered, hasUnfinishedDesignItem, nil
+}
+
+// NeedsDesignIndex reports whether Sync will read the external Vantage index
+// for in against the store state visible to r. Callers use this in a short
+// ReadTx before opening WriteTx so vantage-check never runs while holding
+// SQLite's write lock (or a long-lived read snapshot).
+func NeedsDesignIndex(r *store.Reader, in SyncInput) (bool, error) {
+	if in.Index != nil || in.Root == "" {
+		return false, nil
+	}
+	if len(in.Roadmaps) > 0 {
+		in.Partial = true
+	}
+	if in.Partial && len(in.Roadmaps) == 0 {
+		return false, nil
+	}
+	if _, err := designStageRoles(in.Root); err != nil {
+		return false, nil
+	}
+	d, err := itemDefinition(r)
+	if err != nil {
+		return false, err
+	}
+	finished := func(state string) bool { return d.IsFinished(state) || frozenStates[state] }
+	held := map[string]storedState{}
+	if r != nil {
+		var exists bool
+		if err := r.QueryRow(`SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'items')`).Scan(&exists); err != nil {
+			return false, Internalf("checking the stored item schema: %v", err)
+		}
+		if exists {
+			if held, err = readStoredStates(r); err != nil {
+				return false, err
+			}
+		}
+	}
+	rd := collectRoutedDesigns(in)
+	_, uncovered, hasUnfinishedDesignItem, err := designIndexNeeded(rd, held, finished)
+	if err != nil {
+		return false, nil
+	}
+	return len(uncovered) > 0 || hasUnfinishedDesignItem, nil
+}
+
+func planDesignMirror(ctx context.Context, r *store.Reader, in SyncInput, held map[string]storedState, finished func(string) bool) (designMirrorPlan, error) {
+	var out designMirrorPlan
+	if in.Partial && len(in.Roadmaps) == 0 {
+		return out, nil
+	}
+
+	rd := collectRoutedDesigns(in)
+	byPath := rd.byPath
+	routed := rd.routed
+	spineLinked := rd.spineLinked
+	parkedLinked := rd.parkedLinked
+	orderedSpineTargets := rd.orderedSpineTargets
+	out.mirroredRoadmaps = rd.mirroredRoadmaps
+	out.iceboxNoDoc = rd.iceboxNoDoc
+
+	covered, uncovered, hasUnfinishedDesignItem, err := designIndexNeeded(rd, held, finished)
+	if err != nil {
+		return out, err
 	}
 
 	if len(uncovered) == 0 && !hasUnfinishedDesignItem {
