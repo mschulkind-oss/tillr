@@ -282,7 +282,7 @@ Fifth by rule 3: the item model is the substrate of sections 6 and 7.
     the lineage view. Its item kinds wait on entry 3.
 
 39. [Work reaches tillr through several doors](../design/tillr-intake-paths.md): each way work
-    enters runs its own small graph and ends in one item shape.
+    enters ends in one stored item record.
 
 40. [Provisional design documents](../design/provisional-design-docs.md): capture a prompt and
     its first questions on the trunk before the worked design pass.
@@ -401,6 +401,7 @@ which entry waits. A question that blocks nothing yet is reached through its des
 | Accepted ten-lane `/tmp` ceiling and mount cap, and whether workspace-backed check and suite scratch moves to `tmpfs` | [`OQ-WT1`](../design/workspace-tmpfs-scratch.md#OQ-WT1), [`OQ-WT2`](../design/workspace-tmpfs-scratch.md#OQ-WT2) | Slices 5 and 6 of entry 24 |
 | Limits and priority among concurrent test processes | [`OQ-GTC1`](../design/gate-test-capacity.md#OQ-GTC1) to [`OQ-GTC4`](../design/gate-test-capacity.md#OQ-GTC4) | Entry 11 |
 | Whether every new request is read for flaws before its first worker | [`OQ-RA1`](../design/tillr-request-amendment.md#OQ-RA1) | The last slices of entry 33 |
+| Whether this repository's queue still accepts a bare `tillr item apply` once the missing-block triage route is deleted | [`OQ-IN1`](../design/tillr-intake-paths.md#OQ-IN1) | The last slice of entry 39 |
 | What happens to running slices when a review comment arrives, and how the existing backlog is treated | [`OQ-DT1`](../design/tillr-design-to-planning-transition.md#OQ-DT1), [`OQ-DT2`](../design/tillr-design-to-planning-transition.md#OQ-DT2) | The later slices of entry 35 |
 | What tillr does with unmarked prose questions in a design, and whether `SKETCH` and `draft` designs with open questions stay held before planning | [`OQ-PSH1`](../design/tillr-per-step-question-holds.md#OQ-PSH1), [`OQ-PSH2`](../design/tillr-per-step-question-holds.md#OQ-PSH2) | Unmarked-question and draft-boundary slices of entry 36; marked-question per-step holds do not wait |
 | Who writes a provisional design, and how it is marked | [`OQ-PD1`](../design/provisional-design-docs.md#OQ-PD1) to [`OQ-PD4`](../design/provisional-design-docs.md#OQ-PD4) | Entry 40 |
