@@ -182,14 +182,16 @@ export function ItemPage({ id, live, paused, row, baseURL }: { id: string; live:
     {item.data?.data.split?.parent ? <section aria-label="Split parent">
       <h2>Split parent</h2>
       <p>{item.data.data.split.parent.progress_summary}</p>
+      {item.data.data.split.parent.donor ? <p>Donor: {item.data.data.split.parent.donor.ref ? <><code>{item.data.data.split.parent.donor.ref}</code> · </> : null}<code>{item.data.data.split.parent.donor.sha}</code>{item.data.data.split.parent.donor.base_sha ? <> (base <code>{item.data.data.split.parent.donor.base_sha}</code>)</> : null}</p> : null}
       {item.data.data.split.parent.owner_words ? <pre className="split-owner-words">{item.data.data.split.parent.owner_words}</pre> : null}
       <table>
-        <thead><tr><th>Part</th><th>Item</th><th>Title</th><th>Standing</th><th>State</th><th>Landed commit</th></tr></thead>
+        <thead><tr><th>Part</th><th>Item</th><th>Title</th><th>Standing</th><th>Takes</th><th>State</th><th>Landed commit</th></tr></thead>
         <tbody>{item.data.data.split.parent.parts.map(part => <tr key={part.item_id}>
           <td>part {part.label}</td>
           <td><EntityLink kind="item" id={part.item_id} state={part.state} /></td>
           <td>{part.title}</td>
           <td>{part.required ? "required" : "optional"}</td>
+          <td>{part.takes === "whole" ? "whole donor" : part.takes === "named" ? `named (${(part.paths ?? []).join(", ")})` : "nothing"}</td>
           <td>{part.state}</td>
           <td>{part.landed_commit ? <a href={`/trunk?sha=${encodeURIComponent(part.landed_commit)}`}><code>{part.landed_commit}</code></a> : "—"}</td>
         </tr>)}</tbody>
@@ -210,6 +212,12 @@ export function ItemPage({ id, live, paused, row, baseURL }: { id: string; live:
       <h2>Split part</h2>
       <p>Parent <EntityLink kind="item" id={item.data.data.split.part.parent_id} /> · {item.data.data.split.part.parent_title} · part {item.data.data.split.part.label} ({item.data.data.split.part.required ? "required" : "optional"})</p>
       <p>Share: {item.data.data.split.part.share}</p>
+      {item.data.data.split.part.donor ? <p>Donor: {item.data.data.split.part.donor.ref ? <><code>{item.data.data.split.part.donor.ref}</code> · </> : null}<code>{item.data.data.split.part.donor.sha}</code>{item.data.data.split.part.donor.base_sha ? <> (base <code>{item.data.data.split.part.donor.base_sha}</code>)</> : null}</p> : null}
+      {item.data.data.split.part.donor || item.data.data.split.part.takes ? <p>Takes from donor: {item.data.data.split.part.takes === "whole" ? "whole donor" : item.data.data.split.part.takes === "named" ? <>named paths ({(item.data.data.split.part.paths ?? []).join(", ")}){item.data.data.split.part.shared_files?.length ? <>; shared files ({item.data.data.split.part.shared_files.join(", ")})</> : null}</> : "nothing"}</p> : null}
+      {item.data.data.split.part.inherited_findings?.length ? <>
+        <h3>Inherited findings</h3>
+        <ul>{item.data.data.split.part.inherited_findings.map((finding, idx) => <li key={idx}>{finding}</li>)}</ul>
+      </> : null}
       {item.data.data.split.part.leaves?.length ? <>
         <h3>Leaves to siblings</h3>
         <ul>{item.data.data.split.part.leaves.map(leaf => <li key={leaf.sibling_item_id}>

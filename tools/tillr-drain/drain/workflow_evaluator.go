@@ -37,6 +37,9 @@ func judgeWriterRun(c Candidate) string {
 	if len(writers) > 0 {
 		return writers[len(writers)-1].RunID
 	}
+	if c.SplitDonorRunID != "" {
+		return c.SplitDonorRunID
+	}
 	return c.RunID
 }
 
@@ -62,6 +65,12 @@ func (l *Loop) evaluatorCandidate(ctx context.Context, d Decision) (Candidate, e
 	req.NodeID = d.Workflow.Stages[d.NodeIndex].ID
 	stampDecisionRequest(d, &req)
 	c := Candidate{ItemID: d.ItemID, LaneID: d.LaneID, RunID: d.RunRequest.RunID, Worktree: l.laneTarget(d.LaneID), BaseSHA: l.laneBase(d.LaneID), BaseRef: l.lanePatchRef(d.LaneID), Workflow: d.workflowRef(), Evaluator: &req}
+	if d.SplitDonor != nil {
+		c.SplitDonorRunID = d.SplitDonor.RunID
+		if c.SplitDonorRunID == "" {
+			c.SplitDonorRunID = "donor:" + d.SplitDonor.SHA
+		}
+	}
 	var err error
 	c.HeadSHA = d.NodeBaseSHA
 	if c.HeadSHA == "" {

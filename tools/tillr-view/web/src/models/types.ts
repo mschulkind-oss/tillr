@@ -732,6 +732,13 @@ export interface ItemGraphNode {
 }
 export interface ItemGraphAttempt { attempt: number; nodes: ItemGraphNode[] }
 
+export interface SplitDonorView {
+  run_id?: string;
+  ref?: string;
+  sha: string;
+  base_sha?: string;
+}
+
 export interface SplitPartStatusView {
   label: string;
   item_id: string;
@@ -740,6 +747,10 @@ export interface SplitPartStatusView {
   leaves?: Record<string, string>;
   follows?: string[];
   required: boolean;
+  takes?: string;
+  paths?: string[];
+  shared_files?: string[];
+  inherited_findings?: string[];
   state: string;
   landed_commit?: string;
   landing_id?: string;
@@ -760,6 +771,7 @@ export interface SplitCoverageRowView {
 
 export interface SplitParentDetailView {
   owner_words: string;
+  donor?: SplitDonorView;
   total_parts: number;
   required_parts: number;
   required_landed: number;
@@ -786,10 +798,15 @@ export interface SplitLeafView {
 export interface SplitPartDetailView {
   parent_id: string;
   parent_title: string;
+  donor?: SplitDonorView;
   label: string;
   title: string;
   share: string;
   required: boolean;
+  takes?: string;
+  paths?: string[];
+  shared_files?: string[];
+  inherited_findings?: string[];
   follows?: SplitSiblingRef[];
   leaves?: SplitLeafView[];
 }

@@ -724,15 +724,21 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 			return err
 		}
 		var gaps []item.RecordedSplitGap
+		var splitInfo *item.SplitPartInfo
 		err = db.ReadTx(ctx, func(r *store.Reader) error {
 			var err error
 			gaps, err = item.SplitGapsForSibling(r, spec.ItemID)
+			if err != nil {
+				return err
+			}
+			splitInfo, err = item.SplitPartContext(r, spec.ItemID)
 			return err
 		})
 		db.Close()
 		if err != nil {
 			return err
 		}
+		brief += splitPartCarvingBrief(splitInfo)
 		brief += splitGapsBrief(gaps)
 	}
 	if ideaWords != nil {
@@ -1835,4 +1841,76 @@ func conflictFacts(conflict ConflictBrief, durableDir string) string {
 		body.WriteString("\nNo conflict markers were recovered; re-run the three-way merge in this checkout and resolve what it reports.\n")
 	}
 	return body.String()
+}
+
+func formatSplitDonorLine(donor *item.SplitDonor) string {
+	var parts []string
+	if donor.RunID != "" {
+		parts = append(parts, "run="+donor.RunID)
+	}
+	if donor.Ref != "" {
+		parts = append(parts, "ref="+donor.Ref)
+	}
+	if donor.SHA != "" {
+		parts = append(parts, "sha="+donor.SHA)
+	}
+	if donor.BaseSHA != "" {
+		parts = append(parts, "base="+donor.BaseSHA)
+	}
+	return strings.Join(parts, " ")
+}
+
+func splitPartCarvingBrief(info *item.SplitPartInfo) string {
+	if info == nil || info.Donor == nil {
+		return ""
+	}
+	var b strings.Builder
+	donorLine := formatSplitDonorLine(info.Donor)
+	switch info.Part.Takes {
+	case item.SplitTakesNamed:
+		b.WriteString("\n## Carving from the donor\n\n")
+		fmt.Fprintf(&b, "- Donor: %s\n", donorLine)
+		b.WriteString("- Named paths to take from the donor:\n")
+		for _, p := range info.Part.Paths {
+			fmt.Fprintf(&b, "  - %s\n", p)
+		}
+		if len(info.Part.SharedFiles) > 0 {
+			b.WriteString("- Shared files to separate:\n")
+			for _, p := range info.Part.SharedFiles {
+				fmt.Fprintf(&b, "  - %s\n", p)
+			}
+		}
+		if len(info.Part.InheritedFindings) > 0 {
+			b.WriteString("- Inherited findings from the refused candidate (word for word):\n")
+			for _, f := range info.Part.InheritedFindings {
+				fmt.Fprintf(&b, "  - %s\n", f)
+			}
+		}
+		b.WriteString(`
+Carving rules:
+- Take the named work from the donor starting from the current trunk rather than rebuilding it.
+- Change beyond the taken work only where needed for the share to stand alone or resolve conflicts.
+- The named paths are instructions, not a write fence; your verifier judges whether you changed only what this share needs.
+- Regenerate derived files (for example, the pack copy via ` + "`just pack-sync`" + `); never carve them from the donor.
+`)
+	case item.SplitTakesWhole:
+		b.WriteString("\n## Donor candidate taken whole\n\n")
+		fmt.Fprintf(&b, "- Donor taken whole: %s\n", donorLine)
+		if len(info.Part.InheritedFindings) > 0 {
+			b.WriteString("- Inherited findings from the refused candidate (word for word):\n")
+			for _, f := range info.Part.InheritedFindings {
+				fmt.Fprintf(&b, "  - %s\n", f)
+			}
+		}
+	default:
+		if len(info.Part.InheritedFindings) == 0 {
+			return ""
+		}
+		b.WriteString("\n## Inherited findings from the refused candidate\n\n")
+		fmt.Fprintf(&b, "- Donor: %s\n", donorLine)
+		for _, f := range info.Part.InheritedFindings {
+			fmt.Fprintf(&b, "- %s\n", f)
+		}
+	}
+	return b.String()
 }

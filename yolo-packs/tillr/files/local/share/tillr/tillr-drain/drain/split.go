@@ -112,6 +112,7 @@ func checkSplitJSONSurrogates(raw []byte) error {
 // map keys (criterion IDs and sibling labels) are not struct fields.
 func checkSplitJSONKeys(raw []byte) error {
 	var shape struct {
+		Donor    map[string]json.RawMessage              `json:"donor"`
 		Parts    []map[string]json.RawMessage            `json:"parts"`
 		Coverage map[string][]map[string]json.RawMessage `json:"coverage"`
 	}
@@ -130,11 +131,16 @@ func checkSplitJSONKeys(raw []byte) error {
 	if err := json.Unmarshal(raw, &top); err != nil {
 		return err
 	}
-	if err := keys(top, "parts", "coverage"); err != nil {
+	if err := keys(top, "donor", "parts", "coverage"); err != nil {
 		return err
 	}
+	if shape.Donor != nil {
+		if err := keys(shape.Donor, "run_id", "ref", "sha", "base_sha"); err != nil {
+			return err
+		}
+	}
 	for _, part := range shape.Parts {
-		if err := keys(part, "label", "title", "share", "leaves", "criteria", "follows", "required"); err != nil {
+		if err := keys(part, "label", "title", "share", "leaves", "criteria", "follows", "required", "takes", "paths", "shared_files", "inherited_findings"); err != nil {
 			return err
 		}
 	}
@@ -602,7 +608,8 @@ func splitCallBriefTask(call item.SplitCall, durableDir string) string {
 	return fmt.Sprintf(
 		"Answer split call %d (raised by %s on run %s). No repository edits or commits are required.\n\n"+
 			"Either:\n"+
-			"1. Write a valid split statement JSON (matching item.SplitStatement: `parts` with 2+ parts and `coverage` assigning every non-standard parent criterion/clause) to `%s` (or include a fenced ```json block in your report), OR\n"+
+			"1. Write a valid split statement JSON (matching item.SplitStatement: `parts` with 2+ parts and `coverage` assigning every non-standard parent criterion/clause) to `%s` (or include a fenced ```json block in your report). "+
+			"When a donor is present, each part may set `takes` (`whole`, `named`, or `nothing`), `paths` and optional `shared_files` (for `named`), and `inherited_findings` (word-for-word findings the part inherits).\n"+
 			"2. Answer no-split by ending your report with:\n"+
 			"   SPLIT-ANSWER: no-split\n"+
 			"   REASON: <non-empty reason why the item should not be split>",
@@ -644,7 +651,10 @@ func splitCallBriefSettled(durableDir string) string {
 	return fmt.Sprintf(
 		"This run acts on the design seat for a split call. No repository edits or commits are required.\n"+
 			"Write your split statement JSON to `%s`, or answer `SPLIT-ANSWER: no-split` with `REASON: <reason>` in your report.\n"+
-			"Parts filed from a split statement take nothing from the donor in this slice; every non-standard parent criterion (c5+) or its clauses must be owned in `coverage`.",
+			"Every non-standard parent criterion (c5+) or its clauses must be owned in `coverage`.\n"+
+			"Donor carving (§8.2): if every finding is a gap and the whole candidate was examined, one part may set `takes: \"whole\"` while another takes `nothing` with `inherited_findings`; "+
+			"if regressions or unasked changes sit in separable paths, one part may set `takes: \"named\"` with `paths` (and optional `shared_files`) while another inherits the refused paths and `inherited_findings`; "+
+			"if a regression sits in code the rest depends on, answer `no-split`.",
 		splitCallOutputPath(durableDir),
 	)
 }

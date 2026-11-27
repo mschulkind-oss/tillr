@@ -63,7 +63,7 @@ func (l *Loop) nextWorkflowNode(ctx context.Context, d Decision) (int, error) {
 		if err != nil {
 			return err
 		}
-		if done {
+		if done || (d.SplitDonor != nil && evaluatorNode(d) && outcomes[evaluatorSlot(d.Workflow)] == "passed") {
 			return nil
 		}
 		planNoChange := false

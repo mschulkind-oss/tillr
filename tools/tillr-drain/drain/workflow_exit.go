@@ -81,6 +81,9 @@ func (l *Loop) finishWorkflow(ctx context.Context, d Decision, rec run.Record, b
 		if err != nil {
 			return err
 		}
+		if !done && d.SplitDonor != nil && evaluatorNode(d) && outcomes[evaluatorSlot(d.Workflow)] == "passed" {
+			done = true
+		}
 		if !done {
 			return nil
 		}

@@ -78,7 +78,7 @@ func (l *Loop) verifyBuildSession(ctx context.Context, c Candidate) (*WorkerSess
 	if len(writers) == 0 && c.Judge != nil {
 		writers = c.Judge.Writers
 	}
-	if len(writers) == 0 || c.Evaluator == nil {
+	if c.Evaluator == nil {
 		return nil, nil
 	}
 	var decision Decision
@@ -101,6 +101,9 @@ func (l *Loop) verifyBuildSession(ctx context.Context, c Candidate) (*WorkerSess
 	if err != nil || !found {
 		return nil, err
 	}
+	if len(writers) == 0 && decision.SplitDonor == nil {
+		return nil, nil
+	}
 	// Work on a copy: the decision's workflow belongs to the evaluator's record.
 	raw, err := json.Marshal(decision.Workflow)
 	if err != nil {
@@ -118,6 +121,42 @@ func (l *Loop) verifyBuildSession(ctx context.Context, c Candidate) (*WorkerSess
 	}
 	if evaluator < 0 {
 		return nil, nil
+	}
+	if len(writers) == 0 && decision.SplitDonor != nil {
+		writeIdx := -1
+		for i := evaluator - 1; i >= 0; i-- {
+			s := w.Stages[i]
+			if s.Kind == "agent" && s.Access == "write" && (s.Seat == "build" || s.Seat == "") && s.WriteScope.Paths == nil {
+				writeIdx = i
+				break
+			}
+		}
+		if writeIdx < 0 {
+			insertVerifyWorkStage(&w, evaluator)
+			writeIdx = evaluator
+		}
+		evaluatorID := evaluatorSlot(&w)
+		w.Stages = append([]WorkflowStage(nil), w.Stages[writeIdx:]...)
+		kept := make(map[string]bool, len(w.Stages))
+		for _, s := range w.Stages {
+			kept[s.ID] = true
+		}
+		var edges []WorkflowEdge
+		for _, e := range w.Edges {
+			if kept[e.From] && kept[e.To] {
+				edges = append(edges, e)
+			}
+		}
+		w.Edges = edges
+		if w.Exit == nil {
+			w.Exit = &WorkflowExit{}
+		}
+		w.Exit.RequiresNodes = []string{w.Stages[0].ID, evaluatorID}
+		return &WorkerSession{
+			LaneDir: l.laneDirPath(c.LaneID), LaneID: c.LaneID,
+			BaseSHA: c.BaseSHA, HeadSHA: c.HeadSHA, Attempt: decision.Attempt,
+			NodeIndex: 0, NodeBaseSHA: c.HeadSHA, Workflow: &w,
+		}, nil
 	}
 	writer := writers[len(writers)-1]
 	index := -1

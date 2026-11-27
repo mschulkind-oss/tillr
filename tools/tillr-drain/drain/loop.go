@@ -207,13 +207,14 @@ type Candidate struct {
 	// EvidenceKey, when set, is the returned ending's evidence key in place of the one its
 	// step derives: a seat obstacle keys its return by the backend it leaves, so climbing
 	// to the next backend is never read as an identical repeat (seat_escalation.go).
-	EvidenceKey   string          `json:"-"`
-	BlockConflict *item.Conflict  `json:"block_conflict,omitempty"`
-	SplitCall     *item.SplitCall `json:"split_call,omitempty"`
-	ItemID        string          `json:"item_id"`
-	LaneID        string          `json:"lane_id"`
-	RunID         string          `json:"run_id"`
-	TickID        string          `json:"tick_id,omitempty"`
+	EvidenceKey     string          `json:"-"`
+	BlockConflict   *item.Conflict  `json:"block_conflict,omitempty"`
+	SplitCall       *item.SplitCall `json:"split_call,omitempty"`
+	SplitDonorRunID string          `json:"-"`
+	ItemID          string          `json:"item_id"`
+	LaneID          string          `json:"lane_id"`
+	RunID           string          `json:"run_id"`
+	TickID          string          `json:"tick_id,omitempty"`
 	// Worktree is the checkout the candidate's change lives in. For an ordinary lane it
 	// is the lane worktree; for a fork-series item it is the fork checkout the item's
 	// fence names, because that is where the run committed and where the gate's own
@@ -1978,10 +1979,12 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 	staged := make([]Decision, 0, len(decisions))
 	for _, decision := range decisions {
 		request := decision.RunRequest
-		if evaluatorNode(decision) && !verifyNoVerdictReturn(decision.Returned) {
+		if evaluatorNode(decision) && !verifyNoVerdictReturn(decision.Returned) && decision.SplitDonor == nil {
 			// The judge owns this node's staging, including the verdict location.
 			// A returned evaluator first needs its pinned candidate staged, possibly
 			// on a cold lane, before the judge can prepare its own inputs.
+			// A split-part taking the donor whole also needs the donor candidate
+			// staged onto the lane before its evaluator runs.
 			staged = append(staged, decision)
 			continue
 		}
@@ -2072,6 +2075,11 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 					continue
 				}
 			}
+		}
+		if decision.SplitDonor != nil && evaluatorNode(decision) {
+			spec.KeptHeadSHA = decision.SplitDonor.SHA
+			spec.KeptItemBaseSHA = decision.SplitDonor.BaseSHA
+			spec.Continue = false
 		}
 		if err := l.stageComment(ctx, &decision, &spec); err != nil {
 			if holdErr := failStage("stage comment", err); holdErr != nil {

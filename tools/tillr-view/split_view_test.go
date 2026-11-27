@@ -246,4 +246,100 @@ func TestSplitViewAPIsAndSurfaces(t *testing.T) {
 	}
 }
 
+func TestItemSplitDonorAndCarvingFields(t *testing.T) {
+	h := newServeHarness(t)
+	ctx := context.Background()
+
+	parentID := "item-seed-01"
+	wholeID := splitPartID(parentID, "whole-p")
+	namedID := splitPartID(parentID, "named-p")
+
+	st := splitStatement{
+		Donor: &splitDonorView{
+			RunID:   "run-donor-view",
+			Ref:     "refs/tillr/runs/run-donor-view",
+			SHA:     "donor-sha-view",
+			BaseSHA: "base-sha-view",
+		},
+		Parts: []splitPart{
+			{
+				Label:    "whole-p",
+				Title:    "Whole Part",
+				Share:    "Deliver A",
+				Takes:    "whole",
+				Required: boolPtr(true),
+			},
+			{
+				Label:             "named-p",
+				Title:             "Named Part",
+				Share:             "Deliver B",
+				Takes:             "named",
+				Paths:             []string{"tools/b/b.go"},
+				SharedFiles:       []string{"tools/shared/s.go"},
+				InheritedFindings: []string{"c5 [regression] (B failed): tools/b/b.go"},
+				Required:          boolPtr(true),
+			},
+		},
+		Coverage: map[string][]splitCoverage{
+			"c5": {{Clause: "A works;", Part: "whole-p"}, {Clause: "B works.", Part: "named-p"}},
+		},
+	}
+	raw, err := json.Marshal(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := store.Open(ctx, h.store, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.WriteTx(ctx, func(tx *store.Tx) error {
+		if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS item_splits (parent_id TEXT PRIMARY KEY, statement BLOB NOT NULL)`); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`INSERT OR IGNORE INTO items(item_id,title,state,updated_at) VALUES (?,?,?,?)`, wholeID, "Whole Part", "in-queue", "2026-11-27T09:00:00Z"); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`INSERT OR IGNORE INTO items(item_id,title,state,updated_at) VALUES (?,?,?,?)`, namedID, "Named Part", "in-queue", "2026-11-27T09:00:00Z"); err != nil {
+			return err
+		}
+		_, err := tx.Exec(`INSERT INTO item_splits(parent_id, statement) VALUES (?,?)`, parentID, raw)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+
+	rs, err := store.OpenRead(ctx, h.store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rs.Close()
+	if err := rs.ReadTx(ctx, func(r *store.Reader) error {
+		parentView, err := readItemSplitView(r, parentID)
+		if err != nil || parentView == nil || parentView.Parent == nil {
+			t.Fatalf("parentView = %+v, %v", parentView, err)
+		}
+		if parentView.Parent.Donor == nil || parentView.Parent.Donor.SHA != "donor-sha-view" || parentView.Parent.Donor.BaseSHA != "base-sha-view" {
+			t.Fatalf("parent Donor = %+v", parentView.Parent.Donor)
+		}
+		if parentView.Parent.Parts[0].Takes != "whole" || parentView.Parent.Parts[1].Takes != "named" || len(parentView.Parent.Parts[1].Paths) != 1 {
+			t.Fatalf("parent Parts = %+v", parentView.Parent.Parts)
+		}
+
+		partView, err := readItemSplitView(r, namedID)
+		if err != nil || partView == nil || partView.Part == nil {
+			t.Fatalf("partView = %+v, %v", partView, err)
+		}
+		if partView.Part.Donor == nil || partView.Part.Donor.SHA != "donor-sha-view" {
+			t.Fatalf("part Donor = %+v", partView.Part.Donor)
+		}
+		if partView.Part.Takes != "named" || len(partView.Part.Paths) != 1 || len(partView.Part.SharedFiles) != 1 || len(partView.Part.InheritedFindings) != 1 {
+			t.Fatalf("part fields = %+v", partView.Part)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func boolPtr(v bool) *bool { return &v }

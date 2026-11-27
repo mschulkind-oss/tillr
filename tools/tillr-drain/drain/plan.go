@@ -135,26 +135,27 @@ type Decision struct {
 	// replacement uses its shared lane. It is drain-owned, never a run field.
 	BuildRestartFrom string `json:"build_restart_from,omitempty"`
 	// Designer is the row read when the session choice was made, not a later reread.
-	DeskDocument      string          `json:"desk_document,omitempty"`
-	Designer          *lastDesigner   `json:"-"`
-	DesignerSessionID string          `json:"designer_session_id,omitempty"`
-	DesignerReason    string          `json:"designer_reason,omitempty"`
-	NodeStartRunID    string          `json:"node_start_run_id,omitempty"`
-	WorkflowRestart   bool            `json:"workflow_restart,omitempty"`
-	UnreadFooter      string          `json:"unread_footer,omitempty"`
-	NodeInfraFailures int             `json:"node_infra_failures,omitempty"`
-	WorkflowRelease   bool            `json:"workflow_release,omitempty"`
-	FreshNodeStage    bool            `json:"fresh_node_stage,omitempty"`
-	Workflow          *Workflow       `json:"workflow,omitempty"`
-	SelectedWorkflow  string          `json:"selected_workflow,omitempty"`
-	WorkflowSource    string          `json:"workflow_source,omitempty"`
-	NodeIndex         int             `json:"node_index,omitempty"`
-	NodeBaseSHA       string          `json:"node_base_sha,omitempty"`
-	PreviousReport    string          `json:"previous_report,omitempty"`
-	ConflictID        string          `json:"conflict_id,omitempty"`
-	BlockConflict     *item.Conflict  `json:"block_conflict,omitempty"`
-	SplitCall         *item.SplitCall `json:"split_call,omitempty"`
-	Inputs            *RunInputs      `json:"inputs,omitempty"`
+	DeskDocument      string           `json:"desk_document,omitempty"`
+	Designer          *lastDesigner    `json:"-"`
+	DesignerSessionID string           `json:"designer_session_id,omitempty"`
+	DesignerReason    string           `json:"designer_reason,omitempty"`
+	NodeStartRunID    string           `json:"node_start_run_id,omitempty"`
+	WorkflowRestart   bool             `json:"workflow_restart,omitempty"`
+	UnreadFooter      string           `json:"unread_footer,omitempty"`
+	NodeInfraFailures int              `json:"node_infra_failures,omitempty"`
+	WorkflowRelease   bool             `json:"workflow_release,omitempty"`
+	FreshNodeStage    bool             `json:"fresh_node_stage,omitempty"`
+	Workflow          *Workflow        `json:"workflow,omitempty"`
+	SelectedWorkflow  string           `json:"selected_workflow,omitempty"`
+	WorkflowSource    string           `json:"workflow_source,omitempty"`
+	NodeIndex         int              `json:"node_index,omitempty"`
+	NodeBaseSHA       string           `json:"node_base_sha,omitempty"`
+	PreviousReport    string           `json:"previous_report,omitempty"`
+	ConflictID        string           `json:"conflict_id,omitempty"`
+	BlockConflict     *item.Conflict   `json:"block_conflict,omitempty"`
+	SplitCall         *item.SplitCall  `json:"split_call,omitempty"`
+	SplitDonor        *item.SplitDonor `json:"split_donor,omitempty"`
+	Inputs            *RunInputs       `json:"inputs,omitempty"`
 
 	// ReusedNodes are the read-only nodes a retry keeps from attempt ReusedAttempt: they
 	// passed there, no write node had run, so the new attempt starts at the first node not
@@ -513,6 +514,11 @@ func planWithDetails(r *store.Reader, tick Pass, policy *Policy, questions Quest
 	if err != nil {
 		return nil, readFailure(err)
 	}
+	splits, err := item.ReadAllSplits(r)
+	if err != nil {
+		return nil, readFailure(err)
+	}
+	splitParts := item.SplitPartIndex(splits)
 	for itemID, call := range noSplitCalls {
 		if call.DesignRunID != "" && latest[itemID] == call.DesignRunID && call.RunID != "" {
 			latest[itemID] = call.RunID
@@ -626,13 +632,15 @@ func planWithDetails(r *store.Reader, tick Pass, policy *Policy, questions Quest
 		p := &planner{
 			definition:   &def,
 			commentHolds: commentHolds, documentRoot: root,
-			conflicts:    conflicts,
-			splitCalls:   splitCalls,
-			noSplitCalls: noSplitCalls,
-			shut:         shut,
-			quotaShut:    quotaShut,
-			forks:        append([]plannedFork(nil), forks...),
-			tick:         tick, policy: policy, held: lanes, deskOwners: owners, itemStates: states, history: history,
+			conflicts:       conflicts,
+			splitCalls:      splitCalls,
+			noSplitCalls:    noSplitCalls,
+			splitStatements: splits,
+			splitParts:      splitParts,
+			shut:            shut,
+			quotaShut:       quotaShut,
+			forks:           append([]plannedFork(nil), forks...),
+			tick:            tick, policy: policy, held: lanes, deskOwners: owners, itemStates: states, history: history,
 			priors: attemptPriors, retries: retries, classes: classes, latest: latest, latestFinished: latestFinished,
 			obstacleHolds: obstacleHolds, releasedObstacles: releasedObstacles, questions: questions,
 			waits: waits, escalated: escalated, maskedWorkers: maskedWorkers,
@@ -1322,6 +1330,21 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 					}
 				}
 			}
+			donor, hasWholeDonor := p.splitWholeDonor(item.ItemID)
+			useSplitDonor := false
+			if hasWholeDonor {
+				if _, retrying := retries[item.ItemID]; !retrying && e == nil && p.nodeCounts[item.ItemID] == 0 && w != nil && loadErr == nil && !retainedGraph {
+					if slot := evaluatorSlot(w); slot != "" {
+						for idx, stage := range w.Stages {
+							if stage.ID == slot {
+								resumeNode = idx
+								useSplitDonor = true
+								break
+							}
+						}
+					}
+				}
+			}
 			if w != nil {
 				if loadErr == nil {
 					routed.Seat = w.Stages[resumeNode].Seat
@@ -1378,6 +1401,10 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 				if w != nil && decision.RunRequest != nil && decision.BlockConflict == nil && decision.SplitCall == nil {
 					decision.Workflow = w
 					decision.NodeIndex = resumeNode
+					if useSplitDonor {
+						decision.SplitDonor = donor
+						decision.NodeBaseSHA = donor.SHA
+					}
 					if c := decision.RetryCandidate; c != nil && c.Available {
 						decision.NodeBaseSHA = c.BaseSHA
 						if c.WorkerSession != nil && c.WorkerSession.NodeBaseSHA != "" {
@@ -1490,6 +1517,8 @@ type planner struct {
 	conflicts            map[string]item.Conflict
 	splitCalls           map[string]item.SplitCall
 	noSplitCalls         map[string]item.SplitCall
+	splitStatements      map[string]item.SplitStatement
+	splitParts           map[string]item.SplitPartMembership
 	inputs               map[string]*RunInputs
 	inputDecisions       map[string]Decision
 	inputDecisionsLoaded map[string]bool
@@ -1586,6 +1615,18 @@ func namedWaitHold(def definition.Definition, hold obstacles.Hold, id string, wa
 	}
 	identifyDecision(&d)
 	return d
+}
+
+func (p *planner) splitWholeDonor(itemID string) (*item.SplitDonor, bool) {
+	mem, isPart := p.splitParts[itemID]
+	if !isPart || mem.Part.Takes != item.SplitTakesWhole {
+		return nil, false
+	}
+	st, ok := p.splitStatements[mem.ParentID]
+	if !ok || st.Donor == nil || st.Donor.SHA == "" || st.Donor.BaseSHA == "" {
+		return nil, false
+	}
+	return st.Donor, true
 }
 
 // decide answers one item's decision. The rules are applied in the order the brief

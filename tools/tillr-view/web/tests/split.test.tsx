@@ -186,3 +186,75 @@ test("TrunkView reports part landing under parent title", async () => {
   const parentLink = await screen.findByText(/Parent Parent Ask · part a/);
   expect(parentLink.getAttribute("href")).toBe("/item/item-parent");
 });
+
+test("ItemPage renders donor and Takes column on split parent view", async () => {
+  const payload = baseItemData("item-parent-carve", "Parent Carve", "blocked");
+  payload.split = {
+    parent: {
+      owner_words: "Build A, B, and C.",
+      donor: { run_id: "run-1", ref: "refs/tillr/runs/run-1", sha: "donor123", base_sha: "base000" },
+      total_parts: 3,
+      required_parts: 3,
+      required_landed: 0,
+      progress_summary: "0 of 3 required parts landed",
+      parts: [
+        { label: "a", item_id: "item-part-a", title: "Part A", share: "Deliver A", required: true, takes: "whole", state: "in-queue" },
+        { label: "b", item_id: "item-part-b", title: "Part B", share: "Deliver B", required: true, takes: "named", paths: ["tools/b.go", "tools/b_test.go"], state: "in-queue" },
+        { label: "c", item_id: "item-part-c", title: "Part C", share: "Deliver C", required: true, takes: "nothing", state: "in-queue" },
+      ],
+      coverage: [],
+    },
+  };
+
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => ({
+    ok: true,
+    headers: new Headers(),
+    text: async () => JSON.stringify({
+      snapshot: {},
+      data: String(url).endsWith("/doc") ? { path: "", anchor: "", bytes: 0, text: "", questions: [], state: "absent" } : payload,
+    }),
+  }) as unknown as Response));
+
+  renderWithQuery(<ItemPage id="item-parent-carve" live={false} paused={true} baseURL="" />);
+  const section = await screen.findByLabelText("Split parent");
+  expect(section.textContent).toContain("Donor: refs/tillr/runs/run-1 · donor123 (base base000)");
+  expect(section.textContent).toContain("Takes");
+  expect(section.textContent).toContain("whole donor");
+  expect(section.textContent).toContain("named (tools/b.go, tools/b_test.go)");
+  expect(section.textContent).toContain("nothing");
+});
+
+test("ItemPage renders donor, takes from donor, and inherited findings on split part view", async () => {
+  const payload = baseItemData("item-part-b-carve", "Part B", "in-queue");
+  payload.split = {
+    part: {
+      parent_id: "item-parent-carve",
+      parent_title: "Parent Carve",
+      donor: { run_id: "run-1", ref: "refs/tillr/runs/run-1", sha: "donor123", base_sha: "base000" },
+      label: "b",
+      title: "Part B",
+      share: "Deliver B",
+      required: true,
+      takes: "named",
+      paths: ["tools/b.go"],
+      shared_files: ["tools/shared.go"],
+      inherited_findings: ["c5 [regression] (B broken): tools/b.go"],
+    },
+  };
+
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => ({
+    ok: true,
+    headers: new Headers(),
+    text: async () => JSON.stringify({
+      snapshot: {},
+      data: String(url).endsWith("/doc") ? { path: "", anchor: "", bytes: 0, text: "", questions: [], state: "absent" } : payload,
+    }),
+  }) as unknown as Response));
+
+  renderWithQuery(<ItemPage id="item-part-b-carve" live={false} paused={true} baseURL="" />);
+  const section = await screen.findByLabelText("Split part");
+  expect(section.textContent).toContain("Donor: refs/tillr/runs/run-1 · donor123 (base base000)");
+  expect(section.textContent).toContain("Takes from donor: named paths (tools/b.go); shared files (tools/shared.go)");
+  expect(section.textContent).toContain("Inherited findings");
+  expect(section.textContent).toContain("c5 [regression] (B broken): tools/b.go");
+});

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path"
 	"reflect"
 	"slices"
 	"strings"
@@ -20,21 +21,39 @@ import (
 	"github.com/mschulkind-oss/tillr/store"
 )
 
-// SplitStatement is the design seat's division of a request before donor work is
-// available. Parts take nothing; donor and verdict fields are not part of this format.
+const (
+	SplitTakesNothing = "nothing"
+	SplitTakesWhole   = "whole"
+	SplitTakesNamed   = "named"
+)
+
+// SplitDonor identifies the refused candidate from which split parts take work.
+type SplitDonor struct {
+	RunID   string `json:"run_id,omitempty"`
+	Ref     string `json:"ref,omitempty"`
+	SHA     string `json:"sha"`
+	BaseSHA string `json:"base_sha,omitempty"`
+}
+
+// SplitStatement is the design seat's division of a request.
 type SplitStatement struct {
+	Donor    *SplitDonor                `json:"donor,omitempty"`
 	Parts    []SplitPart                `json:"parts"`
 	Coverage map[string][]SplitCoverage `json:"coverage"`
 }
 
 type SplitPart struct {
-	Label    string            `json:"label"`
-	Title    string            `json:"title"`
-	Share    string            `json:"share"`
-	Leaves   map[string]string `json:"leaves,omitempty"`
-	Criteria []string          `json:"criteria,omitempty"`
-	Follows  []string          `json:"follows,omitempty"`
-	Required *bool             `json:"required"`
+	Label             string            `json:"label"`
+	Title             string            `json:"title"`
+	Share             string            `json:"share"`
+	Leaves            map[string]string `json:"leaves,omitempty"`
+	Criteria          []string          `json:"criteria,omitempty"`
+	Follows           []string          `json:"follows,omitempty"`
+	Required          *bool             `json:"required"`
+	Takes             string            `json:"takes,omitempty"`
+	Paths             []string          `json:"paths,omitempty"`
+	SharedFiles       []string          `json:"shared_files,omitempty"`
+	InheritedFindings []string          `json:"inherited_findings,omitempty"`
 }
 
 // An empty Clause names the whole criterion. Otherwise quoted clauses exhaust
@@ -75,9 +94,10 @@ type SplitSibling struct {
 	State    string `json:"state"`
 }
 
-// SplitPartInfo describes a split part's parent, own part definition, and sibling parts.
+// SplitPartInfo describes a split part's parent, donor, own part definition, and sibling parts.
 type SplitPartInfo struct {
 	ParentID string                  `json:"parent_id"`
+	Donor    *SplitDonor             `json:"donor,omitempty"`
 	Part     SplitPart               `json:"part"`
 	Siblings map[string]SplitSibling `json:"siblings"`
 }
@@ -141,6 +161,7 @@ func SplitPartContext(r *store.Reader, itemID string) (*SplitPartInfo, error) {
 			}
 			return &SplitPartInfo{
 				ParentID: row.parentID,
+				Donor:    statement.Donor,
 				Part:     p,
 				Siblings: siblings,
 			}, nil
@@ -330,11 +351,18 @@ func SplitPartID(parent, label string) string {
 	return "item-part-" + splitKey(parent, label)
 }
 
-func splitOrder(parent string, parts []SplitPart) ([]SplitPart, map[string]string, error) {
-	return validateSplitParts(parent, parts, 2)
+func validSplitRepoPath(p string) bool {
+	if strings.TrimSpace(p) != p || p == "" || p == "." || p == ".." || strings.HasPrefix(p, "../") || strings.HasPrefix(p, "/") || path.IsAbs(p) || path.Clean(p) != p {
+		return false
+	}
+	return true
 }
 
-func validateSplitParts(parent string, parts []SplitPart, minParts int) ([]SplitPart, map[string]string, error) {
+func splitOrder(parent string, parts []SplitPart, donor *SplitDonor) ([]SplitPart, map[string]string, error) {
+	return validateSplitParts(parent, parts, donor, 2)
+}
+
+func validateSplitParts(parent string, parts []SplitPart, donor *SplitDonor, minParts int) ([]SplitPart, map[string]string, error) {
 	if len(parts) < minParts {
 		return nil, nil, Rejectionf("split-parts", parent, "a split needs at least two parts")
 	}
@@ -352,6 +380,43 @@ func validateSplitParts(parent string, parts []SplitPart, minParts int) ([]Split
 		}
 		if strings.TrimSpace(p.Share) == "" || p.Required == nil {
 			return nil, nil, Rejectionf("split-part", parent, "part %q needs its share and an explicit required choice", p.Label)
+		}
+		switch p.Takes {
+		case "", SplitTakesNothing:
+			if len(p.Paths) > 0 || len(p.SharedFiles) > 0 {
+				return nil, nil, Rejectionf("split-part-takes", parent, "part %q takes nothing and must not list paths or shared_files", p.Label)
+			}
+		case SplitTakesWhole:
+			if donor == nil || strings.TrimSpace(donor.SHA) == "" || strings.TrimSpace(donor.BaseSHA) == "" {
+				return nil, nil, Rejectionf("split-donor", parent, "part %q takes the donor whole, but the statement has no donor sha and base_sha", p.Label)
+			}
+			if len(p.Paths) > 0 || len(p.SharedFiles) > 0 {
+				return nil, nil, Rejectionf("split-part-takes", parent, "part %q takes the donor whole and must not list paths or shared_files", p.Label)
+			}
+		case SplitTakesNamed:
+			if donor == nil || strings.TrimSpace(donor.SHA) == "" {
+				return nil, nil, Rejectionf("split-donor", parent, "part %q takes named work, but the statement has no donor sha", p.Label)
+			}
+			if len(p.Paths) == 0 {
+				return nil, nil, Rejectionf("split-part-takes", parent, "part %q takes named work and must list at least one path", p.Label)
+			}
+			for _, repoPath := range p.Paths {
+				if !validSplitRepoPath(repoPath) {
+					return nil, nil, Rejectionf("split-part-paths", parent, "part %q has invalid repo-relative path %q", p.Label, repoPath)
+				}
+			}
+			for _, shared := range p.SharedFiles {
+				if !validSplitRepoPath(shared) {
+					return nil, nil, Rejectionf("split-part-paths", parent, "part %q has invalid repo-relative shared_files path %q", p.Label, shared)
+				}
+			}
+		default:
+			return nil, nil, Rejectionf("split-part-takes", parent, "part %q has invalid takes %q (want nothing, whole, or named)", p.Label, p.Takes)
+		}
+		for _, finding := range p.InheritedFindings {
+			if strings.TrimSpace(finding) == "" {
+				return nil, nil, Rejectionf("split-part-findings", parent, "part %q has a blank inherited_findings entry", p.Label)
+			}
 		}
 		if *p.Required {
 			hasRequired = true
@@ -533,7 +598,25 @@ func checkSplitParentHolds(r *store.Reader, p itemPayload, blockedState string, 
 // FileSplit writes a statement in the caller's transaction. On any error the caller
 // must roll back. The parent receipt makes exact replays no-ops even after settlement.
 func FileSplit(ctx context.Context, tx *store.Tx, parent string, statement SplitStatement, at time.Time) (map[string]string, error) {
-	order, ids, err := splitOrder(parent, statement.Parts)
+	if statement.Donor == nil {
+		var runID, ref, sha, baseSHA string
+		err := tx.QueryRow(
+			`SELECT run_id, donor_ref, donor_sha, base_sha FROM split_calls WHERE item_id=? AND status IN (?,?) ORDER BY call_id DESC LIMIT 1`,
+			parent, SplitCallStatusPending, SplitCallStatusSplit,
+		).Scan(&runID, &ref, &sha, &baseSHA)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) && !isMissingSplitsTable(err) {
+			return nil, err
+		}
+		if err == nil && sha != "" {
+			statement.Donor = &SplitDonor{
+				RunID:   runID,
+				Ref:     ref,
+				SHA:     sha,
+				BaseSHA: baseSHA,
+			}
+		}
+	}
+	order, ids, err := splitOrder(parent, statement.Parts, statement.Donor)
 	if err != nil {
 		return nil, err
 	}
@@ -764,7 +847,7 @@ func ExtendSplit(ctx context.Context, tx *store.Tx, parent string, ext SplitExte
 	combinedParts := make([]SplitPart, 0, len(existing.Parts)+len(ext.Parts))
 	combinedParts = append(combinedParts, existing.Parts...)
 	combinedParts = append(combinedParts, ext.Parts...)
-	order, ids, err := validateSplitParts(parent, combinedParts, 2)
+	order, ids, err := validateSplitParts(parent, combinedParts, existing.Donor, 2)
 	if err != nil {
 		return nil, err
 	}

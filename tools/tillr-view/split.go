@@ -14,19 +14,31 @@ import (
 	"github.com/mschulkind-oss/tillr/store"
 )
 
+type splitDonorView struct {
+	RunID   string `json:"run_id,omitempty"`
+	Ref     string `json:"ref,omitempty"`
+	SHA     string `json:"sha"`
+	BaseSHA string `json:"base_sha,omitempty"`
+}
+
 type splitStatement struct {
+	Donor    *splitDonorView            `json:"donor,omitempty"`
 	Parts    []splitPart                `json:"parts"`
 	Coverage map[string][]splitCoverage `json:"coverage"`
 }
 
 type splitPart struct {
-	Label    string            `json:"label"`
-	Title    string            `json:"title"`
-	Share    string            `json:"share"`
-	Leaves   map[string]string `json:"leaves,omitempty"`
-	Criteria []string          `json:"criteria,omitempty"`
-	Follows  []string          `json:"follows,omitempty"`
-	Required *bool             `json:"required"`
+	Label             string            `json:"label"`
+	Title             string            `json:"title"`
+	Share             string            `json:"share"`
+	Leaves            map[string]string `json:"leaves,omitempty"`
+	Criteria          []string          `json:"criteria,omitempty"`
+	Follows           []string          `json:"follows,omitempty"`
+	Required          *bool             `json:"required"`
+	Takes             string            `json:"takes,omitempty"`
+	Paths             []string          `json:"paths,omitempty"`
+	SharedFiles       []string          `json:"shared_files,omitempty"`
+	InheritedFindings []string          `json:"inherited_findings,omitempty"`
 }
 
 type splitCoverage struct {
@@ -130,6 +142,7 @@ type itemSplitView struct {
 
 type splitParentDetailView struct {
 	OwnerWords      string                 `json:"owner_words"`
+	Donor           *splitDonorView        `json:"donor,omitempty"`
 	TotalParts      int                    `json:"total_parts"`
 	RequiredParts   int                    `json:"required_parts"`
 	RequiredLanded  int                    `json:"required_landed"`
@@ -139,16 +152,20 @@ type splitParentDetailView struct {
 }
 
 type splitPartStatusView struct {
-	Label        string            `json:"label"`
-	ItemID       string            `json:"item_id"`
-	Title        string            `json:"title"`
-	Share        string            `json:"share"`
-	Leaves       map[string]string `json:"leaves,omitempty"`
-	Follows      []string          `json:"follows,omitempty"`
-	Required     bool              `json:"required"`
-	State        string            `json:"state"`
-	LandedCommit string            `json:"landed_commit,omitempty"`
-	LandingID    string            `json:"landing_id,omitempty"`
+	Label             string            `json:"label"`
+	ItemID            string            `json:"item_id"`
+	Title             string            `json:"title"`
+	Share             string            `json:"share"`
+	Leaves            map[string]string `json:"leaves,omitempty"`
+	Follows           []string          `json:"follows,omitempty"`
+	Required          bool              `json:"required"`
+	Takes             string            `json:"takes,omitempty"`
+	Paths             []string          `json:"paths,omitempty"`
+	SharedFiles       []string          `json:"shared_files,omitempty"`
+	InheritedFindings []string          `json:"inherited_findings,omitempty"`
+	State             string            `json:"state"`
+	LandedCommit      string            `json:"landed_commit,omitempty"`
+	LandingID         string            `json:"landing_id,omitempty"`
 }
 
 type splitCoverageRowView struct {
@@ -165,14 +182,19 @@ type splitCoverageEntryView struct {
 }
 
 type splitPartDetailView struct {
-	ParentID    string            `json:"parent_id"`
-	ParentTitle string            `json:"parent_title"`
-	Label       string            `json:"label"`
-	Title       string            `json:"title"`
-	Share       string            `json:"share"`
-	Required    bool              `json:"required"`
-	Follows     []splitSiblingRef `json:"follows,omitempty"`
-	Leaves      []splitLeafView   `json:"leaves,omitempty"`
+	ParentID          string            `json:"parent_id"`
+	ParentTitle       string            `json:"parent_title"`
+	Donor             *splitDonorView   `json:"donor,omitempty"`
+	Label             string            `json:"label"`
+	Title             string            `json:"title"`
+	Share             string            `json:"share"`
+	Required          bool              `json:"required"`
+	Takes             string            `json:"takes,omitempty"`
+	Paths             []string          `json:"paths,omitempty"`
+	SharedFiles       []string          `json:"shared_files,omitempty"`
+	InheritedFindings []string          `json:"inherited_findings,omitempty"`
+	Follows           []splitSiblingRef `json:"follows,omitempty"`
+	Leaves            []splitLeafView   `json:"leaves,omitempty"`
 }
 
 type splitSiblingRef struct {
@@ -289,6 +311,7 @@ func readItemSplitView(r *store.Reader, id string) (*itemSplitView, error) {
 		}
 		pv := &splitParentDetailView{
 			OwnerWords: string(words),
+			Donor:      parentSt.Donor,
 			TotalParts: len(parentSt.Parts),
 			Parts:      make([]splitPartStatusView, 0, len(parentSt.Parts)),
 			Coverage:   make([]splitCoverageRowView, 0, len(parentSt.Coverage)),
@@ -307,16 +330,20 @@ func readItemSplitView(r *store.Reader, id string) (*itemSplitView, error) {
 			}
 			l := landed[pid]
 			pv.Parts = append(pv.Parts, splitPartStatusView{
-				Label:        p.Label,
-				ItemID:       pid,
-				Title:        p.Title,
-				Share:        p.Share,
-				Leaves:       p.Leaves,
-				Follows:      slices.Clone(p.Follows),
-				Required:     req,
-				State:        m.State,
-				LandedCommit: l.sha,
-				LandingID:    l.landingID,
+				Label:             p.Label,
+				ItemID:            pid,
+				Title:             p.Title,
+				Share:             p.Share,
+				Leaves:            p.Leaves,
+				Follows:           slices.Clone(p.Follows),
+				Required:          req,
+				Takes:             p.Takes,
+				Paths:             slices.Clone(p.Paths),
+				SharedFiles:       slices.Clone(p.SharedFiles),
+				InheritedFindings: slices.Clone(p.InheritedFindings),
+				State:             m.State,
+				LandedCommit:      l.sha,
+				LandingID:         l.landingID,
 			})
 		}
 		pv.ProgressSummary = fmt.Sprintf("%d of %d required parts landed", pv.RequiredLanded, pv.RequiredParts)
@@ -354,12 +381,17 @@ func readItemSplitView(r *store.Reader, id string) (*itemSplitView, error) {
 		}
 		req := partMem.Part.Required != nil && *partMem.Part.Required
 		pv := &splitPartDetailView{
-			ParentID:    partMem.ParentID,
-			ParentTitle: parentMeta.Title,
-			Label:       partMem.Label,
-			Title:       partMem.Part.Title,
-			Share:       partMem.Part.Share,
-			Required:    req,
+			ParentID:          partMem.ParentID,
+			ParentTitle:       parentMeta.Title,
+			Donor:             parentSplit.Donor,
+			Label:             partMem.Label,
+			Title:             partMem.Part.Title,
+			Share:             partMem.Part.Share,
+			Required:          req,
+			Takes:             partMem.Part.Takes,
+			Paths:             slices.Clone(partMem.Part.Paths),
+			SharedFiles:       slices.Clone(partMem.Part.SharedFiles),
+			InheritedFindings: slices.Clone(partMem.Part.InheritedFindings),
 		}
 		for _, fLabel := range partMem.Part.Follows {
 			sibID := splitPartID(partMem.ParentID, fLabel)

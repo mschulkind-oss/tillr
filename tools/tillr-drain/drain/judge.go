@@ -527,6 +527,8 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 					sessions = append(sessions, writer.SessionID)
 				}
 				receipt.Options.JudgedActor = "run=" + strings.Join(runs, ",") + ";session=" + strings.Join(sessions, ",")
+			} else if c.SplitDonorRunID != "" {
+				receipt.Options.JudgedActor = "run=" + c.SplitDonorRunID
 			}
 			if err := writeJudgeReceipt(receiptPath, receipt); err != nil {
 				return c, false, err
@@ -1286,6 +1288,35 @@ func splitPartJudgeBrief(info *item.SplitPartInfo) string {
 		for _, label := range sibLabels {
 			sib := info.Siblings[label]
 			fmt.Fprintf(&b, "- %s (%s, %s): %s\n", sib.Label, sib.ItemID, sib.Title, sib.Share)
+		}
+	}
+
+	if info.Donor != nil {
+		b.WriteString("\n### Donor and carving instructions\n")
+		fmt.Fprintf(&b, "- Donor: %s\n", formatSplitDonorLine(info.Donor))
+		switch info.Part.Takes {
+		case item.SplitTakesWhole:
+			b.WriteString("- Instructed to take: the donor candidate whole\n")
+		case item.SplitTakesNamed:
+			b.WriteString("- Instructed to take: named paths from the donor\n")
+			for _, p := range info.Part.Paths {
+				fmt.Fprintf(&b, "  - path: %s\n", p)
+			}
+			for _, p := range info.Part.SharedFiles {
+				fmt.Fprintf(&b, "  - shared_file: %s\n", p)
+			}
+		default:
+			b.WriteString("- Instructed to take: nothing from the donor\n")
+		}
+		if len(info.Part.InheritedFindings) > 0 {
+			b.WriteString("- Inherited findings from the refused candidate (word for word):\n")
+			for _, f := range info.Part.InheritedFindings {
+				fmt.Fprintf(&b, "  - %s\n", f)
+			}
+		}
+		b.WriteString("- No verdict or gate result is inherited from the donor (D-SP8); verify this part on its own tree against its own words and criteria.\n")
+		if info.Part.Takes == item.SplitTakesNamed {
+			b.WriteString("- For this carving run, inspect both the donor and the part's diff to judge whether only what the share needs was changed.\n")
 		}
 	}
 

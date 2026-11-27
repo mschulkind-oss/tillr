@@ -299,3 +299,314 @@ func TestSplitCallLifecycleAndNoSplitS1Tracking(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestFileSplitDonorCarvingAndReplay(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "state.db")
+
+	s, err := store.Open(ctx, dbPath, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	now := time.Date(2026, 11, 27, 7, 0, 0, 0, time.UTC)
+	var parentID string
+	if err := s.WriteTx(ctx, func(tx *store.Tx) error {
+		env, err := FileRequest(ctx, tx, RequestFiling{
+			Title:       "Oversized request",
+			Words:       []byte("Build X, Y, and Z."),
+			Criteria:    []string{"X works; Y works; Z works."},
+			Ordinary:    true,
+			At:          now,
+			Destination: Destination{To: "last"},
+		})
+		if err != nil {
+			return err
+		}
+		parentID = env.ID
+		_, err = RecordSplitCall(ctx, tx, SplitCall{
+			Caller:    SplitCallerVerifier,
+			Timestamp: now,
+			ItemID:    parentID,
+			RunID:     "run-donor-1",
+			DonorRef:  "refs/tillr/runs/run-donor-1",
+			DonorSHA:  "donor-sha-111",
+			BaseSHA:   "base-sha-000",
+			Signals:   []SplitSignal{{Signal: SplitSignalS1, Files: 30, AddedLines: 1400, FileLimit: 27, AddedLineLimit: 1200}},
+		})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	st := SplitStatement{
+		Parts: []SplitPart{
+			{
+				Label:    "whole-part",
+				Title:    "Part whole",
+				Share:    "Deliver X and Y",
+				Leaves:   map[string]string{"carved-part": "Deliver Z"},
+				Takes:    SplitTakesWhole,
+				Required: boolPtr(true),
+			},
+			{
+				Label:             "carved-part",
+				Title:             "Part carved",
+				Share:             "Deliver Z",
+				Takes:             SplitTakesNamed,
+				Paths:             []string{"tools/z/main.go", "tools/z/main_test.go"},
+				SharedFiles:       []string{"tools/shared/wire.go"},
+				InheritedFindings: []string{"c5 [gap] (Z missing): tools/z/main.go"},
+				Required:          boolPtr(true),
+			},
+			{
+				Label:             "fresh-part",
+				Title:             "Part fresh",
+				Share:             "Extra cleanup",
+				Takes:             SplitTakesNothing,
+				InheritedFindings: []string{"c5 [regression] (cleanup broke): tools/clean.go"},
+				Required:          boolPtr(false),
+			},
+		},
+		Coverage: map[string][]SplitCoverage{
+			"c5": {
+				{Clause: "X works; Y works;", Part: "whole-part"},
+				{Clause: "Z works.", Part: "carved-part"},
+			},
+		},
+	}
+
+	var partIDs map[string]string
+	if err := s.WriteTx(ctx, func(tx *store.Tx) error {
+		var err error
+		partIDs, err = FileSplit(ctx, tx, parentID, st, now.Add(time.Minute))
+		return err
+	}); err != nil {
+		t.Fatalf("FileSplit with auto-populated donor failed: %v", err)
+	}
+
+	// Exact replay with Donor == nil must succeed as a no-op because split_calls
+	// (now status=split) auto-populates the exact same Donor before marshaling.
+	if err := s.WriteTx(ctx, func(tx *store.Tx) error {
+		replayed, err := FileSplit(ctx, tx, parentID, st, now.Add(2*time.Minute))
+		if err != nil {
+			return err
+		}
+		if !reflect.DeepEqual(replayed, partIDs) {
+			t.Fatalf("replayed ids = %v, want %v", replayed, partIDs)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("exact replay failed: %v", err)
+	}
+
+	if err := s.ReadTx(ctx, func(r *store.Reader) error {
+		stored, ok, err := ReadSplitStatement(r, parentID)
+		if err != nil || !ok {
+			t.Fatalf("ReadSplitStatement = %v, %v, %v", stored, ok, err)
+		}
+		if stored.Donor == nil || stored.Donor.SHA != "donor-sha-111" || stored.Donor.BaseSHA != "base-sha-000" || stored.Donor.RunID != "run-donor-1" || stored.Donor.Ref != "refs/tillr/runs/run-donor-1" {
+			t.Fatalf("stored.Donor = %+v", stored.Donor)
+		}
+		ctxInfo, err := SplitPartContext(r, partIDs["carved-part"])
+		if err != nil || ctxInfo == nil {
+			t.Fatalf("SplitPartContext = %+v, %v", ctxInfo, err)
+		}
+		if ctxInfo.Donor == nil || ctxInfo.Donor.SHA != "donor-sha-111" {
+			t.Fatalf("ctxInfo.Donor = %+v", ctxInfo.Donor)
+		}
+		if ctxInfo.Part.Takes != SplitTakesNamed || len(ctxInfo.Part.Paths) != 2 || len(ctxInfo.Part.SharedFiles) != 1 || len(ctxInfo.Part.InheritedFindings) != 1 {
+			t.Fatalf("ctxInfo.Part = %+v", ctxInfo.Part)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestFileSplitCarvingValidationRejections(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 11, 27, 7, 30, 0, 0, time.UTC)
+
+	newStoreWithParent := func(t *testing.T) (*store.Store, string) {
+		t.Helper()
+		s, err := store.Open(ctx, filepath.Join(t.TempDir(), "state.db"), true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { s.Close() })
+		var parentID string
+		if err := s.WriteTx(ctx, func(tx *store.Tx) error {
+			env, err := FileRequest(ctx, tx, RequestFiling{
+				Title:       "Parent",
+				Words:       []byte("Build A and B."),
+				Criteria:    []string{"A works; B works."},
+				Ordinary:    true,
+				At:          now,
+				Destination: Destination{To: "last"},
+			})
+			if err != nil {
+				return err
+			}
+			parentID = env.ID
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return s, parentID
+	}
+
+	donor := &SplitDonor{RunID: "r1", Ref: "refs/tillr/runs/r1", SHA: "sha-1", BaseSHA: "base-1"}
+	cov := map[string][]SplitCoverage{"c5": {{Clause: "A works;", Part: "a"}, {Clause: "B works.", Part: "b"}}}
+
+	cases := []struct {
+		name      string
+		statement SplitStatement
+		wantErr   string
+	}{
+		{
+			name: "invalid takes",
+			statement: SplitStatement{
+				Donor: donor,
+				Parts: []SplitPart{
+					{Label: "a", Title: "A", Share: "A", Takes: "partial", Required: boolPtr(true)},
+					{Label: "b", Title: "B", Share: "B", Required: boolPtr(true)},
+				},
+				Coverage: cov,
+			},
+			wantErr: "invalid takes",
+		},
+		{
+			name: "whole without donor",
+			statement: SplitStatement{
+				Parts: []SplitPart{
+					{Label: "a", Title: "A", Share: "A", Takes: SplitTakesWhole, Required: boolPtr(true)},
+					{Label: "b", Title: "B", Share: "B", Required: boolPtr(true)},
+				},
+				Coverage: cov,
+			},
+			wantErr: "no donor sha and base_sha",
+		},
+		{
+			name: "whole missing base_sha",
+			statement: SplitStatement{
+				Donor: &SplitDonor{SHA: "sha-1"},
+				Parts: []SplitPart{
+					{Label: "a", Title: "A", Share: "A", Takes: SplitTakesWhole, Required: boolPtr(true)},
+					{Label: "b", Title: "B", Share: "B", Required: boolPtr(true)},
+				},
+				Coverage: cov,
+			},
+			wantErr: "no donor sha and base_sha",
+		},
+		{
+			name: "whole with paths",
+			statement: SplitStatement{
+				Donor: donor,
+				Parts: []SplitPart{
+					{Label: "a", Title: "A", Share: "A", Takes: SplitTakesWhole, Paths: []string{"a.go"}, Required: boolPtr(true)},
+					{Label: "b", Title: "B", Share: "B", Required: boolPtr(true)},
+				},
+				Coverage: cov,
+			},
+			wantErr: "must not list paths or shared_files",
+		},
+		{
+			name: "nothing with shared_files",
+			statement: SplitStatement{
+				Donor: donor,
+				Parts: []SplitPart{
+					{Label: "a", Title: "A", Share: "A", Takes: SplitTakesNothing, SharedFiles: []string{"a.go"}, Required: boolPtr(true)},
+					{Label: "b", Title: "B", Share: "B", Required: boolPtr(true)},
+				},
+				Coverage: cov,
+			},
+			wantErr: "must not list paths or shared_files",
+		},
+		{
+			name: "named without donor",
+			statement: SplitStatement{
+				Parts: []SplitPart{
+					{Label: "a", Title: "A", Share: "A", Takes: SplitTakesNamed, Paths: []string{"a.go"}, Required: boolPtr(true)},
+					{Label: "b", Title: "B", Share: "B", Required: boolPtr(true)},
+				},
+				Coverage: cov,
+			},
+			wantErr: "no donor sha",
+		},
+		{
+			name: "named without paths",
+			statement: SplitStatement{
+				Donor: donor,
+				Parts: []SplitPart{
+					{Label: "a", Title: "A", Share: "A", Takes: SplitTakesNamed, Required: boolPtr(true)},
+					{Label: "b", Title: "B", Share: "B", Required: boolPtr(true)},
+				},
+				Coverage: cov,
+			},
+			wantErr: "must list at least one path",
+		},
+		{
+			name: "named with absolute path",
+			statement: SplitStatement{
+				Donor: donor,
+				Parts: []SplitPart{
+					{Label: "a", Title: "A", Share: "A", Takes: SplitTakesNamed, Paths: []string{"/etc/passwd"}, Required: boolPtr(true)},
+					{Label: "b", Title: "B", Share: "B", Required: boolPtr(true)},
+				},
+				Coverage: cov,
+			},
+			wantErr: "invalid repo-relative path",
+		},
+		{
+			name: "named with dotdot path",
+			statement: SplitStatement{
+				Donor: donor,
+				Parts: []SplitPart{
+					{Label: "a", Title: "A", Share: "A", Takes: SplitTakesNamed, Paths: []string{"../escape.go"}, Required: boolPtr(true)},
+					{Label: "b", Title: "B", Share: "B", Required: boolPtr(true)},
+				},
+				Coverage: cov,
+			},
+			wantErr: "invalid repo-relative path",
+		},
+		{
+			name: "named with blank shared_files",
+			statement: SplitStatement{
+				Donor: donor,
+				Parts: []SplitPart{
+					{Label: "a", Title: "A", Share: "A", Takes: SplitTakesNamed, Paths: []string{"a.go"}, SharedFiles: []string{" "}, Required: boolPtr(true)},
+					{Label: "b", Title: "B", Share: "B", Required: boolPtr(true)},
+				},
+				Coverage: cov,
+			},
+			wantErr: "invalid repo-relative shared_files path",
+		},
+		{
+			name: "blank inherited_findings",
+			statement: SplitStatement{
+				Donor: donor,
+				Parts: []SplitPart{
+					{Label: "a", Title: "A", Share: "A", InheritedFindings: []string{"  "}, Required: boolPtr(true)},
+					{Label: "b", Title: "B", Share: "B", Required: boolPtr(true)},
+				},
+				Coverage: cov,
+			},
+			wantErr: "blank inherited_findings",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s, parentID := newStoreWithParent(t)
+			err := s.WriteTx(ctx, func(tx *store.Tx) error {
+				_, err := FileSplit(ctx, tx, parentID, tc.statement, now)
+				return err
+			})
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("err = %v, want substring %q", err, tc.wantErr)
+			}
+		})
+	}
+}
