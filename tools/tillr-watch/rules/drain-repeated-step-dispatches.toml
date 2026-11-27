@@ -20,7 +20,7 @@ window = "10m"
 [rule.guidance]
 summary = "Step {{event.node}} of {{event.item_id}} started {{count}} runs in 10 minutes on {{event.lane_id}}."
 check = [
-  "Open the newest run log in {{event.lane_id}} (.tillr/lanes/{{event.lane_id}}/{{event.run_id}}.log) for the adapter's refusal line."
+  "Open the newest run log in {{event.lane_id}} (.tillr/items/{{event.lane_id}}/{{event.run_id}}.log, or .tillr/lanes/... on legacy checkouts) for the adapter's refusal line."
 ]
 do = [
   "Establish why the adapter refused the brief or why {{event.node}} of {{event.item_id}} keeps starting runs on {{event.lane_id}}, and fix the cause."

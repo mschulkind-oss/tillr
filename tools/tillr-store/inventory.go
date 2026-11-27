@@ -100,7 +100,9 @@ func inventory(ctx context.Context, root string) (inventoryReport, error) {
 	laneTotals := map[string]*inventoryRow{}
 	runFiles := map[string]map[string]bool{}
 	runs := map[string]*inventoryRun{}
-	totals := map[string]int64{".tillr": 0, ".tillr/loop": 0, ".tillr/lanes": 0}
+	totals := map[string]int64{".tillr": 0, ".tillr/loop": 0, ".tillr/lanes": 0, ".tillr/items": 0}
+	hasLanes := false
+	hasItems := false
 	add := func(part, name, grain, description string, size int64) {
 		key := part + "\x00" + name
 		row := grouped[key]
@@ -120,19 +122,26 @@ func inventory(ctx context.Context, root string) (inventoryReport, error) {
 			return err
 		}
 		segments := strings.Split(filepath.ToSlash(relative), "/")
-		// Every real lane has both rows, even an absent or empty worktree.
+		if segments[0] == "lanes" {
+			hasLanes = true
+		}
+		if segments[0] == "items" {
+			hasItems = true
+		}
+		// Every real lane or item directory has both rows, even an absent or empty worktree.
 		if entry.IsDir() {
 			if len(segments) == 2 && segments[0] == "loop" {
 				runs[segments[1]] = &inventoryRun{RunID: segments[1]}
 			}
-			if len(segments) == 2 && segments[0] == "lanes" {
+			if len(segments) == 2 && (segments[0] == "lanes" || segments[0] == "items") {
+				part := segments[0]
 				for _, category := range []string{"worktree", "other"} {
 					name := segments[1] + "/" + category
 					description := "Lane source checkout and its build outputs; shows the cost of keeping the worktree."
 					if category == "other" {
 						description = "Lane briefs, process records and scratch outside the worktree; shows the remaining lane storage."
 					}
-					laneTotals[name] = &inventoryRow{Part: "lanes", Name: name, Grain: "files", Bytes: new(int64), Description: description}
+					laneTotals[part+"\x00"+name] = &inventoryRow{Part: part, Name: name, Grain: "files", Bytes: new(int64), Description: description}
 				}
 			}
 			return nil
@@ -166,14 +175,15 @@ func inventory(ctx context.Context, root string) (inventoryReport, error) {
 				r.LargestFile = file
 				r.LargestFileBytes = size
 			}
-		case len(segments) >= 3 && segments[0] == "lanes":
-			totals[".tillr/lanes"] += size
+		case len(segments) >= 3 && (segments[0] == "lanes" || segments[0] == "items"):
+			part := segments[0]
+			totals[".tillr/"+part] += size
 			category := "other"
 			if segments[2] == "worktree" {
 				category = "worktree"
 			}
 			name := segments[1] + "/" + category
-			summary := laneTotals[name]
+			summary := laneTotals[part+"\x00"+name]
 			summary.Count++
 			*summary.Bytes += size
 			file := strings.Join(segments[2:], "/")
@@ -189,11 +199,11 @@ func inventory(ctx context.Context, root string) (inventoryReport, error) {
 			if category == "other" {
 				description = inventoryDescription(loopDescriptions, segments[len(segments)-1])
 			}
-			add("lanes", name, "files", description, size)
+			add(part, name, "files", description, size)
 		default:
 			// Top-level files and unrecognized directories remain fully visible.
 			part := "files"
-			if segments[0] == "loop" || segments[0] == "lanes" {
+			if segments[0] == "loop" || segments[0] == "lanes" || segments[0] == "items" {
 				part = segments[0]
 				totals[".tillr/"+part] += size
 			}
@@ -217,7 +227,12 @@ func inventory(ctx context.Context, root string) (inventoryReport, error) {
 	for _, row := range laneTotals {
 		result.LaneTotals = append(result.LaneTotals, *row)
 	}
-	sort.Slice(result.LaneTotals, func(i, j int) bool { return result.LaneTotals[i].Name < result.LaneTotals[j].Name })
+	sort.Slice(result.LaneTotals, func(i, j int) bool {
+		if result.LaneTotals[i].Part != result.LaneTotals[j].Part {
+			return result.LaneTotals[i].Part < result.LaneTotals[j].Part
+		}
+		return result.LaneTotals[i].Name < result.LaneTotals[j].Name
+	})
 	refs, err := inventoryRefs(ctx, root)
 	if err != nil {
 		return result, err
@@ -230,7 +245,14 @@ func inventory(ctx context.Context, root string) (inventoryReport, error) {
 		}
 		return a.Name < b.Name
 	})
-	for _, directory := range []string{".tillr", ".tillr/loop", ".tillr/lanes"} {
+	totalDirs := []string{".tillr", ".tillr/loop"}
+	if hasLanes {
+		totalDirs = append(totalDirs, ".tillr/lanes")
+	}
+	if hasItems || !hasLanes {
+		totalDirs = append(totalDirs, ".tillr/items")
+	}
+	for _, directory := range totalDirs {
 		var sum int64
 		for _, row := range result.Rows {
 			if row.Bytes != nil && (directory == ".tillr" || row.Part == strings.TrimPrefix(directory, ".tillr/")) {

@@ -137,7 +137,7 @@ func TestDrainRepeatedStepDispatchesRule(t *testing.T) {
 			t.Fatalf("summary %q does not name %q", guidance.Summary, want)
 		}
 	}
-	if !strings.Contains(checkText, ".tillr/lanes/express-1/"+newestRun+".log") ||
+	if !strings.Contains(checkText, ".tillr/items/express-1/"+newestRun+".log") ||
 		!strings.Contains(strings.ToLower(checkText), "refusal") ||
 		!strings.Contains(allGuidance, "express-1") {
 		t.Fatalf("guidance does not tell reader to open newest run log in express-1 for adapter refusal line: %+v", guidance)

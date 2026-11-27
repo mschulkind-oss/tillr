@@ -19,7 +19,7 @@ clear_when = 'event.kind == "run.finish" and event.state != "paused"'
 [rule.guidance]
 summary = "Run {{event.run_id}} on {{event.lane_id}} hit {{event.count}} model request timeouts ({{event.error}})."
 check = [
-  "Inspect the run log (.tillr/lanes/{{event.lane_id}}/{{event.run_id}}.log) to see what request is timing out and whether pi is repeating the same oversized turn."
+  "Inspect the run log (.tillr/items/{{event.lane_id}}/{{event.run_id}}.log, or .tillr/lanes/... on legacy checkouts) to see what request is timing out and whether pi is repeating the same oversized turn."
 ]
 do = [
   "Stop or close {{event.run_id}} if it is repeating a timed-out request with no progress, and fix the oversized request or timeout cause."

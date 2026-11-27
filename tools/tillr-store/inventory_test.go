@@ -353,3 +353,71 @@ func TestInventoryDescribesItemPinRefs(t *testing.T) {
 		}
 	}
 }
+
+func TestInventoryTotalsItemDirectoriesUnderEitherRoot(t *testing.T) {
+	t.Run("items-only", func(t *testing.T) {
+		root, _ := inventoryFixture(t)
+		if err := os.RemoveAll(filepath.Join(root, ".tillr", "lanes")); err != nil {
+			t.Fatal(err)
+		}
+		inventoryFile(t, root, "items/item-a/worktree/src/a.go", "source")
+		inventoryFile(t, root, "items/item-a/report.md", "report")
+		inventoryFile(t, root, "items/item-b/brief.md", "brief")
+
+		p, _ := readInventory(t, root)
+		wt := findInventoryRow(t, inventoryPayload{Rows: p.LaneTotals}, "items", "item-a/worktree")
+		if wt.Count != 1 || *wt.Bytes != int64(len("source")) {
+			t.Fatalf("item-a/worktree = %+v", wt)
+		}
+		other := findInventoryRow(t, inventoryPayload{Rows: p.LaneTotals}, "items", "item-a/other")
+		if other.Count != 1 || *other.Bytes != int64(len("report")) {
+			t.Fatalf("item-a/other = %+v", other)
+		}
+		emptyWt := findInventoryRow(t, inventoryPayload{Rows: p.LaneTotals}, "items", "item-b/worktree")
+		if emptyWt.Count != 0 || *emptyWt.Bytes != 0 {
+			t.Fatalf("item-b/worktree = %+v", emptyWt)
+		}
+		var hasItemsTotal, hasLanesTotal bool
+		for _, total := range p.Totals {
+			if total.Directory == ".tillr/items" {
+				hasItemsTotal = true
+				want := int64(len("source") + len("report") + len("brief"))
+				if total.Bytes != want || total.RowBytes != want {
+					t.Fatalf(".tillr/items total = %+v, want %d", total, want)
+				}
+			}
+			if total.Directory == ".tillr/lanes" {
+				hasLanesTotal = true
+			}
+		}
+		if !hasItemsTotal || hasLanesTotal {
+			t.Fatalf("totals = %+v, want .tillr/items and no .tillr/lanes", p.Totals)
+		}
+	})
+
+	t.Run("both-roots", func(t *testing.T) {
+		root, _ := inventoryFixture(t)
+		if err := os.RemoveAll(filepath.Join(root, ".tillr", "lanes")); err != nil {
+			t.Fatal(err)
+		}
+		inventoryFile(t, root, "lanes/item-old/worktree/a.txt", "old")
+		inventoryFile(t, root, "items/item-new/worktree/b.txt", "newer")
+
+		p, _ := readInventory(t, root)
+		oldWt := findInventoryRow(t, inventoryPayload{Rows: p.LaneTotals}, "lanes", "item-old/worktree")
+		if oldWt.Count != 1 || *oldWt.Bytes != int64(len("old")) {
+			t.Fatalf("lanes item-old/worktree = %+v", oldWt)
+		}
+		newWt := findInventoryRow(t, inventoryPayload{Rows: p.LaneTotals}, "items", "item-new/worktree")
+		if newWt.Count != 1 || *newWt.Bytes != int64(len("newer")) {
+			t.Fatalf("items item-new/worktree = %+v", newWt)
+		}
+		gotTotals := map[string]int64{}
+		for _, total := range p.Totals {
+			gotTotals[total.Directory] = total.Bytes
+		}
+		if gotTotals[".tillr/lanes"] != int64(len("old")) || gotTotals[".tillr/items"] != int64(len("newer")) {
+			t.Fatalf("totals = %+v", p.Totals)
+		}
+	})
+}

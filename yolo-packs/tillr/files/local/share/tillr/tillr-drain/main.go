@@ -557,7 +557,7 @@ func resumeFace(args []string) int {
 	fs := newFlagSet("resume")
 	root := fs.String("root", "", "the repository the run's boundary bracket covers")
 	path := fs.String("store", "", "the store holding the run, its item and the bracket's event")
-	laneRoot := fs.String("lane-root", "", "the directory the lanes live under")
+	laneRoot := fs.String("lane-root", "", "the directory the lanes live under (default <root>/.tillr/items, or <root>/.tillr/lanes if it exists)")
 	runID := fs.String("run", "", "the run whose session is continued: its id, lane, brief and fence are reused")
 	requestPath := fs.String("request", "", "the run.request to re-execute (default <lane-root>/.requests/<run-id>.request.json, where the dispatch wrote it)")
 	runBin := fs.String("run-bin", "tillr-run", "the tillr-run binary the resume executes")
@@ -572,9 +572,7 @@ func resumeFace(args []string) int {
 	if *path == "" {
 		*path = filepath.Join(*root, ".tillr", "state.db")
 	}
-	if *laneRoot == "" {
-		*laneRoot = filepath.Join(*root, ".tillr", "lanes")
-	}
+	*laneRoot, _ = resolveLaneRoot(*root, *laneRoot)
 	at := time.Now
 	if *now != "" {
 		parsed, err := time.Parse(time.RFC3339, *now)
@@ -928,7 +926,7 @@ func loopFace(args []string) int {
 	maxAgents := fs.Int("max-agents", 2, "running-agent limit on a fresh start (replaces any saved scale target when set explicitly; express work runs outside the limit)")
 	laneCount := fs.Int("lanes", 2, "alias for --max-agents")
 	maxConcurrentTriage := fs.Int("max-concurrent-triage", 2, "maximum concurrent alert triage runs dispatched outside build lanes (max_concurrent_triage)")
-	laneRoot := fs.String("lane-root", "", "where the lanes' worktrees live (default <root>/.tillr/lanes)")
+	laneRoot := fs.String("lane-root", "", "where the lanes' worktrees live (default <root>/.tillr/items, or <root>/.tillr/lanes if it exists)")
 	backoffBase := fs.Duration("backoff-base", drain.DefaultBackoffBase, "the wait before the next attempt after the first consecutive infrastructure failure; each further one doubles it, up to 5m. It is a wait and not a stop: the loop reports the failure and keeps trying, because the pile still holds work")
 	fallbackPoll := fs.Duration("fallback-poll", drain.DefaultFallbackPollInterval, "fallback store reconciliation poll interval when no relayed notification arrives (D-SN6)")
 	noNotify := fs.Bool("no-notify", false, "disable local notification relay subscription and rely on fallback polling only (D-SN7)")
@@ -1019,8 +1017,10 @@ func loopFace(args []string) int {
 		fmt.Fprintln(os.Stderr, repositorySettings.StartupLine())
 		fmt.Fprintln(os.Stderr, gatePolicy.StartupLine(absent))
 	}
-	if *laneRoot == "" {
-		*laneRoot = filepath.Join(*root, ".tillr", "lanes")
+	var laneRootReason string
+	*laneRoot, laneRootReason = resolveLaneRoot(*root, *laneRoot)
+	if !*check {
+		fmt.Fprintf(os.Stderr, "loop: lane-root %s (%s)\n", *laneRoot, laneRootReason)
 	}
 	if *policyPath == "" {
 		selectedProfile := *profileName
@@ -1385,4 +1385,18 @@ func checkBinary(args []string) func(context.Context, string) error {
 		}
 		return errors.New(detail)
 	}
+}
+
+// resolveLaneRoot returns the effective lane root and a human-readable reason for the choice.
+// An explicit --lane-root always wins; otherwise an existing <root>/.tillr/lanes is kept
+// so live or held runs are not stranded, and fresh checkouts default to <root>/.tillr/items.
+func resolveLaneRoot(root, explicit string) (path, reason string) {
+	if explicit != "" {
+		return explicit, "--lane-root given explicitly"
+	}
+	legacy := filepath.Join(root, ".tillr", "lanes")
+	if _, err := os.Stat(legacy); err == nil {
+		return legacy, fmt.Sprintf("%s already exists", legacy)
+	}
+	return filepath.Join(root, ".tillr", "items"), "default"
 }

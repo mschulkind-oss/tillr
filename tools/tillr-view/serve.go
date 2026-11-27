@@ -203,7 +203,7 @@ func serveFace(args []string) (record.Envelope, int) {
 	fs := newFlagSet("serve")
 	storePath := fs.String("store", "", "the store to serve (required)")
 	loopDir := fs.String("loop-dir", "", "the loop's record directory (default: <store dir>/../loop)")
-	laneRoot := fs.String("lane-root", "", "where the lane directories live: each run's stream log and lane-copied inputs (default: <store dir>/lanes)")
+	laneRoot := fs.String("lane-root", "", "where the lane directories live: each run's stream log and lane-copied inputs (default: <store dir>/items, or <store dir>/lanes if it exists)")
 	traceBin := fs.String("trace-bin", "", traceBinHelp)
 	addr := fs.String("addr", "127.0.0.1:4318", "the address to listen on")
 	root := fs.String("root", ".", "the directory a relative design_doc resolves against")
@@ -361,7 +361,7 @@ func newServer(ctx context.Context, storePath, loopDir, laneRoot, traceBin, root
 	// defaults are relative to the store the caller named, so the same tree read from
 	// another mount (the host's path for a container's `/workspace`) resolves the same files.
 	if laneRoot == "" {
-		laneRoot = filepath.Join(filepath.Dir(storePath), "lanes")
+		laneRoot = defaultLaneRoot(filepath.Dir(storePath))
 	}
 	srv.obs = &observations{loopDir: loopDir, laneRoot: laneRoot, trace: newTraceReader(traceBin, storePath, loopDir)}
 	return srv

@@ -25,7 +25,7 @@ func runFace(args []string, stdout io.Writer) (record.Envelope, int) {
 	fs := newFlagSet("run")
 	storePath := fs.String("store", "", "the store to read (required)")
 	runID := fs.String("run", "", "the run id to inspect (required)")
-	laneRoot := fs.String("lane-root", "", "the lanes directory (default: <store dir>/lanes)")
+	laneRoot := fs.String("lane-root", "", "the lanes directory (default: <store dir>/items, or <store dir>/lanes if it exists)")
 	loopDir := fs.String("loop-dir", "", "the loop result directory (default: <store dir>/loop)")
 	asJSON := fs.Bool("json", false, "print the run timing and schedule as JSON instead of text")
 	if code := parseFlags(fs, args); code != record.ExitOK {
@@ -36,7 +36,7 @@ func runFace(args []string, stdout io.Writer) (record.Envelope, int) {
 	}
 	storeDir := filepath.Dir(*storePath)
 	if *laneRoot == "" {
-		*laneRoot = filepath.Join(storeDir, "lanes")
+		*laneRoot = defaultLaneRoot(storeDir)
 	}
 	if *loopDir == "" {
 		*loopDir = filepath.Join(storeDir, "loop")

@@ -90,24 +90,38 @@ func PrepareReadOnlyMountCmd(cmd *exec.Cmd, cfg ReadOnlyMountConfig) (bool, erro
 	return true, nil
 }
 
-func prepareTriageExecCmd(cmd *exec.Cmd, adapterPath string, reqArgs []string, root, laneDir, workDir, durableDir, traceDir, storeDir string) (bool, error) {
-	if !CanUseReadOnlyMountNS() {
-		if err := prepareTriageSymlinkView(root, workDir); err != nil {
-			return false, err
-		}
-		return false, nil
-	}
-	if err := os.MkdirAll(workDir, 0o755); err != nil {
-		return false, Internalf("creating triage work dir %q: %v", workDir, err)
-	}
+func triageMountOps(root, laneRoot, laneDir, workDir, durableDir, traceDir, storeDir string) []MountOp {
 	var mounts []MountOp
 	if root != "" {
 		mounts = append(mounts, MountOp{Src: root, Dst: root, ReadOnly: true})
 		if storeDir != "" {
 			mounts = append(mounts, MountOp{Src: storeDir, Dst: storeDir, ReadOnly: false})
 		}
-		lanesDir := filepath.Join(root, ".tillr", "lanes")
-		mounts = append(mounts, MountOp{Src: lanesDir, Dst: lanesDir, ReadOnly: true})
+		seenRO := map[string]bool{}
+		addRO := func(dir string) {
+			if dir == "" {
+				return
+			}
+			clean := filepath.Clean(dir)
+			if seenRO[clean] {
+				return
+			}
+			seenRO[clean] = true
+			mounts = append(mounts, MountOp{Src: clean, Dst: clean, ReadOnly: true})
+		}
+		activeLaneRoot := laneRoot
+		if activeLaneRoot == "" && laneDir != "" {
+			activeLaneRoot = filepath.Dir(laneDir)
+		}
+		addRO(activeLaneRoot)
+		for _, candidate := range []string{
+			filepath.Join(root, ".tillr", "lanes"),
+			filepath.Join(root, ".tillr", "items"),
+		} {
+			if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+				addRO(candidate)
+			}
+		}
 	}
 	if laneDir != "" {
 		mounts = append(mounts, MountOp{Src: laneDir, Dst: laneDir, ReadOnly: false})
@@ -121,6 +135,20 @@ func prepareTriageExecCmd(cmd *exec.Cmd, adapterPath string, reqArgs []string, r
 	if root != "" && workDir != "" {
 		mounts = append(mounts, MountOp{Src: root, Dst: workDir, ReadOnly: true})
 	}
+	return mounts
+}
+
+func prepareTriageExecCmd(cmd *exec.Cmd, adapterPath string, reqArgs []string, root, laneRoot, laneDir, workDir, durableDir, traceDir, storeDir string) (bool, error) {
+	if !CanUseReadOnlyMountNS() {
+		if err := prepareTriageSymlinkView(root, workDir); err != nil {
+			return false, err
+		}
+		return false, nil
+	}
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		return false, Internalf("creating triage work dir %q: %v", workDir, err)
+	}
+	mounts := triageMountOps(root, laneRoot, laneDir, workDir, durableDir, traceDir, storeDir)
 	return PrepareReadOnlyMountCmd(cmd, ReadOnlyMountConfig{
 		TargetPath: adapterPath,
 		TargetArgs: reqArgs,

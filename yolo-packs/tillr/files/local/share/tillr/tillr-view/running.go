@@ -153,7 +153,7 @@ func runningFace(args []string) (record.Envelope, int) {
 	fs := newFlagSet("running")
 	storePath := fs.String("store", "", "the store to read (required)")
 	loopDir := fs.String("loop-dir", "", "the loop's record directory (default: <store dir>/loop)")
-	laneRoot := fs.String("lane-root", "", "where the lane directories live (default: <store dir>/lanes)")
+	laneRoot := fs.String("lane-root", "", "where the lane directories live (default: <store dir>/items, or <store dir>/lanes if it exists)")
 	watch := fs.Bool("watch", false, "re-render once a second in a terminal")
 	asJSON := fs.Bool("json", false, "emit the record envelope instead of the table")
 	nowFlag := fs.String("now", "", "the clock elapsed and lease-left are measured against, RFC 3339 (default: now)")
@@ -175,7 +175,7 @@ func runningFace(args []string) (record.Envelope, int) {
 		*loopDir = filepath.Join(filepath.Dir(*storePath), "loop")
 	}
 	if *laneRoot == "" {
-		*laneRoot = filepath.Join(filepath.Dir(*storePath), "lanes")
+		*laneRoot = defaultLaneRoot(filepath.Dir(*storePath))
 	}
 
 	render := func(at time.Time) (record.Envelope, int) {

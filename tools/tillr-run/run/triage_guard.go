@@ -183,7 +183,8 @@ func triageRepoRoot(laneRoot string, env []string) string {
 		}
 		return v
 	}
-	if filepath.Base(laneRoot) == "lanes" && filepath.Base(filepath.Dir(laneRoot)) == ".tillr" {
+	base := filepath.Base(laneRoot)
+	if (base == "lanes" || base == "items") && filepath.Base(filepath.Dir(laneRoot)) == ".tillr" {
 		return filepath.Dir(filepath.Dir(laneRoot))
 	}
 	return filepath.Dir(laneRoot)

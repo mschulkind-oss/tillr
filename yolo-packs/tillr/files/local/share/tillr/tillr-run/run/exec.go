@@ -584,7 +584,7 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 		if s != nil && s.Path() != "" {
 			storeDir = filepath.Dir(s.Path())
 		}
-		if _, err := prepareTriageExecCmd(cmd, adapterPath, req.Command[1:], repoRoot, laneDir, workDir, durableDir, traceDir, storeDir); err != nil {
+		if _, err := prepareTriageExecCmd(cmd, adapterPath, req.Command[1:], repoRoot, root, laneDir, workDir, durableDir, traceDir, storeDir); err != nil {
 			logFile.Close()
 			return record.Envelope{}, err
 		}

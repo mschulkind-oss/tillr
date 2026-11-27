@@ -493,8 +493,8 @@ lanes quiet after five minutes without log growth. Settling lanes never receive
 that mark. The strip refreshes on store/log notifications and polls every five
 seconds for step files and quiet ages; Pause stops automatic refreshes.
 
-`--loop-dir` and `--lane-root` default to the loop and lanes directories beside
-the store, on every face including `serve`, so each file is found from the store
+`--loop-dir` and `--lane-root` default to the loop and item/lane directories beside
+the store (`<store dir>/items`, or `<store dir>/lanes` if it already exists), on every face including `serve`, so each file is found from the store
 the server was given and never from a path recorded under another mount. A log that is
 absent is a plain note: `no stream log at <path>`. The JSON command prints the same
 array served as the API's `data`.

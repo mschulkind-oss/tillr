@@ -43,7 +43,7 @@ Eight terms carry the entire workflow (see [the vocabulary design](./design/till
 
 - **The store** — the single SQLite database (`.tillr/state.db` by default) that holds all queued tasks, their criteria, the append-only event log, lane leases, and landing records. Every `tillr` program reads and writes this store.
 - **An item** — one unit of work tracked in the store, with a title, request words or testable **criteria** (the conditions its result is judged against), and a lifecycle state (`in-queue`, `blocked`, `landed`, `closed`, and so on).
-- **A lane** — an item's leased working directory (under `.tillr/lanes/<item-id>/worktree` by default, or `desk-<doc>` for a review-comment desk) that holds a dedicated Git worktree where its agent runs work in isolation from your main checkout and from other items.
+- **A lane** — an item's leased working directory (under `.tillr/items/<item-id>/worktree` by default, or `.tillr/lanes/<item-id>/worktree` on existing checkouts where `.tillr/lanes` already exists) that holds a dedicated Git worktree where its agent runs work in isolation from your main checkout and from other items.
 - **The loop** — the long-running drain process (`tillr drain loop`) that scans the store, picks ready items in rank order, gives each item its own worktree directory up to the running-agent limit, starts agent runs, and routes finished candidates through checking and landing.
 - **The gate** — the automated check runner (`tillr-gate`) that runs your repository's declared JSON checks against a lane's committed candidate before anything touches the trunk.
 - **Landing** — the atomic squash (`tillr-land`) of a gated candidate onto your trunk branch as one commit under a lock, re-authored to your configured Git identity.
@@ -493,7 +493,7 @@ loop: dispatched 1, landed 1, rejected 0, infra failures 0
 - **`loop: policy in force ...`** — the SHA-256 digest of your backend policy and which backend
   fills each seat.
 - **`loop: tick 1 dispatch <item-id> -> <backend> on <item-id>`** — the loop staged a worktree in
-  `.tillr/lanes/<item-id>/worktree` and started the worker.
+  `.tillr/items/<item-id>/worktree` (or `.tillr/lanes/<item-id>/worktree` on existing checkouts) and started the worker.
 - **`loop: landed <item-id> (<sha>)`** — the candidate passed the gate and was squashed onto your
   trunk branch.
 - **`loop: stopped after 2 tick(s): queue-drained`** — nothing else is dispatchable and

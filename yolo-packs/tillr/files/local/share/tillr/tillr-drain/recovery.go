@@ -29,7 +29,7 @@ func recoveryFace(face string, args []string) int {
 		why = fs.String("why", "", "the operator's explanation, retained in the record")
 	}
 	if face != "acquit" {
-		laneRoot = fs.String("lane-root", "", "the lanes directory (default <root>/.tillr/lanes)")
+		laneRoot = fs.String("lane-root", "", "the lanes directory (default <root>/.tillr/items, or <root>/.tillr/lanes if it exists)")
 	}
 	if face == "examine" {
 		policyPath = fs.String("policy", "", "the backend policy (default <root>/config/tillr/backend-policy.json)")
@@ -77,9 +77,7 @@ func recoveryFace(face string, args []string) int {
 		fmt.Printf("acquitted %s; conviction retained\n", *runID)
 		return record.ExitOK
 	}
-	if *laneRoot == "" {
-		*laneRoot = filepath.Join(*root, ".tillr", "lanes")
-	}
+	*laneRoot, _ = resolveLaneRoot(*root, *laneRoot)
 	policy := &drain.Policy{}
 	steps := &drain.ProcessSteps{Root: *root, Store: *path, LaneRoot: *laneRoot, Now: time.Now}
 	stager := &drain.LaneStager{Root: *root, LaneRoot: *laneRoot, Store: *path, Now: time.Now}

@@ -23,7 +23,9 @@ The words this document uses:
 - An **item** is one piece of queued work with criteria. A **run** is one execution of a
   harness (the agent program an adapter starts) for an item.
 - A **pass** visits items in queue order and applies at most one transition per item.
-- A **lane** is a worktree the loop stages work in, under `<root>/.tillr/lanes/<lane>/`.
+- A **lane** is a worktree the loop stages work in, under `<root>/.tillr/items/<lane>/`
+  by default (or `<root>/.tillr/lanes/<lane>/` on an existing checkout where
+  `<root>/.tillr/lanes` already exists, unless `--lane-root` overrides it).
 - A **seat** is a workflow role such as `build` or `design`; a **backend** is the execution
   service the backend policy maps a seat to.
 - A **candidate** is the committed change a run leaves in its lane. The **trunk** is the
@@ -55,6 +57,20 @@ The design that divides this surface into `--help`, this README and the composit
 skill is [`docs/reference/tillr-distribution.md`](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/tillr-distribution.md).
 Positions and transitions are defined in the
 [drain successor reference](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/tillr-drain-successor.md).
+
+## Moving an existing checkout to `.tillr/items`
+
+When `--lane-root` is omitted, `loop` (along with `resume`, `examine`, `set-aside`,
+and `tillr-view`) defaults to `<root>/.tillr/items`, unless `<root>/.tillr/lanes`
+already exists, in which case it keeps `<root>/.tillr/lanes` so live runs are not
+stranded. To move an existing checkout to `<root>/.tillr/items`:
+
+1. Stop the loop cleanly with no run live (`tillr drain stop` and wait for it to exit).
+2. Start the loop again with `--lane-root <root>/.tillr/items` (or move/remove the old
+   `<root>/.tillr/lanes` directory once no live run remains so future default invocations
+   also choose `<root>/.tillr/items`).
+
+Candidates that were held are staged again in their item directories from their pins.
 
 ## Moving a running loop onto new code
 

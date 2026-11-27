@@ -197,7 +197,7 @@ func waitingFace(args []string) (record.Envelope, int) {
 		}
 		var laneRows []laneRow
 		if err == nil {
-			laneRows, err = readLaneRows(ctx, *path, filepath.Join(filepath.Dir(*path), "loop"), filepath.Join(filepath.Dir(*path), "lanes"), now)
+			laneRows, err = readLaneRows(ctx, *path, filepath.Join(filepath.Dir(*path), "loop"), defaultLaneRoot(filepath.Dir(*path)), now)
 		}
 		if err == nil {
 			_, err = fmt.Fprintln(os.Stdout, laneCapacityLine(laneRows))

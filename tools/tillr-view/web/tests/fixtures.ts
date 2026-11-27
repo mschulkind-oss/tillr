@@ -519,7 +519,7 @@ export const transcriptData: TranscriptData = {
     },
   ],
   sources: {
-    log: { path: ".tillr/lanes/lane-1/run-item-seed-02.log", state: "present" },
+    log: { path: ".tillr/items/item-seed-02/run-item-seed-02.log", state: "present" },
     steps: { path: ".tillr/loop/run-item-seed-02/steps.jsonl", state: "present" },
     proc: { path: ".tillr/loop/run-item-seed-02/proc-exec.jsonl", state: "present" },
   },
@@ -545,7 +545,7 @@ export const transcriptSeamData: TranscriptData = {
   ...transcriptData,
   entries: transcriptData.entries.slice(0, 1),
   sources: {
-    log: { path: ".tillr/lanes/lane-1/run-item-seed-02.log", state: "absent", note: "no writer produced this file at this path" },
+    log: { path: ".tillr/items/item-seed-02/run-item-seed-02.log", state: "absent", note: "no writer produced this file at this path" },
     steps: { path: ".tillr/loop/run-item-seed-02/steps.jsonl", state: "present" },
     proc: { path: ".tillr/loop/run-item-seed-02/proc-exec.jsonl", state: "present" },
   },

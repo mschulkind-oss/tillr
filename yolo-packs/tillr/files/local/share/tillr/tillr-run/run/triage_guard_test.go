@@ -381,3 +381,17 @@ func TestTriageSymlinkFallbackView(t *testing.T) {
 		t.Fatalf("README.md symlink = %q (%v), want %q", target, err, filepath.Join(root, "README.md"))
 	}
 }
+
+func TestTriageRepoRootRecognizesItemsAndLanes(t *testing.T) {
+	root := t.TempDir()
+	if got := triageRepoRoot(filepath.Join(root, ".tillr", "items"), nil); got != root {
+		t.Fatalf("triageRepoRoot(.tillr/items) = %q, want %q", got, root)
+	}
+	if got := triageRepoRoot(filepath.Join(root, ".tillr", "lanes"), nil); got != root {
+		t.Fatalf("triageRepoRoot(.tillr/lanes) = %q, want %q", got, root)
+	}
+	explicit := filepath.Join(root, "explicit-repo")
+	if got := triageRepoRoot(filepath.Join(root, ".tillr", "items"), []string{"TILLR_REPO_ROOT=" + explicit}); got != explicit {
+		t.Fatalf("triageRepoRoot(TILLR_REPO_ROOT) = %q, want %q", got, explicit)
+	}
+}

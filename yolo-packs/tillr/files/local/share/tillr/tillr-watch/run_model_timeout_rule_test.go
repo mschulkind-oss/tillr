@@ -139,7 +139,7 @@ func TestRunModelTimeoutRule(t *testing.T) {
 		}
 	}
 	checkText := strings.Join(guidance.Check, " ")
-	if !strings.Contains(checkText, ".tillr/lanes/lane-6/run-a.log") {
+	if !strings.Contains(checkText, ".tillr/items/lane-6/run-a.log") {
 		t.Fatalf("check guidance %q does not name lane run log", checkText)
 	}
 

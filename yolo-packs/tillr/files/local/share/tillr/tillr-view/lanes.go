@@ -85,11 +85,19 @@ type laneAction struct {
 	Clock string `json:"clock"` // observed, derived_clock, or no_clock
 }
 
+func defaultLaneRoot(storeDir string) string {
+	legacy := filepath.Join(storeDir, "lanes")
+	if _, err := os.Stat(legacy); err == nil {
+		return legacy
+	}
+	return filepath.Join(storeDir, "items")
+}
+
 func lanesFace(args []string) (record.Envelope, int) {
 	fs := newFlagSet("lanes")
 	path := fs.String("store", "", "the store to read (required)")
 	loop := fs.String("loop-dir", "", "finished step directory (default: <store dir>/loop)")
-	lanes := fs.String("lane-root", "", "lane stream directory (default: <store dir>/lanes)")
+	lanes := fs.String("lane-root", "", "lane stream directory (default: <store dir>/items, or <store dir>/lanes if it exists)")
 	asJSON := fs.Bool("json", false, "print lane rows as JSON instead of a table")
 	if code := parseFlags(fs, args); code != record.ExitOK {
 		return record.Envelope{}, code
@@ -101,7 +109,7 @@ func lanesFace(args []string) (record.Envelope, int) {
 		*loop = filepath.Join(filepath.Dir(*path), "loop")
 	}
 	if *lanes == "" {
-		*lanes = filepath.Join(filepath.Dir(*path), "lanes")
+		*lanes = defaultLaneRoot(filepath.Dir(*path))
 	}
 	rows, err := readLaneRows(context.Background(), *path, *loop, *lanes, time.Now())
 	if err != nil {

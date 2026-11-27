@@ -16,7 +16,7 @@ window = "1h"
 
 [rule.guidance]
 summary = "The heavy runner faulted on tip commit {{subject}}."
-check = ["Read the fault text in the event's detail field and check the proof worktree under .tillr/lanes/.rolling."]
+check = ["Read the fault text in the event's detail field and check the proof worktree under .tillr/items/.rolling (or .tillr/lanes/.rolling on legacy checkouts)."]
 do = ["Identify what stopped the heavy runner from completing a proof run on {{subject}}."]
 
 [rule.delivery]

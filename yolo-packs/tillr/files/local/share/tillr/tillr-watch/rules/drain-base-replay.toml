@@ -32,7 +32,7 @@ clear_when = 'event.active_replays <= 1'
 [rule.guidance]
 summary = "Multiple base replays ({{event.active_replays}}) are running at once (newest on {{event.base_sha}} for run {{event.run_id}}, item {{event.item_id}}, checks: {{event.checks}})."
 check = [
-  "Inspect active .tillr/lanes/.replay/ worktrees, running replay subprocesses, and recent drain.base-replay-started and drain.base-replay-ended events via tillr view events.",
+  "Inspect active .tillr/items/.replay/ (or .tillr/lanes/.replay/ on legacy checkouts) worktrees, running replay subprocesses, and recent drain.base-replay-started and drain.base-replay-ended events via tillr view events.",
   "Run tillr drain why and inspect host load, memory/swap, and which failing checks triggered concurrent base replays across candidates or trunk attribution.",
 ]
 do = [
@@ -62,7 +62,7 @@ window = "24h"
 [rule.guidance]
 summary = "Base replay {{subject}} (item {{event.item_id}}, checks: {{event.checks}}) has been running for {{elapsed}} without finishing (limit 50m)."
 check = [
-  "Inspect the replay worktree under .tillr/lanes/.replay/ for {{event.base_sha}}, running check subprocesses, and the drain loop log to see whether a replayed check is hung or contending on CPU or swap.",
+  "Inspect the replay worktree under .tillr/items/.replay/ (or .tillr/lanes/.replay/ on legacy checkouts) for {{event.base_sha}}, running check subprocesses, and the drain loop log to see whether a replayed check is hung or contending on CPU or swap.",
   "Read recent drain.base-replay-started and drain.base-replay-ended events via tillr view events to check whether other base replays, candidate gates, or trunk proofs are overlapping.",
 ]
 do = [
