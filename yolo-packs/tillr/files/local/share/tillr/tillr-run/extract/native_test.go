@@ -144,3 +144,42 @@ func TestNativeDialectUnknownCostAndRateLimitHeaders(t *testing.T) {
 		}
 	}
 }
+
+func TestNativeDialectBedrockPricingFallbackAndPrecedence(t *testing.T) {
+	// Turn 1: no provider cost -> estimated from Bedrock pricing (5.400000).
+	// Turn 2: provider-reported cost 0.123456 -> takes precedence over table.
+	stream := strings.Join([]string{
+		`{"type":"session","id":"33333333-3333-4333-8333-333333333333","model":"amazon-bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0","timestamp":1764201600000}`,
+		`{"type":"message_end","timestamp":1764201600500,"message":{"role":"assistant","id":"turn-1","model":"amazon-bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0","content":[{"type":"text","text":"step 1\n"}],"stopReason":"tool_use","usage":{"input":1000000,"output":100000,"cacheRead":500000,"cacheWrite":200000,"totalTokens":1800000}}}`,
+		`{"type":"message_end","timestamp":1764201601000,"message":{"role":"assistant","id":"turn-2","model":"amazon-bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0","content":[{"type":"text","text":"RESULT: done\n"}],"stopReason":"end_turn","usage":{"input":1000000,"output":100000,"totalTokens":1100000,"cost":{"total":0.123456}}}}`,
+		`{"type":"agent_settled","aborted":false,"timestamp":1764201601100}`,
+	}, "\n") + "\n"
+
+	dir := t.TempDir()
+	reportPath := filepath.Join(dir, "report.md")
+	var stdout, stderr bytes.Buffer
+	code := extract.RunCLI(
+		[]string{
+			"--dialect", "native",
+			"--backend", "native",
+			"--model", "amazon-bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0",
+			"--exit-code", "0",
+			"--out", reportPath,
+		},
+		strings.NewReader(stream),
+		&stdout,
+		&stderr,
+	)
+	if code != extract.ExitDone {
+		t.Fatalf("RunCLI exit = %d, want 0; stderr=%s", code, stderr.String())
+	}
+
+	rawReport, err := os.ReadFile(reportPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report := string(rawReport)
+	if !strings.Contains(report, "cost usd: 5.523456\n") {
+		t.Errorf("report missing expected combined cost usd: 5.523456:\n%s", report)
+	}
+}

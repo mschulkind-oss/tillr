@@ -557,14 +557,31 @@ func RunCLI(args []string, stdout, stderr io.Writer) int {
 		return ExitRefused
 	}
 
+	var provider Provider
 	mockURL := strings.TrimSpace(os.Getenv("TILLR_NATIVE_MOCK_URL"))
-	if mockURL == "" {
-		fmt.Fprintf(stderr, "%s: refused: no live provider wire adapter configured yet (slice 5 adds live providers)\n", prog)
-		return ExitRefused
-	}
-	provider, err := NewLoopbackProvider(mockURL, nil)
-	if err != nil {
-		fmt.Fprintf(stderr, "%s: refused: %v\n", prog, err)
+	if mockURL != "" {
+		provider, err = NewLoopbackProvider(mockURL, nil)
+		if err != nil {
+			fmt.Fprintf(stderr, "%s: refused: %v\n", prog, err)
+			return ExitRefused
+		}
+	} else if modelID, ok := ParseBedrockModelID(*model); ok {
+		auth, err := ResolveBedrockAuth(*model, *account, os.Getenv)
+		if err != nil {
+			fmt.Fprintf(stderr, "run-native: refused: %v\n", err)
+			return ExitRefused
+		}
+		region := ResolveBedrockRegion(modelID, *account, os.Getenv)
+		provider, err = NewBedrockProvider(BedrockConfig{
+			Region: region,
+			Auth:   auth,
+		})
+		if err != nil {
+			fmt.Fprintf(stderr, "run-native: refused: %v\n", err)
+			return ExitRefused
+		}
+	} else {
+		fmt.Fprintf(stderr, "%s: refused: no live provider wire adapter configured for model %q\n", prog, *model)
 		return ExitRefused
 	}
 

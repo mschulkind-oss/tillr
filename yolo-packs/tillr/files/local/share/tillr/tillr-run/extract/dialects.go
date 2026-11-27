@@ -818,9 +818,17 @@ func NativeDialect(streamText string, liveProbe bool) DialectResult {
 					tokens += *c.Tokens
 					sawTokens = true
 				}
+				turnCostSet := false
 				if costMap := asMap(usage["cost"]); costMap != nil {
 					if billed, ok := asFloat(costMap["total"]); ok {
 						cost += billed
+						sawCost = true
+						turnCostSet = true
+					}
+				}
+				if !turnCostSet && hasAnyCounter(c) && msgModel != nil {
+					if est, ok := EstimateModelCostUSD(*msgModel, c); ok {
+						cost += est
 						sawCost = true
 					}
 				}

@@ -5,6 +5,8 @@ import (
 	"math"
 	"strings"
 	"testing"
+
+	"github.com/mschulkind-oss/tillr-run/run"
 )
 
 func mustJSONLines(t *testing.T, records []map[string]any) string {
@@ -206,5 +208,95 @@ func TestMissingUsageIsAbsent(t *testing.T) {
 	}
 	if d := ClaudeDialect("{}").UsageDetails; d != nil {
 		t.Fatalf("claude: expected nil usage details, got %+v", d)
+	}
+}
+
+func int64Ptr(v int64) *int64 { return &v }
+
+func TestEstimateModelCostUSDBedrockFamilies(t *testing.T) {
+	u := run.ModelUsage{
+		Input:      int64Ptr(1_000_000),
+		Output:     int64Ptr(200_000),
+		CacheRead:  int64Ptr(500_000),
+		CacheWrite: int64Ptr(100_000),
+	}
+
+	tests := []struct {
+		model string
+		want  float64
+	}{
+		// Anthropic Claude: 3.0 + 0.2*15.0 + 0.5*0.30 + 0.1*3.75 = 3.0 + 3.0 + 0.15 + 0.375 = 6.525
+		{"anthropic.claude-sonnet-4-20250514-v1:0", 6.525},
+		// Anthropic Claude 3.5 Sonnet: same rates
+		{"anthropic.claude-3-5-sonnet-20241022-v2:0", 6.525},
+		// Amazon Nova Pro: 0.80 + 0.2*3.20 + 0.5*0.20 + 0 = 1.54
+		{"amazon.nova-pro-v1:0", 1.54},
+		// DeepSeek V3: 0.58 + 0.2*1.68 = 0.916
+		{"deepseek.v3-v1:0", 0.916},
+		// Meta Llama 3.3 70B: 0.72 + 0.2*0.72 = 0.864
+		{"meta.llama3-3-70b-instruct-v1:0", 0.864},
+		// Mistral Pixtral Large: 2.0 + 0.2*6.0 = 3.2
+		{"mistral.pixtral-large-2502-v1:0", 3.2},
+	}
+
+	for _, tc := range tests {
+		got, ok := EstimateModelCostUSD(tc.model, u)
+		if !ok {
+			t.Errorf("EstimateModelCostUSD(%q) ok = false, want true", tc.model)
+			continue
+		}
+		if math.Abs(got-tc.want) > 1e-9 {
+			t.Errorf("EstimateModelCostUSD(%q) = %v, want %v", tc.model, got, tc.want)
+		}
+	}
+}
+
+func TestEstimateModelCostUSDNormalization(t *testing.T) {
+	u := run.ModelUsage{
+		Input:      int64Ptr(1_000_000),
+		Output:     int64Ptr(100_000),
+		CacheRead:  int64Ptr(500_000),
+		CacheWrite: int64Ptr(200_000),
+	}
+	// 3.0 + 1.5 + 0.15 + 0.75 = 5.40
+	const want = 5.40
+
+	variants := []string{
+		"anthropic.claude-sonnet-4-20250514-v1:0",
+		"amazon-bedrock/anthropic.claude-sonnet-4-20250514-v1:0",
+		"bedrock/anthropic.claude-sonnet-4-20250514-v1:0",
+		"amazon-bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0",
+		"bedrock/eu.anthropic.claude-sonnet-4-20250514-v1:0",
+		"ap.anthropic.claude-sonnet-4-20250514-v1:0",
+		"global.anthropic.claude-sonnet-4-20250514-v1:0",
+		"amazon-bedrock/arn:aws:bedrock:eu-central-1:123456789012:inference-profile/eu.anthropic.claude-sonnet-4-20250514-v1:0",
+		"bedrock/arn:aws-us-gov:bedrock:us-gov-west-1:123456789012:foundation-model/anthropic.claude-sonnet-4-20250514-v1:0",
+		"arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.anthropic.claude-sonnet-4-20250514-v1:0",
+	}
+
+	for _, model := range variants {
+		got, ok := EstimateModelCostUSD(model, u)
+		if !ok {
+			t.Errorf("EstimateModelCostUSD(%q) ok = false, want true", model)
+			continue
+		}
+		if math.Abs(got-want) > 1e-9 {
+			t.Errorf("EstimateModelCostUSD(%q) = %v, want %v", model, got, want)
+		}
+	}
+}
+
+func TestEstimateModelCostUSDUnrecognized(t *testing.T) {
+	u := run.ModelUsage{Input: int64Ptr(100), Output: int64Ptr(50)}
+	for _, model := range []string{
+		"",
+		"mock/unpriced",
+		"amazon-bedrock/nonexistent-model-v1:0",
+		"arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/opaque-id",
+	} {
+		got, ok := EstimateModelCostUSD(model, u)
+		if ok || got != 0 {
+			t.Errorf("EstimateModelCostUSD(%q) = (%v, %v), want (0, false)", model, got, ok)
+		}
 	}
 }
