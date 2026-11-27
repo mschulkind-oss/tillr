@@ -16,20 +16,26 @@ const (
 	maxReadBytes = 32 * 1024
 )
 
-// Toolset executes the in-process file, search, and progress tools behind the
-// lane fence and read-only seat policy (Slice 2, D-NAB3).
+// Toolset executes the in-process file, search, progress, and constrained bash
+// tools behind the lane fence and read-only seat policy (Slices 2 and 4, D-NAB3).
 type Toolset struct {
 	policy FencePolicy
+	bash   BashConfig
 }
 
-// NewToolset returns a ToolExecutor enforcing policy on every file, search, and
-// progress tool call.
+// NewToolset returns a ToolExecutor enforcing policy on every file, search,
+// progress, and bash tool call.
 func NewToolset(policy FencePolicy) *Toolset {
 	return &Toolset{policy: policy}
 }
 
-// Definitions returns the JSON Schema tool definitions for Slice 2's six
-// in-process tools.
+// NewToolsetWithBash returns a ToolExecutor enforcing policy with explicit
+// BashConfig overrides for the constrained bash tool.
+func NewToolsetWithBash(policy FencePolicy, bash BashConfig) *Toolset {
+	return &Toolset{policy: policy, bash: bash}
+}
+
+// Definitions returns the JSON Schema tool definitions for the native toolset.
 func (t *Toolset) Definitions() []ToolDef {
 	return []ToolDef{
 		{
@@ -56,6 +62,11 @@ func (t *Toolset) Definitions() []ToolDef {
 			Name:        "edit_file",
 			Description: "Apply exact, unique, non-overlapping text replacements to an existing UTF-8 file inside permitted roots.",
 			InputSchema: json.RawMessage(`{"type":"object","properties":{"path":{"type":"string"},"edits":{"type":"array","minItems":1,"items":{"type":"object","properties":{"old_text":{"type":"string"},"new_text":{"type":"string"}},"required":["old_text","new_text"],"additionalProperties":false}}},"required":["path","edits"],"additionalProperties":false}`),
+		},
+		{
+			Name:        "bash",
+			Description: "Run a shell command in the working directory with provider secrets scrubbed, git guardrails, and read-only mount confinement on read-only seats.",
+			InputSchema: json.RawMessage(`{"type":"object","properties":{"command":{"type":"string"},"timeout_seconds":{"type":"integer","minimum":1,"maximum":600}},"required":["command"],"additionalProperties":false}`),
 		},
 		{
 			Name:        "report_progress",
@@ -98,6 +109,12 @@ func (t *Toolset) Execute(ctx context.Context, call ContentBlock) (string, bool)
 			return fmt.Sprintf("edit_file: %v", err), true
 		}
 		return t.execEditFile(args)
+	case "bash":
+		var args bashArgs
+		if err := unmarshalArgs(call.Input, &args); err != nil {
+			return fmt.Sprintf("bash: %v", err), true
+		}
+		return t.execBash(ctx, args)
 	case "report_progress":
 		var args reportProgressArgs
 		if err := unmarshalArgs(call.Input, &args); err != nil {

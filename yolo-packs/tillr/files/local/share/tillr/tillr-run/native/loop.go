@@ -588,7 +588,7 @@ func RunCLI(args []string, stdout, stderr io.Writer) int {
 	seat := strings.TrimSpace(os.Getenv("TILLR_SEAT"))
 	access := strings.TrimSpace(os.Getenv("TILLR_ACCESS"))
 	readOnly := access == "read_only" || strings.TrimSpace(os.Getenv("TILLR_READ_ONLY_GROUP")) != "" || seat == "triage"
-	toolset := NewToolset(FencePolicy{
+	toolset := NewToolsetWithBash(FencePolicy{
 		WorkDir:      workDir,
 		ArtifactDir:  artifactDir,
 		ArtifactsDir: strings.TrimSpace(os.Getenv("TILLR_OUTPUTS_DIR")),
@@ -596,6 +596,10 @@ func RunCLI(args []string, stdout, stderr io.Writer) int {
 		ProgressFile: strings.TrimSpace(os.Getenv("TILLR_PROGRESS_FILE")),
 		ReadOnly:     readOnly,
 		PlanQuickWay: readOnly && seat == "plan",
+	}, BashConfig{
+		RepoRoot:   strings.TrimSpace(os.Getenv("TILLR_REPO_ROOT")),
+		TraceDir:   strings.TrimSpace(os.Getenv("TILLR_TRACE_DIR")),
+		NonLanding: strings.TrimSpace(os.Getenv("TILLR_NON_LANDING")) == "1",
 	})
 
 	cfg := Config{

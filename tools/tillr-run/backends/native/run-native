@@ -65,6 +65,33 @@ if [ -z "$session" ] && [ -r "$(lane_path "$brief" session-id)" ]; then
     session=$(cat "$(lane_path "$brief" session-id)")
 fi
 
+# Wire tillr-trace bash-shim.sh into BASH_ENV when a trace directory is available,
+# matching run-pi and run-claude. Never pass through Git trace2 variables.
+unset GIT_TRACE2_EVENT GIT_TRACE2_PARENT_SID GIT_TRACE2 GIT_TRACE2_PERF
+trace_dir=${TILLR_TRACE_DIR:-}
+repo_root=${TILLR_REPO_ROOT:-}
+if [ "${TILLR_NON_LANDING:-}" != "1" ]; then
+    if common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
+        repo_root=$(dirname -- "$common")
+    fi
+fi
+if [ -n "${TILLR_RUN_ID:-}" ] && [ -z "$trace_dir" ] && [ -n "$repo_root" ]; then
+    trace_dir=$repo_root/.tillr/loop/$TILLR_RUN_ID
+fi
+shim=
+if trace_parent=$(cd -- "$SELF_DIR/../../../tillr-trace" 2>/dev/null && pwd -P); then
+    shim=$trace_parent/bash-shim.sh
+fi
+if [ -n "$trace_dir" ] && [ -r "$shim" ] && mkdir -p -- "$trace_dir" 2>/dev/null && [ -w "$trace_dir" ]; then
+    TILLR_TRACE_DIR=$trace_dir
+    BASH_ENV=$shim
+    export TILLR_TRACE_DIR BASH_ENV
+    if [ -n "$repo_root" ]; then
+        TILLR_REPO_ROOT=$repo_root
+        export TILLR_REPO_ROOT
+    fi
+fi
+
 set -- native-agent --backend "$backend" --model "$model" --brief "$brief" --target "$target"
 if [ -n "$effort" ]; then
     set -- "$@" --effort "$effort"

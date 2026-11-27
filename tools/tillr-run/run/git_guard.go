@@ -22,6 +22,13 @@ var gitRepoEnvKeys = []string{
 	"GIT_INDEX_FILE",
 }
 
+// InstallGitGuard installs the per-run git guard wrapper into durableDir and
+// returns the updated environment slice with repository-redirecting Git env
+// vars stripped and the guard directory prepended to PATH.
+func InstallGitGuard(workDir, durableDir string, env []string) ([]string, error) {
+	return installGitGuard(workDir, durableDir, env)
+}
+
 func installGitGuard(workDir, durableDir string, env []string) ([]string, error) {
 	// A run owns its working directory; inherited repository-redirecting Git
 	// variables from the caller's shell would point child git commands at the

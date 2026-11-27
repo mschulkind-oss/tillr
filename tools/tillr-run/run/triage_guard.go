@@ -49,6 +49,32 @@ var triageFileMutatingBins = []string{
 	"tee",
 }
 
+// MountOp describes one bind mount applied inside a private Linux mount
+// namespace by PrepareReadOnlyMountCmd.
+type MountOp struct {
+	Src      string `json:"src"`
+	Dst      string `json:"dst"`
+	ReadOnly bool   `json:"read_only"`
+}
+
+// ReadOnlyMountConfig configures a private Linux mount namespace (CLONE_NEWNS)
+// that applies Mounts in order before chdir'ing to WorkDir and exec'ing
+// TargetPath with TargetArgs.
+type ReadOnlyMountConfig struct {
+	TargetPath string    `json:"target_path"`
+	TargetArgs []string  `json:"target_args,omitempty"`
+	WorkDir    string    `json:"work_dir,omitempty"`
+	Mounts     []MountOp `json:"mounts,omitempty"`
+}
+
+// InstallTriageGuard installs the preventative read-only PATH and BASH_ENV
+// shims into durableDir and returns the updated environment slice. Used for
+// triage runs and as the fallback when Linux CLONE_NEWNS is unavailable on
+// read-only seats.
+func InstallTriageGuard(durableDir string, env []string) ([]string, error) {
+	return installTriageGuard(durableDir, env)
+}
+
 func installTriageGuard(durableDir string, env []string) ([]string, error) {
 	for _, key := range gitRepoEnvKeys {
 		env = withoutEnv(env, key)

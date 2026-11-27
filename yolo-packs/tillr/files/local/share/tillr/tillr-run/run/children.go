@@ -21,6 +21,19 @@ const (
 	runCleanupInterval = 10 * time.Millisecond
 )
 
+// NewExecID returns a random 128-bit hex execution identifier for marking
+// child processes via TILLR_RUN_EXEC_ID.
+func NewExecID() (string, error) {
+	return newExecID()
+}
+
+// EndExecProcesses terminates the process group pid and any non-zombie
+// processes carrying TILLR_RUN_EXEC_ID=execID across detached sessions and
+// process groups.
+func EndExecProcesses(pid int, execID string) error {
+	return endRunProcesses(pid, execMark{execID: execID})
+}
+
 func newExecID() (string, error) {
 	var raw [16]byte
 	if _, err := rand.Read(raw[:]); err != nil {
