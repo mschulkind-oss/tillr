@@ -134,10 +134,12 @@ func (l *Loop) reloadSettingsOnLanding(ctx context.Context, tip string) {
 		diffNames = append(diffNames, "trunk.branch")
 		diffDetails = append(diffDetails, fmt.Sprintf("trunk.branch (running %q, file %q)", runningTrunk, next.TrunkBranch()))
 	}
-	runningExpress := expressLaneCount(l.cfg.Lanes)
-	if next.Lanes.Express != runningExpress {
-		diffNames = append(diffNames, "lanes.express")
-		diffDetails = append(diffDetails, fmt.Sprintf("lanes.express (running %d, file %d)", runningExpress, next.Lanes.Express))
+	if !l.cfg.ItemWorktrees {
+		runningExpress := expressLaneCount(l.cfg.Lanes)
+		if next.Lanes.Express != runningExpress {
+			diffNames = append(diffNames, "lanes.express")
+			diffDetails = append(diffDetails, fmt.Sprintf("lanes.express (running %d, file %d)", runningExpress, next.Lanes.Express))
+		}
 	}
 
 	var vantageURL, vantageRepo string

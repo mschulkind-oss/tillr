@@ -252,7 +252,7 @@ func (s *rollScenario) assertLiveWorkerWhy(t *testing.T, id string, resumed, sur
 	if code != 0 {
 		t.Fatalf("why text: %d %s", code, text)
 	}
-	for _, want := range []string{"item_041", "running", id, "lane-1"} {
+	for _, want := range []string{"item_041", "running", id} {
 		if !strings.Contains(string(text), want) {
 			t.Errorf("public why text misses %q: %s", want, text)
 		}
@@ -260,13 +260,13 @@ func (s *rollScenario) assertLiveWorkerWhy(t *testing.T, id string, resumed, sur
 	if strings.Contains(strings.ToLower(string(text)), "no-lane") {
 		t.Errorf("public why text says the running item waits for its lane: %s", text)
 	}
-	if row.ItemID != "item_041" || row.Position != "running" || row.Reason != drain.ReasonRunLive || row.Decision.RunRequest == nil || row.Decision.RunRequest.RunID != id || row.Decision.LaneID != "lane-1" {
+	if row.ItemID != "item_041" || row.Position != "running" || row.Reason != drain.ReasonRunLive || row.Decision.RunRequest == nil || row.Decision.RunRequest.RunID != id || row.Decision.LaneID != "item_041" {
 		t.Errorf("why must identify the running item, run and lane: %+v", row)
 	}
 	if strings.Contains(strings.ToLower(string(out)), "no-lane") || strings.Contains(strings.ToLower(row.Why), "waiting for a lane") || strings.Contains(row.Why, "lane kept") || len(row.WaitingOn) != 0 {
 		t.Errorf("why says the running item waits for its own lane: reason=%q why=%q mover=%q", row.Reason, row.Why, row.Mover)
 	}
-	if !strings.HasPrefix(row.Mover, "worker "+id+" on lane-1") {
+	if !strings.HasPrefix(row.Mover, "worker "+id+" on item_041") {
 		t.Errorf("why must name the live worker as the next mover: %q", row.Mover)
 	}
 	if strings.Contains(row.Why, "(resumed)") != resumed {

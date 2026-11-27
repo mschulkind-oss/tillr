@@ -21,7 +21,7 @@ func TestWhyCommandOperatorRetryWaitingForLanes(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := s.WriteTx(context.Background(), func(tx *store.Tx) error {
-		if _, err := tx.Exec(`UPDATE items SET express=1 WHERE item_id='retry-item'; INSERT OR IGNORE INTO lanes(lane_id,state) VALUES ('lane-1','idle'),('express-1','idle')`); err != nil {
+		if _, err := tx.Exec(`INSERT OR IGNORE INTO lanes(lane_id,state) VALUES ('lane-1','idle'),('lane-2','idle')`); err != nil {
 			return err
 		}
 		if _, err := item.SetState(context.Background(), tx, "retry-item", drain.StateBlocked, at, item.WaitingOn{Waiter: "owner", Reason: "obstacle"}); err != nil {
@@ -38,7 +38,10 @@ func TestWhyCommandOperatorRetryWaitingForLanes(t *testing.T) {
 		if _, err = tx.Exec(`INSERT INTO events(ts,kind,object_type,object_id,payload) VALUES (0,'drain.started','run','work-holder-run',?)`, string(raw)); err != nil {
 			return err
 		}
-		_, err = run.ClaimLease(context.Background(), tx, run.Request{RunID: "lease-holder-run", ItemID: "lease-holder", Backend: "fixture"}, "express-1", at)
+		if _, err = run.ClaimLease(context.Background(), tx, run.Request{RunID: "work-holder-run", ItemID: "work-holder", Backend: "fixture"}, "lane-1", at); err != nil {
+			return err
+		}
+		_, err = run.ClaimLease(context.Background(), tx, run.Request{RunID: "lease-holder-run", ItemID: "lease-holder", Backend: "fixture"}, "lane-2", at)
 		return err
 	}); err != nil {
 		t.Fatal(err)
@@ -47,7 +50,7 @@ func TestWhyCommandOperatorRetryWaitingForLanes(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	common := []string{"why", "--store", path, "--policy", policy(t, "true"), "--lanes", "lane-1,express-1", "--now", at.Format(time.RFC3339)}
+	common := []string{"why", "--store", path, "--policy", policy(t, "true"), "--lanes", "lane-1,lane-2", "--now", at.Format(time.RFC3339)}
 	for _, format := range []string{"table", "json"} {
 		t.Run(format, func(t *testing.T) {
 			args := append([]string(nil), common...)
@@ -83,7 +86,7 @@ func TestWhyCommandOperatorRetryWaitingForLanes(t *testing.T) {
 				t.Fatalf("retry row missing: %s", out)
 			}
 			lower := strings.ToLower(text)
-			for _, want := range []string{"operator retry", "waiting", "lane-1", "work-holder", "work-holder-run", "express-1", "lease-holder-run"} {
+			for _, want := range []string{"operator retry", "waiting", "work-holder-run", "lease-holder-run"} {
 				if !strings.Contains(lower, want) {
 					t.Errorf("%s retry row %q does not name %q", format, text, want)
 				}

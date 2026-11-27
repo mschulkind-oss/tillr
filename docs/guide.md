@@ -43,8 +43,8 @@ Eight terms carry the entire workflow (see [the vocabulary design](./design/till
 
 - **The store** — the single SQLite database (`.tillr/state.db` by default) that holds all queued tasks, their criteria, the append-only event log, lane leases, and landing records. Every `tillr` program reads and writes this store.
 - **An item** — one unit of work tracked in the store, with a title, request words or testable **criteria** (the conditions its result is judged against), and a lifecycle state (`in-queue`, `blocked`, `landed`, `closed`, and so on).
-- **A lane** — a leased slot (under `.tillr/lanes/<lane>/worktree` by default) that holds a dedicated Git worktree where one agent run works in isolation from your main checkout and from other lanes.
-- **The loop** — the long-running drain process (`tillr drain loop`) that scans the store, picks ready items in rank order, assigns them to free lanes, starts agent runs, and routes finished candidates through checking and landing.
+- **A lane** — an item's leased working directory (under `.tillr/lanes/<item-id>/worktree` by default, or `desk-<doc>` for a review-comment desk) that holds a dedicated Git worktree where its agent runs work in isolation from your main checkout and from other items.
+- **The loop** — the long-running drain process (`tillr drain loop`) that scans the store, picks ready items in rank order, gives each item its own worktree directory up to the running-agent limit, starts agent runs, and routes finished candidates through checking and landing.
 - **The gate** — the automated check runner (`tillr-gate`) that runs your repository's declared JSON checks against a lane's committed candidate before anything touches the trunk.
 - **Landing** — the atomic squash (`tillr-land`) of a gated candidate onto your trunk branch as one commit under a lock, re-authored to your configured Git identity.
 - **The trunk proof** — the rolling check that runs on the trunk tip after landings to confirm the full suite still passes; when it fails, the loop files a fixer item and holds other landings until the trunk is green.
@@ -480,7 +480,7 @@ Here is what the key output lines mean (values shortened for readability):
 loop: build <rev> (<timestamp>) green unknown digest <digest> exe .../tillr-drain
 loop: ordinary lanes: 1 (from --lanes flag)
 loop: policy in force <sha256>: default=pi-build; build=pi-build; ...
-loop: tick 1 dispatch item-request-4aec62684b -> pi-build on lane-1
+loop: tick 1 dispatch item-request-4aec62684b -> pi-build on item-request-4aec62684b
 loop: tick gen-1 gate 0.0s over 0 run(s), longest 0.0s of a 330.0s per-run budget (...)
 loop: landed item-request-4aec62684b (<candidate-sha>)
 loop: tick gen-2 gate 0.3s over 1 run(s), longest 0.3s of a 330.0s per-run budget (...)
@@ -492,8 +492,8 @@ loop: dispatched 1, landed 1, rejected 0, infra failures 0
   a `TILLR_BUILD_UNPROVED=HEAD` bootstrap build).
 - **`loop: policy in force ...`** — the SHA-256 digest of your backend policy and which backend
   fills each seat.
-- **`loop: tick 1 dispatch <item-id> -> <backend> on lane-1`** — the loop staged a worktree in
-  `.tillr/lanes/lane-1/worktree` and started the worker.
+- **`loop: tick 1 dispatch <item-id> -> <backend> on <item-id>`** — the loop staged a worktree in
+  `.tillr/lanes/<item-id>/worktree` and started the worker.
 - **`loop: landed <item-id> (<sha>)`** — the candidate passed the gate and was squashed onto your
   trunk branch.
 - **`loop: stopped after 2 tick(s): queue-drained`** — nothing else is dispatchable and

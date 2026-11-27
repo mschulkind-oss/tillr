@@ -110,6 +110,6 @@ form passes, so a green document breaks when it later gains a `4`.
 ## Operating the loop here
 
 - **Session directory and rulings file:** Not fixed in this repository.
-- **Lanes:** [`.tillr.toml`](./.tillr.toml) reserves `2` express lanes (`[lanes] express = 2`) and sets no ordinary lane count (`tillr-drain loop` defaults `--lanes` to `2` on a fresh start, overridden by `--lanes` or a saved `ordinary_lanes` scale target).
+- **Lanes:** Each item runs in its own item directory (`<lane-root>/<item-id>/worktree`) staged on dispatch; the loop stages no ordinary or express pool worktrees at start. [`.tillr.toml`](./.tillr.toml) still parses `[lanes] express = 2` without reserving directories (express work takes its own item directory outside the ordinary running-agent limit), and sets no ordinary limit (`tillr-drain loop` defaults `--lanes` / `--max-agents` to `2` on a fresh start, overridden by `--lanes` / `--max-agents` or a saved `ordinary_lanes` scale target).
 - **Backend policy:** The backend policy in force is passed with `--policy` from outside the repository; the tracked [`config/tillr/backend-policy.json`](./config/tillr/backend-policy.json) is only an example with placeholder model names.
 - **Watch rules:** [`config/tillr/watch`](./tools/tillr-watch/rules).

@@ -112,7 +112,7 @@ func recoveryFace(face string, args []string) int {
 		stager.Template = *template
 		questions = commandFields(*questionsCmd)
 	}
-	loop, err := drain.NewLoop(drain.LoopConfig{Root: *root, Store: *path, LaneRoot: *laneRoot, Lanes: []string{"recovery"}, Policy: policy, Steps: steps, Stage: stager, QuestionsCmd: questions, Now: time.Now, Report: os.Stderr})
+	loop, err := drain.NewLoop(drain.LoopConfig{Root: *root, Store: *path, LaneRoot: *laneRoot, Lanes: []string{"recovery"}, ItemWorktrees: true, Policy: policy, Steps: steps, Stage: stager, QuestionsCmd: questions, Now: time.Now, Report: os.Stderr})
 	if err != nil {
 		return fail(err)
 	}

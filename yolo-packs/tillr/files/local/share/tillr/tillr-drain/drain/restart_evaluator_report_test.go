@@ -187,7 +187,7 @@ func assertWorkerView(t *testing.T, s *rollScenario, id string, details ...strin
 	if err != nil || strings.Contains(out, "no-lane") {
 		t.Errorf("view waiting: %v\n%s", err, out)
 	}
-	for _, want := range append(details, "moving (running)", "worker "+id+" on lane-1", "waits for its recorded finish") {
+	for _, want := range append(details, "moving (running)", "worker "+id+" on item_041", "waits for its recorded finish") {
 		if !strings.Contains(out, want) {
 			t.Errorf("view waiting misses %q:\n%s", want, out)
 		}

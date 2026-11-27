@@ -1,6 +1,9 @@
 {
   "github.com/mschulkind-oss/tillr-drain": {
-    "builds": [],
+    "builds": [
+      "github.com/mschulkind-oss/tillr-item",
+      "github.com/mschulkind-oss/tillr-run"
+    ],
     "reads": [
       "config/tillr/backend-policy.json",
       "tools/tillr-drain/"

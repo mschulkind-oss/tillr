@@ -10,7 +10,7 @@ import (
 // --lanes spelling and offers the loop's lanes; a list is still a list.
 func TestWhyLanesReadsACountAsTheLoopsLanes(t *testing.T) {
 	got := *whyLanes("3", 2)
-	want := []string{"lane-1", "lane-2", "lane-3", "express-1", "express-2"}
+	want := []string{"lane-1", "lane-2", "lane-3"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("a count offered %v, want %v", got, want)
 	}

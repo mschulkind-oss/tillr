@@ -29,11 +29,11 @@ func TestLoopExpressSettingsReachReservedPool(t *testing.T) {
 	defer s.Close()
 	if err := s.ReadTx(context.Background(), func(r *store.Reader) error {
 		var ordinary, express int
-		if err := r.QueryRow(`SELECT SUM(lane_id LIKE 'lane-%'), SUM(lane_id LIKE 'express-%') FROM lanes`).Scan(&ordinary, &express); err != nil {
+		if err := r.QueryRow(`SELECT COALESCE(SUM(lane_id LIKE 'lane-%'), 0), COALESCE(SUM(lane_id LIKE 'express-%'), 0) FROM lanes`).Scan(&ordinary, &express); err != nil {
 			return err
 		}
-		if ordinary != 2 || express != 2 {
-			t.Fatalf("settings lost: ordinary=%d express=%d", ordinary, express)
+		if ordinary != 0 || express != 0 {
+			t.Fatalf("pool lanes should not be staged with item worktrees: ordinary=%d express=%d", ordinary, express)
 		}
 		return nil
 	}); err != nil {

@@ -1380,7 +1380,22 @@ func (l *Loop) stageLandingLanes(ctx context.Context) error {
 		return err
 	}
 	if l.cfg.ItemWorktrees {
-		return l.recheckLanes(ctx)
+		if err := l.recheckLanes(ctx); err != nil {
+			return err
+		}
+		var desks []string
+		for _, lane := range l.lanes() {
+			if strings.HasPrefix(lane, "desk-") {
+				desks = append(desks, lane)
+			}
+		}
+		if len(desks) == 0 {
+			return nil
+		}
+		if err := l.stageLaneSet(ctx, desks, true); err != nil {
+			return err
+		}
+		return l.registerLaneSet(ctx, desks)
 	}
 	if err := l.stageLanes(ctx); err != nil {
 		return err

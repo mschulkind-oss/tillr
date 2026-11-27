@@ -322,13 +322,12 @@ func TestOnceReapsAnExpiredLeaseBeforeItPlans(t *testing.T) {
 
 	onceOK(t, storePath, tickPath, "record-sink", sink)
 	requests := readRequests(t, sink)
-	if len(requests) != 1 || requests[0].Payload.LaneID != "lane-1" {
-		t.Fatalf("the tick handed over %d requests on the reaped lane, want one: %+v", len(requests), requests)
+	if len(requests) != 1 || requests[0].Payload.LaneID != "item_042" {
+		t.Fatalf("the tick handed over %d requests after reaping the expired lease, want one on item_042: %+v", len(requests), requests)
 	}
-	// The dispatch onto the lane it just freed is also the record that the freed lane is
-	// the one the decision named: the two halves of the tick describe one moment.
-	if rows := dispatchRows(t, storePath); len(rows) != 1 || rows[0].LaneID != "lane-1" {
-		t.Fatalf("the dispatch row reads %+v, want the reaped lane-1", rows)
+	// The dispatch after reaping the expired lease records the item's own directory.
+	if rows := dispatchRows(t, storePath); len(rows) != 1 || rows[0].LaneID != "item_042" {
+		t.Fatalf("the dispatch row reads %+v, want item_042", rows)
 	}
 	// The reaped lane holds no lease. It is offered again, so it is either free or claimed
 	// by the request this tick handed over — never still held by the run that died.

@@ -131,7 +131,9 @@ hands a rolling program `TILLR_GATE_SPANS_OUT`.
 ## The loop's steps
 
 At startup the loop takes the repository's loop lock, records its session, checks every step
-program's arguments, stages its lanes, and recovers runs whose owning loop is gone. Then it
+program's arguments, rechecks lanes (staging only configured desk lanes; ordinary and express
+items stage `<lane root>/<item-id>/worktree` at dispatch), and recovers runs whose owning loop
+is gone. Then it
 repeats, waking on a store notification, a lane release, a trunk move, or the
 `--fallback-poll` interval:
 
@@ -248,16 +250,14 @@ The decision is recorded in the dispatch's `base_sha`.
 
 The [saved-idea rule](../../docs/reference/observatory-actions.md#the-saved-idea-item)
 names **express work**: a saved idea, a [filed request](#filed-requests) not filed with
-`--ordinary`, and an item whose block sets `express="true"`. Express lanes are reserved for
-that work and do not consume the ordinary `--lanes` count. The `[lanes]` table of
-`.tillr.toml` sets their count with `express = <n>` (default zero), and the loop names them
-`express-1`, `express-2`, and so on.
+`--ordinary`, and an item whose block sets `express="true"`. Express work runs in its own
+item directory (`<lane root>/<item-id>/worktree`) outside the ordinary `--max-agents`
+(`--lanes`) running-agent limit, and no running work is stopped to make room.
 
-Express work prefers an express lane, then a free ordinary lane, and otherwise waits.
-Ordinary work never uses an express lane, and no running work is stopped to make room.
-Review-comment work stays at its document's
+The `[lanes]` table of `.tillr.toml` still parses `express = <n>` (default zero), but
+reserves no `express-*` directory. Review-comment work stays at its document's
 [desk](../../docs/reference/tillr-designer-sessions.md#the-desk), a lane assigned to that
-document, and counts in neither pool.
+document, and counts against neither limit.
 
 ## Backend policy changes
 
@@ -922,8 +922,9 @@ reason.
 
 `tillr drain scale --root . --max-agents 3` (or its alias `--lanes 3`) saves the running-agent limit; the running loop
 applies it on its next pass without signaling workers. An explicit `--max-agents` (or `--lanes`) on a fresh
-start replaces the saved target. Lowering it stops fresh dispatch to lanes outside the
-rotation; those lanes keep serving the work they hold. Express lanes are unchanged.
+start replaces the saved target. Lowering it stops fresh ordinary dispatches once active ordinary
+agents reach the new limit; running items keep serving the work they hold. Express work runs
+outside the limit and is unchanged.
 
 ## Lanes that staging refuses
 

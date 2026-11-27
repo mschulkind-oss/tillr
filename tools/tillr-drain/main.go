@@ -353,6 +353,7 @@ func planFace(args []string) int {
 	}
 	tick.WorkflowDefaults = repositorySettings.WorkflowDefaults
 	tick.Comments = repositorySettings.Comments
+	tick.ItemWorktrees = true
 	// The policy is loaded before the store is read, so a tick naming an unreadable
 	// policy is refused as malformed input rather than silently holding every item with
 	// `no-policy`.
@@ -431,6 +432,7 @@ func onceFace(args []string) int {
 	}
 	tick.WorkflowDefaults = repositorySettings.WorkflowDefaults
 	tick.Comments = repositorySettings.Comments
+	tick.ItemWorktrees = true
 	policy, err := readPolicy(tick.PolicyRef)
 	if err != nil {
 		return fail(err)
@@ -923,7 +925,7 @@ func loopFace(args []string) int {
 	exitWhenDrained := fs.Bool("exit-when-drained", false, "exit with queue-drained when nothing is dispatchable and no run is in flight; the loop is a daemon by default")
 	root := fs.String("root", "", "the repository the loop stages lanes from and lands onto")
 	path := fs.String("store", "", "the store to reap and plan from (default <root>/.tillr/state.db)")
-	maxAgents := fs.Int("max-agents", 2, "running-agent limit on a fresh start (replaces any saved scale target when set explicitly; reserved express lanes are configured separately)")
+	maxAgents := fs.Int("max-agents", 2, "running-agent limit on a fresh start (replaces any saved scale target when set explicitly; express work runs outside the limit)")
 	laneCount := fs.Int("lanes", 2, "alias for --max-agents")
 	maxConcurrentTriage := fs.Int("max-concurrent-triage", 2, "maximum concurrent alert triage runs dispatched outside build lanes (max_concurrent_triage)")
 	laneRoot := fs.String("lane-root", "", "where the lanes' worktrees live (default <root>/.tillr/lanes)")
@@ -1095,7 +1097,7 @@ func loopFace(args []string) int {
 	}
 	loop, err := drain.NewLoop(drain.LoopConfig{
 		Root: *root, Store: *path, LaneRoot: *laneRoot, MigrateOwnerQuestions: *migrateOwner,
-		Lanes: append(laneIDs(agentLimit), expressLaneIDs(repositorySettings.Lanes.Express)...), LiveScale: true, ExplicitLanes: explicitLanes, BackoffBase: *backoffBase, MaxConcurrentTriage: *maxConcurrentTriage, StorePollInterval: *fallbackPoll, NoNotify: *noNotify, ExitWhenDrained: *exitWhenDrained,
+		Lanes: laneIDs(agentLimit), ItemWorktrees: true, LiveScale: true, ExplicitLanes: explicitLanes, BackoffBase: *backoffBase, MaxConcurrentTriage: *maxConcurrentTriage, StorePollInterval: *fallbackPoll, NoNotify: *noNotify, ExitWhenDrained: *exitWhenDrained,
 		Policy: policy, PolicyRef: *policyPath, QuestionsCmd: commandFields(*questionsCmd), QuestionsIndex: *questionsIndex,
 		Steps: steps, Stage: stager, Now: at, Report: os.Stderr,
 		Comments: repositorySettings.Comments, WorkflowDefaults: repositorySettings.WorkflowDefaults,
@@ -1294,15 +1296,6 @@ func spendLine(result drain.LoopResult) string {
 	}
 	return line + "\nloop: spend started in this loop: " + result.StartedSpend.String() +
 		"\nloop: spend carried over from earlier loops: " + result.CarriedSpend.String()
-}
-
-// expressLaneIDs names the reserved pool separately from the ordinary cap.
-func expressLaneIDs(n int64) []string {
-	var lanes []string
-	for i := int64(1); i <= n; i++ {
-		lanes = append(lanes, fmt.Sprintf("express-%d", i))
-	}
-	return lanes
 }
 
 // laneIDs answers the lane ids a loop with n lanes offers: lane-1 .. lane-n, in that order,

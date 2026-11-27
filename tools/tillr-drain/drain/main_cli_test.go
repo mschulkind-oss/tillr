@@ -28,7 +28,7 @@ func TestPlanDispatchesAQueuedItemOntoAnAvailableLane(t *testing.T) {
 	if got.Action != drain.ActionDispatch || got.Reason != drain.ReasonReady {
 		t.Fatalf("the decision is %q / %q, want dispatch / ready", got.Action, got.Reason)
 	}
-	if got.ItemID != "item_042" || got.LaneID != "lane-1" {
+	if got.ItemID != "item_042" || got.LaneID != "item_042" {
 		t.Fatalf("the decision names item %q on lane %q", got.ItemID, got.LaneID)
 	}
 	if got.DecisionID != "decision-item_042-a1-queued-running" {
@@ -38,7 +38,7 @@ func TestPlanDispatchesAQueuedItemOntoAnAvailableLane(t *testing.T) {
 	if request == nil {
 		t.Fatalf("a dispatch carries no run_request")
 	}
-	if request.RunID != "run-item_042-a1" || request.ItemID != "item_042" || request.LaneID != "lane-1" {
+	if request.RunID != "run-item_042-a1" || request.ItemID != "item_042" || request.LaneID != "item_042" {
 		t.Fatalf("the request names run %q / item %q / lane %q", request.RunID, request.ItemID, request.LaneID)
 	}
 	// The command is the policy's backend composed for the adapter: the program, the
@@ -309,8 +309,8 @@ func TestPlanHoldsWhenCapacityIsExhausted(t *testing.T) {
 	if len(records) != 2 {
 		t.Fatalf("the tick produced %d decisions, want 2", len(records))
 	}
-	if got := records[0].Payload; got.Action != drain.ActionDispatch || got.LaneID != "lane-1" {
-		t.Fatalf("the first decision is %q on lane %q, want dispatch on lane-1", got.Action, got.LaneID)
+	if got := records[0].Payload; got.Action != drain.ActionDispatch || got.LaneID != "item_042" {
+		t.Fatalf("the first decision is %q on lane %q, want dispatch on item_042", got.Action, got.LaneID)
 	}
 	if got := records[1].Payload; got.Action != drain.ActionHold || got.Reason != drain.ReasonNoLane {
 		t.Fatalf("the second decision is %q / %q, want hold / capacity", got.Action, got.Reason)
@@ -405,8 +405,8 @@ func TestPlanDoesNotOfferALaneTheStoreHoldsLeased(t *testing.T) {
 	tickPath := tick(t, "2026-11-10T00:00:00Z", []string{"lane-1", "lane-2"}, 1, policy(t, "/bin/true"))
 
 	got := plan(t, storePath, tickPath)[0].Payload
-	if got.Action != drain.ActionDispatch || got.LaneID != "lane-2" {
-		t.Fatalf("the decision is %q on lane %q, want dispatch on lane-2", got.Action, got.LaneID)
+	if got.Action != drain.ActionDispatch || got.LaneID != "item_042" {
+		t.Fatalf("the decision is %q on lane %q, want dispatch on item_042", got.Action, got.LaneID)
 	}
 }
 
@@ -421,8 +421,8 @@ func TestPlanTreatsAnExpiredLeaseAsAvailable(t *testing.T) {
 	tickPath := tick(t, now.Format(time.RFC3339), []string{"lane-1"}, 1, policy(t, "/bin/true"))
 
 	got := plan(t, storePath, tickPath)[0].Payload
-	if got.Action != drain.ActionDispatch || got.LaneID != "lane-1" {
-		t.Fatalf("the decision is %q on lane %q, want dispatch on the lane whose lease expired", got.Action, got.LaneID)
+	if got.Action != drain.ActionDispatch || got.LaneID != "item_042" {
+		t.Fatalf("the decision is %q on lane %q, want dispatch on item_042 after expired lease", got.Action, got.LaneID)
 	}
 }
 
@@ -734,7 +734,7 @@ func TestPlanRetriesARunTheHarnessRefused(t *testing.T) {
 	if got.RunRequest.RunID == failedRun {
 		t.Fatalf("the retry reused the failed run's id %q: a re-dispatch is a new run", failedRun)
 	}
-	if got.RunRequest.ItemID != "item_042" || got.RunRequest.LaneID != "lane-1" {
+	if got.RunRequest.ItemID != "item_042" || got.RunRequest.LaneID != "item_042" {
 		t.Fatalf("the retry request names item %q on lane %q", got.RunRequest.ItemID, got.RunRequest.LaneID)
 	}
 }

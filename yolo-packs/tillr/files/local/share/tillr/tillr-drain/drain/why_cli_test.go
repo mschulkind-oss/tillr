@@ -59,7 +59,7 @@ func TestWhyUsesPlannerAndWritesNothing(t *testing.T) {
 			return err
 		}
 		lanes := []string{"lane-1"}
-		envs, err := drain.Plan(r, drain.Pass{Now: "2026-11-16T00:00:00Z", AvailableLanes: &lanes}, p, nil)
+		envs, err := drain.Plan(r, drain.Pass{Now: "2026-11-16T00:00:00Z", AvailableLanes: &lanes, ItemWorktrees: true}, p, nil)
 		if err != nil {
 			return err
 		}

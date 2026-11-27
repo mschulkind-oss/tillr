@@ -29,7 +29,7 @@ func whyFace(args []string) int {
 	fs := newFlagSet("why")
 	path := fs.String("store", "", "the store to read (required)")
 	policyRef := fs.String("policy", "", "the loop's policy file; absent means no-policy, not a guessed backend")
-	lanesArg := fs.String("lanes", "", "lanes offered by the loop: a comma-separated list, or a count N as the loop's --lanes takes it (lane-1..lane-N plus the configured express lanes); default: the running loop's lanes when a loop is live for the root, otherwise all store lanes")
+	lanesArg := fs.String("lanes", "", "running-agent limit or lanes offered by the loop: a comma-separated list, or a count N as the loop's --lanes takes it (lane-1..lane-N); default: the running loop's lanes when a loop is live for the root, otherwise all store lanes")
 	root := fs.String("root", ".", questionsRootHelp)
 	questionsCmd := fs.String("questions-cmd", "", questionsCmdHelp)
 	questionsIndex := fs.String("questions-index", "", "an index document `vantage-check index --format json` already produced, read instead of running the index command; `-` reads it from stdin (the observatory hands one cached walk to every planner it asks)")
@@ -67,7 +67,7 @@ func whyFace(args []string) int {
 	if err != nil {
 		return fail(drain.Usagef("%v", err))
 	}
-	tick := drain.Pass{Now: *now, Root: *root, StorePath: *path, Comments: repositorySettings.Comments}
+	tick := drain.Pass{Now: *now, Root: *root, StorePath: *path, Comments: repositorySettings.Comments, ItemWorktrees: true}
 	if tick.Now == "" {
 		tick.Now = time.Now().UTC().Format(time.RFC3339)
 	}
@@ -264,12 +264,11 @@ func whyTrunk(ctx context.Context, root, storePath, def, now string) (*heavy.Hea
 }
 
 // whyLanes answers the lanes `why --lanes` offers. A bare count is the loop's own --lanes
-// spelling and means the loop's lanes: lane-1..lane-N and the configured express lanes. It
-// was once read as one lane named "16", and every schedulable item past the first was then
-// reported no-lane behind that lane, which no loop offers.
-func whyLanes(arg string, express int64) *[]string {
+// spelling and means the loop's ordinary running-agent slots: lane-1..lane-N. Express work
+// takes its own item directory outside the limit, so [lanes] express reserves no pool slot.
+func whyLanes(arg string, _ int64) *[]string {
 	if n, err := strconv.Atoi(strings.TrimSpace(arg)); err == nil && n > 0 {
-		lanes := append(laneIDs(n), expressLaneIDs(express)...)
+		lanes := laneIDs(n)
 		return &lanes
 	}
 	lanes := strings.Split(arg, ",")
