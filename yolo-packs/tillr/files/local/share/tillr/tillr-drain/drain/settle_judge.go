@@ -227,6 +227,7 @@ func (l *Loop) claimSettledCandidateJudge(ctx context.Context, d Decision, timin
 			StorePath:           l.cfg.Store,
 			Now:                 now.Format(time.RFC3339Nano),
 			AvailableLanes:      &available,
+			ItemWorktrees:       l.cfg.ItemWorktrees,
 			ownExaminationLane:  d.LaneID,
 			ownExaminationRunID: d.RunRequest.RunID,
 		}

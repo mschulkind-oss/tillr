@@ -414,6 +414,10 @@ type LoopConfig struct {
 	LaneRoot string
 	// Lanes is the lane ids the loop may dispatch onto, in the order a tick prefers them.
 	Lanes []string
+	// ItemWorktrees plans dispatches into item-owned directories (<LaneRoot>/<item-id>)
+	// instead of pool lanes. Off by default; pool lanes in Lanes still supply the
+	// running-agent limit count.
+	ItemWorktrees bool
 	// BackoffBase is the wait before the next attempt after the first consecutive
 	// infrastructure failure; each further one doubles it up to BackoffCap. 0 is
 	// DefaultBackoffBase. It is a wait, never a stop: the ruling's answer to a repeated

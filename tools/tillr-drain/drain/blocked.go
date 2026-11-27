@@ -46,7 +46,7 @@ func (p *planner) conflictDecision(row itemRow, c item.Conflict) Decision {
 	case c.WaitingOn == "owner" && p.tick.ownerMigration:
 		// This is a real command run, not a fabricated terminal record or an
 		// ungated store repair. Its report travels through the same settlement.
-		if lane, ok := p.freeLane(row.Express); ok {
+		if lane, ok := p.freeLaneForItem(row.ItemID, row.Express); ok {
 			p.assignLane(lane)
 			d.Action, d.From, d.To, d.LaneID = ActionDispatch, "queued", "running", lane
 
@@ -101,8 +101,16 @@ func (p *planner) conflictDecision(row itemRow, c item.Conflict) Decision {
 				}
 			}
 		}
+		slotOpen := true
+		if p.tick.ItemWorktrees {
+			slotOpen = p.ordinaryAgentSlotOpen(row.Express, false, "")
+		}
 		hold := func() {
 			d.Reason = ReasonNoLane
+			if p.tick.ItemWorktrees && !slotOpen && p.runningAgentLimit > 0 {
+				d.Reason = ReasonAgentLimit
+				d.DeferredBy = activeOrdinaryAgentSummary(p.activeOrdinaryAgents)
+			}
 			if interrupted {
 				d.Reason, d.DeferredBy = ReasonConflictDesign, c.DesignRunID
 			}
@@ -114,14 +122,14 @@ func (p *planner) conflictDecision(row itemRow, c item.Conflict) Decision {
 		lane, ok := "", false
 		if origin != nil {
 			lane = origin.Decision.LaneID
-			ok = !p.tick.OutLanes[lane] && (row.Express || !isExpressLane(lane)) && p.retainedLaneFreeFor(lane, row.ItemID)
+			ok = slotOpen && !p.tick.OutLanes[lane] && (row.Express || !isExpressLane(lane)) && p.retainedLaneFreeFor(lane, row.ItemID)
 			// A killed run can resume only on its old lane. If that lane is
 			// unavailable, another eligible lane can start a fresh design session.
-			if !ok && (isExpressLane(lane) || interrupted) {
-				lane, ok = p.freeLane(row.Express)
+			if !ok && slotOpen && (isExpressLane(lane) || interrupted) {
+				lane, ok = p.freeLaneForItem(row.ItemID, row.Express)
 			}
-		} else {
-			lane, ok = p.freeLane(row.Express)
+		} else if slotOpen {
+			lane, ok = p.freeLaneForItem(row.ItemID, row.Express)
 		}
 		if ok {
 			p.assignLane(lane)
@@ -131,6 +139,9 @@ func (p *planner) conflictDecision(row itemRow, c item.Conflict) Decision {
 			d.BlockConflict = &c
 			d.RunRequest = p.request(row.ItemID, lane, backend)
 			stampDecisionRequest(d, d.RunRequest)
+			if p.tick.ItemWorktrees {
+				p.claimOrdinaryAgentSlot(row.Express, false, lane, d.RunRequest.RunID)
+			}
 		} else {
 			hold()
 		}

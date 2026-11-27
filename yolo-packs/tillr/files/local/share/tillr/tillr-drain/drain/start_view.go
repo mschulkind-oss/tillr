@@ -42,6 +42,8 @@ type startSnapshot struct {
 	storeRuns            map[string]string
 	activeOrdinaryAgents map[string]string // active ordinary agent run key -> lane_id
 	rotation             []string
+	itemWorktrees        bool
+	outLanes             map[string]bool
 
 	entries                         map[string]startViewEntry
 	holds, reservations             map[string]string

@@ -30,7 +30,7 @@ func (l *Loop) startViewPass() Pass {
 	syncRoadmaps := l.syncRoadmapsSettings()
 	proseRewrite := l.proseRewriteSettings()
 	tick := Pass{Comments: l.commentsSettings(), WorkflowDefaults: l.workflowDefaultsSettings(), SyncRoadmaps: &syncRoadmaps, ProseRewrite: &proseRewrite,
-		Build: &build, AvailableLanes: &available, StorePath: l.cfg.Store,
+		Build: &build, AvailableLanes: &available, ItemWorktrees: l.cfg.ItemWorktrees, StorePath: l.cfg.Store,
 		ownerMigration: l.ownerMigrationItem != "", examineItem: l.ownerMigrationItem}
 	if stager, ok := l.cfg.Stage.(*LaneStager); ok {
 		template := stager.Template
@@ -55,6 +55,44 @@ func shadowRotation(r *store.Reader, tick *Pass) (map[string]laneRefusal, error)
 	out := make(map[string]bool, len(tick.OutLanes))
 	maps.Copy(out, tick.OutLanes)
 	tick.OutLanes = out
+	if tick.ItemWorktrees {
+		rows, err := r.Query(`SELECT e.object_id, e.kind, e.payload
+			FROM events e
+			WHERE e.object_type = 'lane' AND e.kind IN (?, ?)
+			  AND e.seq = (SELECT MAX(e2.seq) FROM events e2 WHERE e2.object_type = 'lane' AND e2.object_id = e.object_id AND e2.kind IN (?, ?))`,
+			laneRefusedKind, laneRestoredKind, laneRefusedKind, laneRestoredKind)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		refusedSet := map[string]bool{}
+		for rows.Next() {
+			var lane, kind string
+			var payload []byte
+			if err := rows.Scan(&lane, &kind, &payload); err != nil {
+				return nil, err
+			}
+			if kind == laneRefusedKind {
+				var refusal laneRefusal
+				if err := json.Unmarshal(payload, &refusal); err != nil {
+					return nil, err
+				}
+				tick.OutLanes[lane] = true
+				refused[lane] = refusal
+				refusedSet[lane] = true
+			}
+		}
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+		for _, lane := range *tick.AvailableLanes {
+			if !refusedSet[lane] {
+				lanes = append(lanes, lane)
+			}
+		}
+		tick.AvailableLanes = &lanes
+		return refused, nil
+	}
 	for _, lane := range *tick.AvailableLanes {
 		var kind string
 		var payload []byte
@@ -286,6 +324,8 @@ func (s startSnapshot) heldLanes() map[string]bool {
 func (s *startSnapshot) updateFreeLanes(tick Pass, previous startSnapshot, at time.Time) {
 	s.occupied = s.heldLanes()
 	s.rotation = *tick.AvailableLanes
+	s.itemWorktrees = tick.ItemWorktrees
+	s.outLanes = maps.Clone(tick.OutLanes)
 	s.laneFreeAt = map[string]time.Time{}
 	s.freeLanes = nil
 	for _, lane := range *tick.AvailableLanes {
@@ -326,6 +366,8 @@ func (s *startSnapshot) evaluateEntry(r *store.Reader, row itemRow, d Decision, 
 		s.readyAt[row.ItemID] = since(previous.readyAt[row.ItemID], at)
 		if d.DeskDocument != "" {
 			s.laneFreeAt[d.LaneID] = since(previous.laneFreeAt[d.LaneID], at)
+		} else if s.itemWorktrees && d.LaneID == "" && !s.occupied[row.ItemID] && !s.outLanes[row.ItemID] {
+			s.laneFreeAt[row.ItemID] = since(previous.laneFreeAt[row.ItemID], at)
 		}
 	} else {
 		reason := d.Reason
@@ -360,11 +402,13 @@ func (s startSnapshot) selectStart(freshOnly bool, gates int) (startViewEntry, b
 		if !express {
 			activeCount++
 		}
-		if lane := s.firstFreeLaneExcept(express, claimed); lane != "" {
-			if claimed == nil {
-				claimed = map[string]bool{}
+		if !s.itemWorktrees {
+			if lane := s.firstFreeLaneExcept(express, claimed); lane != "" {
+				if claimed == nil {
+					claimed = map[string]bool{}
+				}
+				claimed[lane] = true
 			}
-			claimed[lane] = true
 		}
 	}
 	var itemOrder map[string]int
@@ -388,15 +432,20 @@ func (s startSnapshot) selectStart(freshOnly bool, gates int) (startViewEntry, b
 					}
 					alreadyActive := runKey != "" && s.activeOrdinaryAgents[runKey] != ""
 					if e.express || isCommand || alreadyActive || activeCount < limit {
-						lane := s.firstFreeLaneExcept(e.express, claimed)
-						if lane == "" && d.Action == ActionJudge {
-							if itemOrder == nil {
-								itemOrder = make(map[string]int, len(s.items))
-								for i, item := range s.items {
-									itemOrder[item.id] = i
+						var lane string
+						if s.itemWorktrees {
+							lane = s.firstFreeItemLane(q.id, claimed)
+						} else {
+							lane = s.firstFreeLaneExcept(e.express, claimed)
+							if lane == "" && d.Action == ActionJudge {
+								if itemOrder == nil {
+									itemOrder = make(map[string]int, len(s.items))
+									for i, item := range s.items {
+										itemOrder[item.id] = i
+									}
 								}
+								lane = s.firstFreeLaneOverLaterReservation(e.express, claimed, itemOrder, idx)
 							}
-							lane = s.firstFreeLaneOverLaterReservation(e.express, claimed, itemOrder, idx)
 						}
 						if lane != "" {
 							if claimed == nil {
@@ -425,7 +474,11 @@ func (s startSnapshot) selectStart(freshOnly bool, gates int) (startViewEntry, b
 		lane := d.LaneID // concrete lanes include desks and retained continuations
 		if lane == "" {
 			if slotOpen {
-				lane = s.firstFreeLaneExcept(e.express, claimed)
+				if s.itemWorktrees {
+					lane = s.firstFreeItemLane(q.id, claimed)
+				} else {
+					lane = s.firstFreeLaneExcept(e.express, claimed)
+				}
 			}
 			if lane == "" && (IsTrunkFixer(q.id) || IsRemoteSyncItem(q.id)) && !s.occupied["desk-trunk-fixer"] {
 				lane = "desk-trunk-fixer"
@@ -445,6 +498,16 @@ func (s startSnapshot) selectStart(freshOnly bool, gates int) (startViewEntry, b
 		}
 	}
 	return startViewEntry{}, false
+}
+
+func (s startSnapshot) firstFreeItemLane(itemID string, claimed map[string]bool) string {
+	if itemID == "" || s.occupied[itemID] || claimed[itemID] || s.outLanes[itemID] {
+		return ""
+	}
+	if owner := s.reservations[itemID]; owner != "" && owner != itemID {
+		return ""
+	}
+	return itemID
 }
 
 func (s startSnapshot) firstFreeLane(express bool) string {
@@ -468,6 +531,9 @@ func (s startSnapshot) firstFreeLaneExcept(express bool, claimed map[string]bool
 }
 
 func (s startSnapshot) firstFreeLaneOverLaterReservation(express bool, claimed map[string]bool, itemOrder map[string]int, before int) string {
+	if s.itemWorktrees {
+		return ""
+	}
 	takes := func(lane string) bool {
 		if claimed[lane] {
 			return false

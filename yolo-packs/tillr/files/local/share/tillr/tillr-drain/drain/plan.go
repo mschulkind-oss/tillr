@@ -84,6 +84,10 @@ type Pass struct {
 	runFaces       map[string]bool
 	Now            string    `json:"now"`
 	AvailableLanes *[]string `json:"available_lanes"`
+	// ItemWorktrees plans dispatches into item-owned directories (<lane-root>/<item-id>)
+	// instead of pool lanes. Off by default; AvailableLanes still supplies the
+	// running-agent limit count.
+	ItemWorktrees bool `json:"item_worktrees,omitempty"`
 	// OutLanes are the lanes a staging refusal took out of rotation. A node waiting to
 	// start on one is planned onto a free lane.
 	OutLanes      map[string]bool `json:"-"`
@@ -845,6 +849,20 @@ func (p *planner) reserveDrainingWork(r *store.Reader, items []itemRow, edges ma
 		if row.State == p.rules().Ready && p.dependencyBlocked(edges[row.ItemID]) && d.Action == ActionJudge {
 			continue
 		}
+		if p.tick.ItemWorktrees && lane == row.ItemID {
+			if row.Express || len(p.activeOrdinaryAgents) < p.runningAgentLimit {
+				if p.captureStart == nil {
+					p.pausedReserved[row.ItemID] = lane
+					if !row.Express {
+						p.claimOrdinaryAgentSlot(false, false, lane, "paused:"+row.ItemID)
+					}
+				}
+				reservedSlots = append(reservedSlots, row.Express)
+			} else {
+				p.pausedBlocked[row.ItemID] = true
+			}
+			continue
+		}
 		if p.offersLane(lane) {
 			continue
 		}
@@ -1033,7 +1051,7 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 				limitFull := !slotOpen && p.runningAgentLimit > 0
 				ok := slotOpen
 				if ok {
-					lane, ok = p.freeLane(item.Express)
+					lane, ok = p.freeLaneForItem(item.ItemID, item.Express)
 					if !ok && decision.Action == ActionJudge {
 						if itemOrder == nil {
 							itemOrder = make(map[string]int, len(items))
@@ -1730,7 +1748,7 @@ func (p *planner) decide(item itemRow, edges []itemEdge) Decision {
 		var lane string
 		var ok bool
 		if slotOpen {
-			lane, ok = p.freeLane(item.Express)
+			lane, ok = p.freeLaneForItem(item.ItemID, item.Express)
 		}
 		ownJudgeLane := p.returnedJudgeLane(item.ItemID, returned)
 		if ownJudgeLane != "" && (item.Express || !isExpressLane(ownJudgeLane)) {
@@ -2337,6 +2355,12 @@ func indexPriorRuns(priors map[string][]priorRun) (map[string]AttemptClass, map[
 // free when the store does not hold it under a lease that is still live and this tick has
 // not already assigned it.
 func (p *planner) offersLane(id string) bool {
+	if p.tick.ItemWorktrees && id != "" && !isPoolLaneName(id) && !p.tick.OutLanes[id] {
+		return true
+	}
+	if p.tick.AvailableLanes == nil {
+		return false
+	}
 	for _, lane := range *p.tick.AvailableLanes {
 		if lane == id {
 			return true
@@ -2368,7 +2392,11 @@ func (p *planner) ordinaryAgentSlotOpen(express, isCommand bool, runKey string) 
 	if runKey != "" && p.activeOrdinaryAgents[runKey] != "" {
 		return true
 	}
-	if len(p.activeOrdinaryAgents) < p.runningAgentLimit {
+	limit := p.runningAgentLimit
+	if p.tick.ItemWorktrees && limit == 0 && p.tick.AvailableLanes != nil {
+		limit = ordinaryLaneCount(*p.tick.AvailableLanes)
+	}
+	if len(p.activeOrdinaryAgents) < limit {
 		return true
 	}
 	p.laneShort = true
@@ -2386,6 +2414,26 @@ func (p *planner) claimOrdinaryAgentSlot(express, isCommand bool, lane, runKey s
 		runKey = "planned:" + lane
 	}
 	p.activeOrdinaryAgents[runKey] = lane
+}
+
+func (p *planner) itemLane(itemID string) (string, bool) {
+	if p.captureStart != nil {
+		return "", true
+	}
+	if itemID == "" || p.assigned[itemID] || p.held[itemID] || p.tick.OutLanes[itemID] {
+		return "", false
+	}
+	if owner := p.workerLanes[itemID]; owner != "" && owner != itemID {
+		return "", false
+	}
+	return itemID, true
+}
+
+func (p *planner) freeLaneForItem(itemID string, express bool) (string, bool) {
+	if p.tick.ItemWorktrees {
+		return p.itemLane(itemID)
+	}
+	return p.freeLane(express)
 }
 
 func (p *planner) freeLane(express ...bool) (string, bool) {
@@ -2421,6 +2469,9 @@ func (p *planner) freeLane(express ...bool) (string, bool) {
 func (p *planner) freeLaneOverLaterReservation(express bool, itemOrder map[string]int, before int) (string, bool) {
 	if p.captureStart != nil {
 		return "", true
+	}
+	if p.tick.ItemWorktrees {
+		return "", false
 	}
 	takes := func(lane string) bool {
 		if p.assigned[lane] || p.held[lane] {
