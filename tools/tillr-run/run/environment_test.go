@@ -149,3 +149,113 @@ func assertScratchArtifact(t *testing.T, refs []run.ArtifactRef, want string) {
 	}
 	t.Errorf("run artifacts %v do not name scratch directory %q", refs, want)
 }
+
+func TestExecAccessPropagation(t *testing.T) {
+	tests := []struct {
+		name         string
+		stagedAccess string
+		reqAccess    string
+		group        string
+		seat         string
+		wantAccess   string
+	}{
+		{
+			name:       "default is write",
+			wantAccess: run.AccessWrite,
+		},
+		{
+			name:         "staged read_only file propagates TILLR_ACCESS",
+			stagedAccess: run.AccessReadOnly,
+			seat:         "plan",
+			wantAccess:   run.AccessReadOnly,
+		},
+		{
+			name:         "staged write file propagates TILLR_ACCESS",
+			stagedAccess: run.AccessWrite,
+			seat:         "build",
+			wantAccess:   run.AccessWrite,
+		},
+		{
+			name:       "read_only_group implies read_only",
+			group:      "group-scout",
+			seat:       "scout",
+			wantAccess: run.AccessReadOnly,
+		},
+		{
+			name:       "explicit request access overrides default",
+			reqAccess:  run.AccessReadOnly,
+			seat:       "review",
+			wantAccess: run.AccessReadOnly,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			dir := scratch(t)
+			s, err := store.InitFixture(ctx, filepath.Join(dir, "fixture.sqlite3"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+
+			t.Setenv("TILLR_ACCESS", "stale-parent-access")
+			t.Setenv("TILLR_SEAT", "stale-parent-seat")
+			t.Setenv("TILLR_OUTPUTS_DIR", "/stale/outputs")
+
+			laneRoot := filepath.Join(dir, "lanes")
+			req := run.Request{
+				RunID:         "run-access",
+				ItemID:        "item-access",
+				NodeID:        "node-access",
+				LaneID:        "lane-access",
+				Backend:       "native",
+				WorkingDir:    "worktree",
+				ReadOnlyGroup: tc.group,
+				Seat:          tc.seat,
+				Access:        tc.reqAccess,
+				Command:       []string{"/bin/sh", "-c", "env"},
+			}
+			artifactDir := filepath.Join(laneRoot, req.LaneID)
+			if tc.group != "" {
+				artifactDir = run.NodeDir(artifactDir, req.RunID)
+			}
+			if tc.stagedAccess != "" {
+				if err := os.MkdirAll(artifactDir, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(artifactDir, run.AccessFile), []byte(tc.stagedAccess+"\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			if _, err := run.Exec(ctx, s, req, run.ExecOptions{LaneRoot: laneRoot, Now: time.Now()}); err != nil {
+				t.Fatal(err)
+			}
+			body, err := os.ReadFile(filepath.Join(artifactDir, req.RunID+".log"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			env := map[string]string{}
+			for _, line := range strings.Split(string(body), "\n") {
+				if k, v, ok := strings.Cut(line, "="); ok {
+					env[k] = v
+				}
+			}
+			if env["TILLR_ACCESS"] != tc.wantAccess {
+				t.Errorf("TILLR_ACCESS = %q, want %q", env["TILLR_ACCESS"], tc.wantAccess)
+			}
+			if tc.seat == "" {
+				if v, exists := env["TILLR_SEAT"]; exists {
+					t.Errorf("TILLR_SEAT leaked parent value %q", v)
+				}
+			} else if env["TILLR_SEAT"] != tc.seat {
+				t.Errorf("TILLR_SEAT = %q, want %q", env["TILLR_SEAT"], tc.seat)
+			}
+			wantOutputs := filepath.Join(filepath.Dir(laneRoot), "loop", req.RunID, "artifacts")
+			if env["TILLR_OUTPUTS_DIR"] != wantOutputs {
+				t.Errorf("TILLR_OUTPUTS_DIR = %q, want %q", env["TILLR_OUTPUTS_DIR"], wantOutputs)
+			}
+		})
+	}
+}

@@ -42,6 +42,7 @@ type Request struct {
 	// NodeID optionally identifies the node whose program this run executes.
 	NodeID     string   `json:"node_id,omitempty"`
 	Seat       string   `json:"seat,omitempty"`
+	Access     string   `json:"access,omitempty"`
 	Workflow   string   `json:"workflow,omitempty"`
 	Node       string   `json:"node,omitempty"`
 	LaneID     string   `json:"lane_id"`
@@ -161,6 +162,36 @@ func ReadSessionID(laneDir string) (string, error) {
 // hands the value to a harness flag that keys a session by it, so a truncated write or a
 // shell word is refused rather than passed on.
 func IsSessionID(s string) bool { return sessionIDShape.MatchString(s) }
+
+// AccessFile is the staged metadata file recording whether a run has "read_only" or "write"
+// access to its target worktree. Drain writes it at staging and Exec reads it to export
+// TILLR_ACCESS for single-node and parallel stages alike.
+const (
+	AccessFile     = "access"
+	AccessReadOnly = "read_only"
+	AccessWrite    = "write"
+)
+
+// ReadAccess returns the staged access mode ("read_only" or "write") from dir, or "" if
+// the file is absent or empty.
+func ReadAccess(dir string) (string, error) {
+	path := filepath.Join(dir, AccessFile)
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", Externalf("reading access mode at %s: %v", path, err)
+	}
+	mode := strings.TrimSpace(string(raw))
+	if mode == "" {
+		return "", nil
+	}
+	if mode != AccessReadOnly && mode != AccessWrite {
+		return "", Externalf("%s holds %q, which is not a valid access mode (want %q or %q)", path, mode, AccessReadOnly, AccessWrite)
+	}
+	return mode, nil
+}
 
 // openRunLog opens the run's log: truncated for a fresh run, appended to for a resume. A
 // resume that truncated would delete the killed segment's transcript, which is the evidence
@@ -390,7 +421,7 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 	if completes, err := s.Completes(ctx); err == nil && completes != "landing" {
 		nonLanding = true
 	}
-	for _, key := range []string{"TILLR_RUN_ID", "TILLR_ITEM_ID", "TILLR_NODE_ID", "TILLR_LANE_ID", "TILLR_SESSION_MODE", "TILLR_RESUME_PROMPT_FILE", "TILLR_PAUSE_REQUEST", "TILLR_PROGRESS_FILE", "TILLR_CHILD_SESSIONS_ROOT", "TILLR_CHILD_SESSIONS_MARKER", "TILLR_READ_ONLY_GROUP", "TILLR_PI_BUILDS_DIR", "TILLR_HARNESS_RECORD_FILE", "TILLR_RUN_EXEC_ID", "TILLR_NON_LANDING"} {
+	for _, key := range []string{"TILLR_RUN_ID", "TILLR_ITEM_ID", "TILLR_NODE_ID", "TILLR_LANE_ID", "TILLR_SESSION_MODE", "TILLR_RESUME_PROMPT_FILE", "TILLR_PAUSE_REQUEST", "TILLR_PROGRESS_FILE", "TILLR_CHILD_SESSIONS_ROOT", "TILLR_CHILD_SESSIONS_MARKER", "TILLR_READ_ONLY_GROUP", "TILLR_ACCESS", "TILLR_SEAT", "TILLR_OUTPUTS_DIR", "TILLR_PI_BUILDS_DIR", "TILLR_HARNESS_RECORD_FILE", "TILLR_RUN_EXEC_ID", "TILLR_NON_LANDING"} {
 		env = withoutEnv(env, key)
 	}
 	if nonLanding {
@@ -426,6 +457,34 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 	// has committed (backends/pi/keep-going.ts) leaves a reader to end when it is done.
 	if req.ReadOnlyGroup != "" {
 		env = append(env, "TILLR_READ_ONLY_GROUP="+req.ReadOnlyGroup)
+	}
+	access := strings.TrimSpace(req.Access)
+	if access != "" && access != AccessReadOnly && access != AccessWrite {
+		logFile.Close()
+		return record.Envelope{}, Usagef("run %q has invalid access %q: want %q or %q", req.RunID, access, AccessReadOnly, AccessWrite)
+	}
+	if access == "" {
+		if req.ReadOnlyGroup != "" || req.Seat == triageSeatName {
+			access = AccessReadOnly
+		} else {
+			stagedAccess, err := ReadAccess(artifactDir)
+			if err != nil {
+				logFile.Close()
+				return record.Envelope{}, err
+			}
+			if stagedAccess != "" {
+				access = stagedAccess
+			} else {
+				access = AccessWrite
+			}
+		}
+	}
+	env = append(env, "TILLR_ACCESS="+access)
+	if req.Seat != "" {
+		env = append(env, "TILLR_SEAT="+req.Seat)
+	}
+	if req.RunID != "" {
+		env = append(env, "TILLR_OUTPUTS_DIR="+filepath.Join(filepath.Dir(root), "loop", req.RunID, "artifacts"))
 	}
 	if os.Getenv("TILLR_RUN_BIN") == "" {
 		if exe, err := os.Executable(); err == nil && exe != "" {

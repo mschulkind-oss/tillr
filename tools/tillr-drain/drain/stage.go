@@ -37,6 +37,8 @@ const (
 	BriefFile = "brief.md"
 	// FenceFile is the run's fence, one repo-relative prefix per line.
 	FenceFile = "fence.txt"
+	// AccessFile records whether the staged run has "read_only" or "write" worktree access.
+	AccessFile = run.AccessFile
 	// BaseSHAFile is the sha the run was staged from, pinned before launch.
 	BaseSHAFile = "base_sha"
 	// ItemBaseSHAFile and ItemFenceFile retain the whole-item boundary while
@@ -712,9 +714,16 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 		name string
 		body string
 	}
+	stagedAccess := run.AccessWrite
+	if spec.Node != nil && spec.Node.Access != "" {
+		stagedAccess = spec.Node.Access
+	} else if stagedSeat(recorded, spec) == "triage" {
+		stagedAccess = run.AccessReadOnly
+	}
 	files := []stagedFile{
 		{BriefFile, brief},
 		{FenceFile, fence},
+		{AccessFile, stagedAccess + "\n"},
 		{BaseSHAFile, baseSHA + "\n"},
 		{ItemBaseSHAFile, itemBaseSHA + "\n"},
 		{ItemFenceFile, fenceText(itemAllowed)},

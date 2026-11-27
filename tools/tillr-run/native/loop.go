@@ -527,7 +527,17 @@ func RunCLI(args []string, stdout, stderr io.Writer) int {
 			return ExitRefused
 		}
 	}
-	_ = *target
+	workDir := strings.TrimSpace(*target)
+	if workDir == "" {
+		if wd, err := os.Getwd(); err == nil {
+			workDir = wd
+		}
+	}
+	if workDir != "" {
+		if abs, err := filepath.Abs(workDir); err == nil {
+			workDir = abs
+		}
+	}
 
 	briefAbs, err := filepath.Abs(*brief)
 	if err != nil {
@@ -558,6 +568,19 @@ func RunCLI(args []string, stdout, stderr io.Writer) int {
 		return ExitRefused
 	}
 
+	seat := strings.TrimSpace(os.Getenv("TILLR_SEAT"))
+	access := strings.TrimSpace(os.Getenv("TILLR_ACCESS"))
+	readOnly := access == "read_only" || strings.TrimSpace(os.Getenv("TILLR_READ_ONLY_GROUP")) != "" || seat == "triage"
+	toolset := NewToolset(FencePolicy{
+		WorkDir:      workDir,
+		ArtifactDir:  artifactDir,
+		ArtifactsDir: strings.TrimSpace(os.Getenv("TILLR_OUTPUTS_DIR")),
+		DurableDir:   strings.TrimSpace(os.Getenv("YOLO_DURABLE_DIR")),
+		ProgressFile: strings.TrimSpace(os.Getenv("TILLR_PROGRESS_FILE")),
+		ReadOnly:     readOnly,
+		PlanQuickWay: readOnly && seat == "plan",
+	})
+
 	cfg := Config{
 		Backend:           *backend,
 		Model:             *model,
@@ -571,5 +594,5 @@ func RunCLI(args []string, stdout, stderr io.Writer) int {
 		PauseRequestPath:  os.Getenv("TILLR_PAUSE_REQUEST"),
 		HarnessRecordPath: os.Getenv("TILLR_HARNESS_RECORD_FILE"),
 	}
-	return Run(context.Background(), cfg, provider, nil, stdout)
+	return Run(context.Background(), cfg, provider, toolset, stdout)
 }

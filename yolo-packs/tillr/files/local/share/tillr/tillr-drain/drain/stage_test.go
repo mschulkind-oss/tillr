@@ -692,3 +692,41 @@ func TestTheBriefStatesTheWallOrNone(t *testing.T) {
 		t.Fatalf("an unbounded brief prints a unit after the word none:\n%s", brief)
 	}
 }
+
+func TestStagingWritesAccessMode(t *testing.T) {
+	ctx := context.Background()
+	f := newStageFixture(t, fencedItemRecord("item_041", "in-queue", "tools/tillr-drain"))
+	stager := f.stager()
+
+	// Default (no workflow node) stages write access.
+	writeSpec := f.spec("lane-1")
+	if err := stager.Stage(ctx, writeSpec); err != nil {
+		t.Fatalf("staging default write run failed: %v", err)
+	}
+	laneDir := filepath.Join(f.laneRoot, "lane-1")
+	if got := strings.TrimSpace(readAll(t, filepath.Join(laneDir, drain.AccessFile))); got != "write" {
+		t.Fatalf("default staged access = %q, want %q", got, "write")
+	}
+	if got := strings.TrimSpace(readAll(t, filepath.Join(drain.RunDir(f.root, writeSpec.RunID), drain.AccessFile))); got != "write" {
+		t.Fatalf("run dir default staged access = %q, want %q", got, "write")
+	}
+
+	// Single-node read_only stage (for example plan or review) stages read_only access.
+	roSpec := f.spec("lane-1")
+	roSpec.RunID = writeSpec.RunID + "-ro"
+	roSpec.Node = &drain.WorkflowStage{
+		ID:     "plan",
+		Kind:   "agent",
+		Seat:   "plan",
+		Access: "read_only",
+	}
+	if err := stager.Stage(ctx, roSpec); err != nil {
+		t.Fatalf("staging read_only node failed: %v", err)
+	}
+	if got := strings.TrimSpace(readAll(t, filepath.Join(laneDir, drain.AccessFile))); got != "read_only" {
+		t.Fatalf("read_only staged access = %q, want %q", got, "read_only")
+	}
+	if got := strings.TrimSpace(readAll(t, filepath.Join(drain.RunDir(f.root, roSpec.RunID), drain.AccessFile))); got != "read_only" {
+		t.Fatalf("run dir read_only staged access = %q, want %q", got, "read_only")
+	}
+}
