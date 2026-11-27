@@ -503,6 +503,9 @@ func (l *Loop) definitionChanged(ctx context.Context, c Candidate, ref string) (
 	if filepath.IsAbs(file) || strings.HasPrefix(filepath.Clean(file), "..") {
 		return false, Usagef("item block %s is not repository-relative", ref)
 	}
+	if mirror, err := l.mirroredDesign(ctx, c, ref); err != nil || mirror {
+		return false, err
+	}
 	bodies, raws := []string{}, []string{}
 	for _, sha := range []string{c.BaseSHA, c.HeadSHA} {
 		// A deleted/new blob is an explicit input; other git failures are errors.
@@ -552,6 +555,24 @@ func (l *Loop) definitionChanged(ctx context.Context, c Candidate, ref string) (
 		}
 	}
 	return true, nil
+}
+
+// mirroredDesign reports whether ref is a mirrored design item's whole design document:
+// an item-design-<slug> row that `tillr item sync` made for a roadmap-linked design, whose
+// body_ref names the document with no anchor while the base holds no item block for it.
+// That document is the item's work product, not a definition the worker was handed, so
+// editing it is the work itself. On 2026-11-27 the fence refused every such candidate as
+// a worker editing its own item block, and no mirrored design item could land.
+func (l *Loop) mirroredDesign(ctx context.Context, c Candidate, ref string) (bool, error) {
+	file, anchor, _ := strings.Cut(ref, "#")
+	if anchor != "" || !strings.HasPrefix(c.ItemID, "item-design-") {
+		return false, nil
+	}
+	raw, err := l.fileAt(ctx, c.Worktree, c.BaseSHA, file)
+	if err != nil {
+		return false, err
+	}
+	return !item.DefinitionBlockExists(file, c.ItemID, []byte(raw)), nil
 }
 
 // priorConflictRunID returns the run_id of itemID's most recent refusal when that refusal
