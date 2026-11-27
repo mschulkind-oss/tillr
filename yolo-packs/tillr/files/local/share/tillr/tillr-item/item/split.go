@@ -15,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/mschulkind-oss/tillr/definition"
+	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -43,7 +44,266 @@ type SplitCoverage struct {
 	ClosingCheck bool   `json:"closing_check,omitempty"`
 }
 
-const SplitWaitSource = "split"
+const (
+	SplitWaitSource = "split"
+	SplitGapKind    = "item.split-gap"
+)
+
+// SplitSibling describes a sibling part in a filed split statement.
+type SplitSibling struct {
+	Label    string `json:"label"`
+	ItemID   string `json:"item_id"`
+	Title    string `json:"title"`
+	Share    string `json:"share"`
+	Required bool   `json:"required"`
+	State    string `json:"state"`
+}
+
+// SplitPartInfo describes a split part's parent, own part definition, and sibling parts.
+type SplitPartInfo struct {
+	ParentID string                  `json:"parent_id"`
+	Part     SplitPart               `json:"part"`
+	Siblings map[string]SplitSibling `json:"siblings"`
+}
+
+// SplitPartContext returns split context when itemID is a filed split part, or nil, nil otherwise.
+func SplitPartContext(r *store.Reader, itemID string) (*SplitPartInfo, error) {
+	if !strings.HasPrefix(itemID, "item-part-") {
+		return nil, nil
+	}
+	rows, err := r.Query(`SELECT parent_id, statement FROM item_splits ORDER BY parent_id`)
+	if err != nil {
+		return nil, err
+	}
+	type splitRow struct {
+		parentID string
+		raw      []byte
+	}
+	var splits []splitRow
+	for rows.Next() {
+		var row splitRow
+		if err := rows.Scan(&row.parentID, &row.raw); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		splits = append(splits, row)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+
+	for _, row := range splits {
+		var statement SplitStatement
+		if err := json.Unmarshal(row.raw, &statement); err != nil {
+			return nil, err
+		}
+		for _, p := range statement.Parts {
+			if "item-part-"+splitKey(row.parentID, p.Label) != itemID {
+				continue
+			}
+			siblings := make(map[string]SplitSibling, len(statement.Parts)-1)
+			for _, sib := range statement.Parts {
+				if sib.Label == p.Label {
+					continue
+				}
+				sibID := "item-part-" + splitKey(row.parentID, sib.Label)
+				var state string
+				err := r.QueryRow(`SELECT state FROM items WHERE item_id=?`, sibID).Scan(&state)
+				if err != nil && !errors.Is(err, sql.ErrNoRows) {
+					return nil, err
+				}
+				siblings[sib.Label] = SplitSibling{
+					Label:    sib.Label,
+					ItemID:   sibID,
+					Title:    sib.Title,
+					Share:    sib.Share,
+					Required: sib.Required != nil && *sib.Required,
+					State:    state,
+				}
+			}
+			return &SplitPartInfo{
+				ParentID: row.parentID,
+				Part:     p,
+				Siblings: siblings,
+			}, nil
+		}
+	}
+	return nil, nil
+}
+
+// SiblingGap is a gap in another case of the parent's request reported by a part's verifier.
+type SiblingGap struct {
+	Sibling  string   `json:"sibling"`
+	Case     string   `json:"case"`
+	Paths    []string `json:"paths"`
+	Evidence []string `json:"evidence"`
+}
+
+// SiblingGaps is the validated list of sibling gaps in a judge output.
+type SiblingGaps []SiblingGap
+
+func (g *SiblingGaps) UnmarshalJSON(raw []byte) error {
+	var entries []SiblingGap
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&entries); err != nil {
+		return fmt.Errorf("reading sibling_gaps: %w", err)
+	}
+	if len(entries) == 0 {
+		*g = nil
+		return nil
+	}
+	for i, entry := range entries {
+		if strings.TrimSpace(entry.Sibling) == "" {
+			return fmt.Errorf("sibling_gap %d: sibling must not be blank", i+1)
+		}
+		if strings.TrimSpace(entry.Case) == "" {
+			return fmt.Errorf("sibling_gap %d: case must not be blank", i+1)
+		}
+		if len(entry.Paths) == 0 {
+			return fmt.Errorf("sibling_gap %d: at least one path is required", i+1)
+		}
+		for _, locator := range entry.Paths {
+			if !validFindingLocator(locator) {
+				return fmt.Errorf("sibling_gap %d: %q is not a file:<repo-relative-path>[:line] locator", i+1, locator)
+			}
+		}
+		if len(entry.Evidence) == 0 {
+			return fmt.Errorf("sibling_gap %d: at least one evidence locator is required", i+1)
+		}
+		for _, ev := range entry.Evidence {
+			if strings.TrimSpace(ev) == "" || len(strings.Fields(ev)) != 1 {
+				return fmt.Errorf("sibling_gap %d: evidence must contain non-empty locators, not prose", i+1)
+			}
+		}
+	}
+	*g = entries
+	return nil
+}
+
+// RecordedSplitGap is a stored sibling gap recorded against a split parent and sibling part.
+type RecordedSplitGap struct {
+	GapID         string   `json:"gap_id"`
+	ParentID      string   `json:"parent_id"`
+	FromPartID    string   `json:"from_part_id"`
+	FromPartLabel string   `json:"from_part_label"`
+	SiblingID     string   `json:"sibling_id"`
+	SiblingLabel  string   `json:"sibling_label"`
+	Case          string   `json:"case"`
+	Paths         []string `json:"paths"`
+	Evidence      []string `json:"evidence"`
+	EvaluatedHead string   `json:"evaluated_head"`
+	Actor         string   `json:"actor"`
+	RecordedAt    int64    `json:"recorded_at"`
+}
+
+// RecordSplitGaps stores sibling gaps idempotently against the split parent and named siblings.
+func RecordSplitGaps(ctx context.Context, tx *store.Tx, fromPartID string, gaps []SiblingGap, head, actor string, at time.Time) error {
+	if len(gaps) == 0 {
+		return nil
+	}
+	info, err := SplitPartContext(tx.Reader(), fromPartID)
+	if err != nil {
+		return err
+	}
+	if info == nil {
+		return Rejectionf("sibling-gaps-not-part", fromPartID, "item %q is not a split part", fromPartID)
+	}
+	recordedAt := at.UTC().Unix()
+	for _, g := range gaps {
+		if g.Sibling == info.Part.Label {
+			return Rejectionf("sibling-gap-self", fromPartID, "sibling gap cannot target the part itself (%q)", g.Sibling)
+		}
+		sib, ok := info.Siblings[g.Sibling]
+		if !ok {
+			return Rejectionf("sibling-gap-unknown", fromPartID, "unknown sibling %q for split parent %s", g.Sibling, info.ParentID)
+		}
+		pathsJSON, err := json.Marshal(g.Paths)
+		if err != nil {
+			return err
+		}
+		evidenceJSON, err := json.Marshal(g.Evidence)
+		if err != nil {
+			return err
+		}
+		gapID := fmt.Sprintf("gap-%x", sha256.Sum256([]byte(
+			info.ParentID+"\x00"+fromPartID+"\x00"+sib.ItemID+"\x00"+head+"\x00"+g.Case+"\x00"+string(pathsJSON),
+		)))
+		res, err := tx.Exec(
+			`INSERT OR IGNORE INTO item_split_gaps(gap_id, parent_id, from_part_id, from_part_label, sibling_id, sibling_label, case_text, paths, evidence, evaluated_head, actor, recorded_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+			gapID, info.ParentID, fromPartID, info.Part.Label, sib.ItemID, sib.Label, g.Case, string(pathsJSON), string(evidenceJSON), head, actor, recordedAt,
+		)
+		if err != nil {
+			return err
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			continue
+		}
+		rec := RecordedSplitGap{
+			GapID:         gapID,
+			ParentID:      info.ParentID,
+			FromPartID:    fromPartID,
+			FromPartLabel: info.Part.Label,
+			SiblingID:     sib.ItemID,
+			SiblingLabel:  sib.Label,
+			Case:          g.Case,
+			Paths:         append([]string(nil), g.Paths...),
+			Evidence:      append([]string(nil), g.Evidence...),
+			EvaluatedHead: head,
+			Actor:         actor,
+			RecordedAt:    recordedAt,
+		}
+		body, err := json.Marshal(rec)
+		if err != nil {
+			return err
+		}
+		parentID := info.ParentID
+		if _, err := tx.Append(event.Event{Kind: SplitGapKind, ObjectType: "item", ObjectID: &parentID, Payload: body, At: at}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// SplitGapsForParent returns all recorded sibling gaps for a split parent, ordered by recorded_at, gap_id.
+func SplitGapsForParent(r *store.Reader, parentID string) ([]RecordedSplitGap, error) {
+	return querySplitGaps(r, `WHERE parent_id=?`, parentID)
+}
+
+// SplitGapsForSibling returns all recorded sibling gaps assigned to a sibling part, ordered by recorded_at, gap_id.
+func SplitGapsForSibling(r *store.Reader, siblingID string) ([]RecordedSplitGap, error) {
+	return querySplitGaps(r, `WHERE sibling_id=?`, siblingID)
+}
+
+func querySplitGaps(r *store.Reader, where, id string) ([]RecordedSplitGap, error) {
+	rows, err := r.Query(`SELECT gap_id, parent_id, from_part_id, from_part_label, sibling_id, sibling_label, case_text, paths, evidence, evaluated_head, actor, recorded_at FROM item_split_gaps `+where+` ORDER BY recorded_at, gap_id`, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []RecordedSplitGap
+	for rows.Next() {
+		var rec RecordedSplitGap
+		var pathsRaw, evidenceRaw string
+		if err := rows.Scan(&rec.GapID, &rec.ParentID, &rec.FromPartID, &rec.FromPartLabel, &rec.SiblingID, &rec.SiblingLabel, &rec.Case, &pathsRaw, &evidenceRaw, &rec.EvaluatedHead, &rec.Actor, &rec.RecordedAt); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal([]byte(pathsRaw), &rec.Paths); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal([]byte(evidenceRaw), &rec.Evidence); err != nil {
+			return nil, err
+		}
+		out = append(out, rec)
+	}
+	return out, rows.Err()
+}
 
 func splitKey(parent, label string) string {
 	return fmt.Sprintf("%x", sha256.Sum256([]byte(parent+"\x00"+label)))
@@ -442,6 +702,27 @@ func init() {
 	if err := store.RegisterDDL("item-splits", `CREATE TABLE IF NOT EXISTS item_splits (
 		parent_id TEXT PRIMARY KEY REFERENCES items(item_id), statement BLOB NOT NULL
 	)`); err != nil {
+		panic(err)
+	}
+	if err := store.RegisterDDL("item-split-gaps", `CREATE TABLE IF NOT EXISTS item_split_gaps (
+		gap_id TEXT PRIMARY KEY,
+		parent_id TEXT NOT NULL REFERENCES items(item_id),
+		from_part_id TEXT NOT NULL REFERENCES items(item_id),
+		from_part_label TEXT NOT NULL,
+		sibling_id TEXT NOT NULL REFERENCES items(item_id),
+		sibling_label TEXT NOT NULL,
+		case_text TEXT NOT NULL,
+		paths TEXT NOT NULL,
+		evidence TEXT NOT NULL,
+		evaluated_head TEXT NOT NULL,
+		actor TEXT NOT NULL,
+		recorded_at INTEGER NOT NULL
+	);
+	CREATE INDEX IF NOT EXISTS item_split_gaps_parent ON item_split_gaps(parent_id, recorded_at, gap_id);
+	CREATE INDEX IF NOT EXISTS item_split_gaps_sibling ON item_split_gaps(sibling_id, recorded_at, gap_id);`); err != nil {
+		panic(err)
+	}
+	if err := event.Register(SplitGapKind, Utility); err != nil {
 		panic(err)
 	}
 }

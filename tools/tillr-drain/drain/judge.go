@@ -1031,6 +1031,8 @@ func (l *Loop) stageJudge(ctx context.Context, c Candidate, receipt *JudgeReceip
 	}
 	var criteria strings.Builder
 	var history string
+	var splitInfo *item.SplitPartInfo
+	var recordedGaps []item.RecordedSplitGap
 	db, err := store.OpenRead(ctx, l.cfg.Store)
 	if err != nil {
 		return err
@@ -1052,6 +1054,14 @@ func (l *Loop) stageJudge(ctx context.Context, c Candidate, receipt *JudgeReceip
 			return err
 		}
 		history, err = judgeRefusalHistory(r, c.ItemID)
+		if err != nil {
+			return err
+		}
+		splitInfo, err = item.SplitPartContext(r, c.ItemID)
+		if err != nil {
+			return err
+		}
+		recordedGaps, err = item.SplitGapsForSibling(r, c.ItemID)
 		return err
 	})
 	db.Close()
@@ -1213,6 +1223,10 @@ Never change the worker's candidate.
 		}
 		brief += guidance
 	}
+	if splitInfo != nil {
+		brief += splitPartJudgeBrief(splitInfo)
+	}
+	brief += splitGapsBrief(recordedGaps)
 	// A filed request's criteria judge the work against its words, so the judge reads them
 	// too, in the same byte-counted suffix the worker's brief ends with.
 	words, err := requestWordsFor(ctx, l.cfg.Store, c.ItemID)
@@ -1241,6 +1255,65 @@ Never change the worker's candidate.
 	}
 	return os.WriteFile(filepath.Join(lane, SessionIDFile), []byte(session+"\n"), 0644)
 }
+
+func splitPartJudgeBrief(info *item.SplitPartInfo) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "\n## Split part verification\n\n")
+	fmt.Fprintf(&b, "- Parent item: %s\n", info.ParentID)
+	fmt.Fprintf(&b, "- This part: %s — %s\n", info.Part.Label, info.Part.Share)
+
+	sibLabels := make([]string, 0, len(info.Siblings))
+	for label := range info.Siblings {
+		sibLabels = append(sibLabels, label)
+	}
+	sort.Strings(sibLabels)
+
+	leftLabels := make([]string, 0, len(info.Part.Leaves))
+	for label := range info.Part.Leaves {
+		leftLabels = append(leftLabels, label)
+	}
+	sort.Strings(leftLabels)
+	if len(leftLabels) > 0 {
+		b.WriteString("\n### Cases left to siblings\n")
+		for _, label := range leftLabels {
+			sibID := info.Siblings[label].ItemID
+			fmt.Fprintf(&b, "- %s (%s): %s\n", label, sibID, info.Part.Leaves[label])
+		}
+	}
+
+	if len(sibLabels) > 0 {
+		b.WriteString("\n### Sibling parts\n")
+		for _, label := range sibLabels {
+			sib := info.Siblings[label]
+			fmt.Fprintf(&b, "- %s (%s, %s): %s\n", sib.Label, sib.ItemID, sib.Title, sib.Share)
+		}
+	}
+
+	b.WriteString(`
+### Rule P6: gaps vs. regressions
+Do not refuse this part for a case its words leave to a sibling or for another gap in the parent's request that this part does not handle.
+If you find such a gap in another case of the parent's request, record it in the top-level "sibling_gaps" array (omit "sibling_gaps" when none):
+  "sibling_gaps": [{"sibling": "<label>", "case": "<one sentence>", "paths": ["file:<path>"], "evidence": ["diff:candidate.diff"]}]
+and mark this part's criteria done if its own share is met.
+DO refuse (not-done) for any regression, unasked-change, missing test, or unmet part of this part's own share.
+`)
+	return b.String()
+}
+
+func splitGapsBrief(gaps []item.RecordedSplitGap) string {
+	if len(gaps) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("\n## Recorded gaps from sibling parts\n\n")
+	b.WriteString("Verify that each gap recorded by a sibling part is addressed:\n")
+	for _, g := range gaps {
+		fmt.Fprintf(&b, "- From part %s (%s): %s (paths: %s; evidence: %s)\n",
+			g.FromPartLabel, g.FromPartID, g.Case, strings.Join(g.Paths, ", "), strings.Join(g.Evidence, ", "))
+	}
+	return b.String()
+}
+
 func (l *Loop) restoreJudgeInputs(c Candidate, r *JudgeReceipt) error {
 	lane := l.laneDirPath(c.LaneID)
 	if err := os.WriteFile(filepath.Join(lane, BriefFile), r.WorkerBrief, 0644); err != nil {
@@ -1423,7 +1496,10 @@ func isJudgeFormRejection(err error) bool {
 		"verdict-value",
 		"verdict-reason",
 		"verdict-evidence",
-		"outcome-pass":
+		"outcome-pass",
+		"sibling-gaps-not-part",
+		"sibling-gap-self",
+		"sibling-gap-unknown":
 		return true
 	default:
 		return false

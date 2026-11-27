@@ -30,6 +30,7 @@ type JudgeOutput struct {
 	Verdicts            []JudgeEntry        `json:"verdicts"`
 	EarlierFindingFates EarlierFindingFates `json:"earlier_finding_fates,omitempty"`
 	Examined            *VerdictExamined    `json:"examined,omitempty"`
+	SiblingGaps         SiblingGaps         `json:"sibling_gaps,omitempty"`
 }
 type JudgeEntry struct {
 	CriterionID   string          `json:"criterion_id"`
@@ -180,6 +181,23 @@ func CheckJudge(ctx context.Context, r *store.Reader, raw []byte, o JudgeOptions
 	if output.Outcome == "fail" && result.Outcome == "pass" {
 		return reject("judge-outcome", "fail requires a non-done verdict")
 	}
+	if len(output.SiblingGaps) > 0 {
+		info, err := SplitPartContext(r, o.ItemID)
+		if err != nil {
+			return JudgeResult{}, err
+		}
+		if info == nil {
+			return reject("sibling-gaps-not-part", "sibling_gaps is only allowed on a split part")
+		}
+		for _, g := range output.SiblingGaps {
+			if g.Sibling == info.Part.Label {
+				return reject("sibling-gap-self", "sibling_gaps cannot target this part itself ("+g.Sibling+")")
+			}
+			if _, ok := info.Siblings[g.Sibling]; !ok {
+				return reject("sibling-gap-unknown", "unknown sibling "+g.Sibling+" in sibling_gaps")
+			}
+		}
+	}
 	return result, nil
 }
 
@@ -196,6 +214,11 @@ func RecordJudge(ctx context.Context, tx *store.Tx, raw []byte, o JudgeOptions) 
 			return JudgeResult{}, err
 		}
 		result.Records[i] = stored
+	}
+	if len(result.Output.SiblingGaps) > 0 {
+		if err := RecordSplitGaps(ctx, tx, o.ItemID, result.Output.SiblingGaps, o.Head, o.Actor, o.At); err != nil {
+			return JudgeResult{}, err
+		}
 	}
 	return result, nil
 }

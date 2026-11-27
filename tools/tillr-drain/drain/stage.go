@@ -692,6 +692,23 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 		brief += "\n## No-change ending\n\n" + noChangeMarkerLine + "\nIf reproductions establish that the repository needs no change, leave the worktree clean at base and end your report with CAUSE:, EVIDENCE:, WHY_NO_CHANGE:, and RESULT: no_change.\n"
 	}
 	brief += ending
+	if s.Store != "" {
+		db, err := store.OpenRead(ctx, s.Store)
+		if err != nil {
+			return err
+		}
+		var gaps []item.RecordedSplitGap
+		err = db.ReadTx(ctx, func(r *store.Reader) error {
+			var err error
+			gaps, err = item.SplitGapsForSibling(r, spec.ItemID)
+			return err
+		})
+		db.Close()
+		if err != nil {
+			return err
+		}
+		brief += splitGapsBrief(gaps)
+	}
 	if ideaWords != nil {
 		// Append only after all node instructions and brief rewrites. Preflight
 		// excludes exactly these bytes through EOF from template checks, never
