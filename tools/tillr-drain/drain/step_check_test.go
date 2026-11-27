@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/mschulkind-oss/tillr-run/run"
 )
 
 func TestStartupChecksEveryStepArgumentBranch(t *testing.T) {
@@ -93,5 +95,22 @@ func TestStartupChecksTheRealAdapterWithoutCandidateArtifacts(t *testing.T) {
 	entries, err := os.ReadDir(root)
 	if err != nil || len(entries) != 0 {
 		t.Fatalf("parse-only check wrote artifacts: %v %v", entries, err)
+	}
+}
+
+func TestProcessStepsRunRequiresLaneRoot(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	steps := &ProcessSteps{Root: dir}
+	_, _, err := steps.Run(context.Background(), run.Request{
+		ItemID:  "item-a",
+		RunID:   "run-item-a-a1",
+		Backend: "fixture",
+	})
+	if err == nil || !strings.Contains(err.Error(), "LaneRoot") {
+		t.Fatalf("Run without LaneRoot = %v, want LaneRoot usage error", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, ".requests")); !os.IsNotExist(statErr) {
+		t.Fatalf("Run without LaneRoot created .requests in cwd: %v", statErr)
 	}
 }

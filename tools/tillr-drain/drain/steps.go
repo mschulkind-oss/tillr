@@ -160,6 +160,9 @@ func (s *ProcessSteps) Run(ctx context.Context, req run.Request) (run.Record, st
 	defer func() {
 		finishPrep()
 	}()
+	if s.LaneRoot == "" {
+		return run.Record{}, "", Usagef("ProcessSteps.Run requires LaneRoot")
+	}
 	if len(req.Command) > 0 && req.Backend != "command" && s.Root != "" {
 		resolved := resolveAdapterPath(s.Root, req.Command[0])
 		if resolved != req.Command[0] {
