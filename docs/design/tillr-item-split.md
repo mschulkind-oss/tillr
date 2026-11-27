@@ -15,7 +15,7 @@ vantage:
 
 # An oversized item lands in parts
 
-**Status:** Three of twelve build slices are in the tree ([§14](#14-the-build-in-slices-that-each-land-alone)): every refused candidate's size is recorded beside its limits, a not-done verdict states each finding's kind and place, and a split statement written by the design seat is checked and filed in one transaction. Nothing yet calls a split automatically. The owner's statements quoted in [§1](#1-the-ruling) are the only rulings; every other decision is the designer's and is marked so in the [Decision Ledger](#decision-ledger).
+**Status:** Three of twelve build slices are in the tree ([§14](#14-the-build-in-slices-that-each-land-alone)): every refused candidate's size is recorded beside its limits, a not-done verdict states each finding's kind and place, and a split statement written by the design seat is checked and filed in one transaction. Nothing yet calls a split automatically. The owner's statements quoted in [§1](#1-the-ruling) are the only rulings; every other decision is the designer's (or from an operator request), which the owner may overturn, and is marked so in the [Decision Ledger](#decision-ledger).
 
 > **In short.** An item that is too big is split into **parts**, each an ordinary item with its own words, verifier, gate and single squashed commit, under a **parent** that keeps the owner's words and stays open until every part has landed. The work already built is taken from the refused candidate and not rebuilt, and what decides whether a part may land is whether it makes the trunk worse, not whether the whole request is finished.
 
@@ -29,7 +29,7 @@ vantage:
 
 **Needs your ruling:** None.
 
-**Awaits your review:** the designer's decisions `D-SP1` to `D-SP15` in the [Decision Ledger](#decision-ledger).
+**Awaits your review:** the designer's decisions `D-SP1` to `D-SP16` in the [Decision Ledger](#decision-ledger).
 
 **Reads with:** [landing principles](./landing-principles.md) (the rules a split must not break), [the judge and lifecycle design](./tillr-judge-and-lifecycle.md) (verdicts, and the rule that no count of attempts routes work) and [item graphs](../reference/tillr-item-graphs.md) (pieces inside one item, which a split does not replace).
 
@@ -109,7 +109,7 @@ An item's states are listed in [item states](../reference/tillr-item-states.md).
 
 ## 4. The rules a split keeps
 
-- **P1. A split changes the shape of the work, never its bar.** The parent keeps the owner's words and its criteria unchanged. It is finished only when every required part has landed and the closing check passes. Only the owner makes a required part optional.
+- **P1. A split changes the shape of the work, never its bar.** The parent keeps the owner's words and its criteria unchanged. It is finished only when every active required part has landed and the closing check passes. Only the owner drops a required part without replacement; a required part closed as defective is replaced by the design seat ([§7.6](#76-failure-and-edge-cases)).
 - **P2. A part is an ordinary item.** It has its own words, its own criteria, one verifier, one gate and one squashed commit. The gate and the lander do not change.
 - **P3. One seat writes the division.** Four callers may call a split. The design seat alone decides whether and how, because dividing criteria is writing the bar, and neither the worker that is held to a bar nor the judge that applies it may write it ([criterion repair](./criterion-repair.md#decision-ledger) rules the same for a frozen criterion).
 - **P4. A measured signal calls a split; nothing here stops work.** No signal counts attempts or refusals. A call never holds the item on the owner.
@@ -222,10 +222,12 @@ Where there is no donor (a split at filing, at design or at the plan step), ever
 
 ### 7.5 When the parent is finished
 
-When the last required part has landed, the parent runs once more: a read-only verifier judges the parent's own criteria against the trunk, with the coverage table and each part's landing as its evidence. This is the closing check.
+When the last active required part has landed, the parent runs once more: a read-only verifier judges the parent's own criteria against the trunk, with the coverage table and each part's landing as its evidence. This is the closing check.
 
 - **It passes:** the parent is finished, with no commit of its own. Its record lists the parts and their commits.
-- **It finds something missing:** the finding goes to the design seat, which adds a part to the statement. The parent waits on that part. A statement only grows; a filed part is never removed from it.
+- **It finds something missing:** the finding goes to the design seat, which adds a part to the statement through a split extension. The parent waits on that part.
+
+A split extension appends new part(s) without deleting earlier part items from the split's history. When an extension answers a closing-check finding, every earlier required part remains as landed; when an extension answers a required part closed as `defective` ([§7.6](#76-failure-and-edge-cases)), the corrected part(s) replace that closed part in the parent's required parts, coverage table and unlanded siblings' dependencies without the owner dropping it ([`D-SP16`](#D-SP16)).
 
 Until the closing check is built, a parent whose required parts have all landed names the operator as its mover, who checks its criteria by hand.
 
@@ -238,12 +240,18 @@ Until the closing check is built, a parent whose required parts have all landed 
 | A part is refused by its verifier | It goes back to its own build step, as any item does. Its siblings are unaffected |
 | A part's verifier names a regression in work taken from the donor | The same: the part is repaired or split again. The donor is never the excuse |
 | A part trips a measured signal itself | It is split again |
-| The owner drops a required part | The owner's dated words are recorded on the part, the part is closed, and the coverage table shows the clauses released. Nobody else may do this |
-| A part is closed any other way | The parent stays blocked and shows the closed part as needing the owner |
+| A required part is closed as `defective` by its verifier | The parent stays blocked and goes back to the design seat with the verifier's finding (`mover`: design seat), while dependent siblings wait on that repair. Through the split extension, the design seat either files a corrected required part that replaces the closed part in the parent's required parts, coverage table and siblings' dependencies, or says the decision is the owner's — the only path here that names the owner as mover ([`D-SP16`](#D-SP16)) |
+| The owner drops a required part | The owner's dated words are recorded on the part, the part is closed, and the coverage table shows the clauses released. Nobody else may release a clause without replacement |
+| A required part is closed any other way | The parent stays blocked and shows the closed part as needing the owner |
 | Two parts change the same lines | The one that lands second meets a conflict at carving or at landing, and repairs it as any item does |
 | The trunk moved a long way since the donor | The carving run works on the current trunk; nothing requires the donor's diff to survive unchanged |
 | The split is called before any candidate exists | No donor; parts are built from nothing |
 | An item is in flight when a slice ships | Nothing changes for it until its next settlement, when the signals are read like any other item's |
+
+**Replacing a required part closed as `defective` ([`D-SP16`](#D-SP16), a designer's decision from an operator request, which the owner may overturn).** Measured on 2026-11-27 on the worktree-ownership split: when the required part "Move the drain loop onto item-owned worktrees" was closed as `defective` because its words forbade a test change the work needed, `tillr drain why` held the parent with mover `"owner; required part did not land"` and held the dependent final part with `"operator; remove the dependency or reopen the closed item"`, starting no design run and leaving the operator to file a corrected request and rewire the dependency by hand. Because a part's share, leaves and part criteria were written by the design seat when dividing the parent (`P3`), a `defective` closure on a required part goes to the design seat first — consistent with [`OQ-CR7`](./criterion-repair.md#decision-ledger) in criterion repair, and recorded here from a 2026-11-27 operator request as a designer's decision the owner may overturn (the request reported an unquoted 2026-11-27 owner direction, and only verbatim quoted owner statements are recorded as owner rulings). The design seat receives the parent's words, criteria, split statement, part states and the verifier's `defective` finding on the closed part, and answers in one of two ways:
+
+- **A corrected split extension:** one or more new required parts take over the closed part's share and coverage. Filing the extension atomically records the new part(s), updates coverage so every clause of the parent remains owned, and replaces the closed `defective` part in the parent's required parts and in unlanded sibling parts' dependencies, while keeping the closed part in the split's history as replaced without the owner dropping it. If the extension is malformed or leaves a clause unowned, it is refused and returned to the design seat; if the design run fails or repeats the same refusal, the parent is held on the design seat.
+- **An owner decision:** when the finding exposes a problem in the parent's own request or requires dropping or changing what the owner asked for, the design run says the decision is the owner's (with the question for the owner). Only then does the owner become the parent's mover.
 
 ## 8. How a verdict accepts part of a candidate
 
@@ -284,7 +292,7 @@ Nothing about a split is hidden, and every waiting state names who moves it.
 
 | Surface | A parent | A part | A pending call |
 | :--- | :--- | :--- | :--- |
-| The queue's reasons (`tillr drain why`, and the pages that read it) | One row until the closing check passes: "split into 5 parts: 3 landed, 1 working, 1 held", the held part's reason and its mover | An ordinary row, labelled with its parent's title and its part label | "split called by the verifier; waiting on the design seat", mover the design seat |
+| The queue's reasons (`tillr drain why`, and the pages that read it) | One row until the closing check passes: "split into 5 parts: 3 landed, 1 working, 1 held", the held part's reason and its mover; when a required part closes as `defective`, mover the design seat until replaced (or the owner only when the design run says the decision is the owner's) | An ordinary row, labelled with its parent's title and its part label; when waiting on a sibling closed as `defective`, waiting on the design seat's replacement rather than naming the operator | "split called by the verifier; waiting on the design seat", mover the design seat |
 | The item page | The owner's words; the call, with each signal's value beside its threshold; the statement with its coverage table; the donor and what each part took; each part's state and landed commit; any part the owner dropped, with the owner's words | Its parent, its share, what it leaves to which sibling, what it took from the donor, the findings it inherited | The call and the measurements |
 | Counts and reports of landed work | Counted as landed only after the closing check. Until then it reads "3 of 5 required parts landed" | Each landing is reported under the parent's title | Not counted |
 
@@ -314,7 +322,7 @@ The other shape, "multiple judged landings out of one item", is rejected for thr
 - **[Gate what will be the tip, once](./landing-principles.md#3-gate-what-will-be-the-tip-once).** Each part is gated on its own tree. No gate result carries over from the donor.
 - **[Re-application preserves the change, not the patch](./landing-principles.md#2-re-application-preserves-the-change-not-the-patch).** A carved part is not required to match the donor's diff.
 - **[A surface that hides parked work is a false report](./landing-principles.md#7-a-surface-that-hides-parked-work-is-a-false-report).** [§9](#9-what-the-queue-and-the-status-surfaces-show).
-- **[A held state names a mover that can still act](./landing-principles.md#13-a-held-state-names-a-mover-that-can-still-act).** A pending call names the design seat; a blocked parent names its unlanded parts; a closed required part names the owner.
+- **[A held state names a mover that can still act](./landing-principles.md#13-a-held-state-names-a-mover-that-can-still-act).** A pending call names the design seat; a blocked parent names its unlanded parts; a required part closed as `defective` names the design seat until a corrected part replaces it, and names the owner only when the design run says the decision is the owner's (or when a required part was closed without a `defective` verdict or owner release).
 
 ### 10.5 No count of attempts stops work
 
@@ -328,7 +336,7 @@ The split signals follow both rules. None reads a tally, and none acts on an unm
 - **It does not let the drain cut code by itself.** The drain measures and files; a seat decides the division and a worker carves.
 - **It does not change the gate, the lander or the squash.**
 - **It does not change how pieces work**, or raise their limit of twelve.
-- **It does not ask the owner to approve a split.** The owner sees it, and only a dropped part needs a ruling.
+- **It does not ask the owner to approve a split.** The owner sees it, and is asked only when a required part would be dropped or when a design run on a `defective` required part finds that the decision is the owner's.
 - **It does not name commands, fields, events or store tables.** Those belong to the implementation plan.
 - **It does not decide filing policy** beyond the signals an operator reads. Whether a filing should refuse a request outright is not proposed.
 
@@ -391,7 +399,7 @@ None.
 
 ## Decision Ledger
 
-A row marked "owner" records the owner's words. Every other row is the designer's decision, made without the owner, who may overturn it.
+A row marked "owner" records the owner's verbatim words ([§1](#1-the-ruling)). Every other row is the designer's decision (or from an operator request), made without the owner, who may overturn it.
 
 | ID | Ruling / Decision | Date | Settled in | Built |
 | :--- | :--- | :--- | :--- | :--- |
@@ -406,10 +414,11 @@ A row marked "owner" records the owner's words. Every other row is the designer'
 | D-SP6 | The refused candidate is a donor. A part takes it whole, takes named work in a carving run, or takes nothing. Named paths are instructions and not a fence | 2026-11-21, designer | [§7.4](#74-carving-the-donor) | — |
 | D-SP7 | A not-done verdict states each finding's kind and place, each earlier finding's fate, and what was examined. The verifier does not propose the parts | 2026-11-21, designer | [§8.1](#81-what-the-verifier-states) | Slice 2: kind and place |
 | D-SP8 | No verdict or gate result is inherited from the donor: every part is verified and gated on its own tree | 2026-11-21, designer | [§8.3](#83-why-nothing-is-inherited-and-why-a-part-still-lands) | — |
-| D-SP9 | The parent finishes by a closing check of its own criteria against the trunk; a finding there adds a part. Only the owner makes a required part optional | 2026-11-21, designer | [§7.5](#75-when-the-parent-is-finished), [§7.6](#76-failure-and-edge-cases) | — |
+| <a id="D-SP9"></a>[`D-SP9`](#D-SP9) | **Designer's decision; the owner may overturn it** (amended by [`D-SP16`](#D-SP16)). The parent finishes by a closing check of its own criteria against the trunk; a finding there adds a part. Only the owner drops a required part without replacement; a required part closed as `defective` goes to the design seat to be replaced through a split extension unless the design run says the decision is the owner's ([`D-SP16`](#D-SP16)) | 2026-11-21, amended 2026-11-27, designer | [§7.5](#75-when-the-parent-is-finished), [§7.6](#76-failure-and-edge-cases) | — |
 | D-SP10 | The queue shows a parent as one row with its count of parts until the closing check passes, and shows every measurement before any signal holds | 2026-11-21, designer | [§9](#9-what-the-queue-and-the-status-surfaces-show) | Slice 1: size and limits on the item page |
 | D-SP11 | No count of verifier refusals pauses an item for review | 2026-11-21, designer | [§10.5](#105-no-count-of-attempts-stops-work) | — |
-| D-SP12 | The owner is not asked to approve or acknowledge a split, and is asked only when a required part would be dropped | 2026-11-21, designer | [§9](#9-what-the-queue-and-the-status-surfaces-show), [§11](#11-what-this-does-not-do) | — |
+| <a id="D-SP12"></a>[`D-SP12`](#D-SP12) | **Designer's decision; the owner may overturn it** (amended by [`D-SP16`](#D-SP16)). The owner is not asked to approve or acknowledge a split, and is asked only when a required part would be dropped or when a design run on a `defective` required part says the decision is the owner's | 2026-11-21, amended 2026-11-27, designer | [§7.6](#76-failure-and-edge-cases), [§9](#9-what-the-queue-and-the-status-surfaces-show), [§11](#11-what-this-does-not-do) | — |
 | D-SP13 | The build is twelve slices that each land alone, in the order of [§14](#14-the-build-in-slices-that-each-land-alone): what only shows facts first, then a split made by a person, then each caller | 2026-11-21, designer | [§14](#14-the-build-in-slices-that-each-land-alone) | Slices 1, 2 and 4 |
 | D-SP14 | The design seat, not the build seat, marks a slice built in the slice table; a slice's build commit changes no line of this document. **Rejected:** a build commit that edits this document | 2026-11-22, designer | [§14](#14-the-build-in-slices-that-each-land-alone) | — |
 | D-SP15 | A signal acts on routing only once its trigger is measured from the store; until then it is shown, never acted on. `S1` is measured; `S2` to `S10` are advisory, and tracked configuration does not promote one. **Rejected:** routing on first-guess triggers and tuning after false splits; hiding advisory signals, so the store never collects the readings needed to measure them | 2026-11-24, designer | [§4](#4-the-rules-a-split-keeps) (P7), [§6](#6-the-signals), [§14](#14-the-build-in-slices-that-each-land-alone) | Slice 1 displays `S1` without routing |
+| <a id="D-SP16"></a>[`D-SP16`](#D-SP16) | **Designer's decision, from an operator request; the owner may overturn it.** Amends [`D-SP9`](#D-SP9) and [`D-SP12`](#D-SP12), and overturns the earlier rule in [§7.6](#76-failure-and-edge-cases) and [§10.4](#104-the-landing-principles) for `defective` closures (written from a 2026-11-27 operator request that reported an unquoted 2026-11-27 owner direction that a stuck split goes to the design seat first, consistent with [`OQ-CR7`](./criterion-repair.md#decision-ledger) in criterion repair; recorded as the designer's decision from an operator request because no verbatim owner words were quoted). When a verifier closes a required part of a split as `defective`, the parent stays blocked and goes back to the design seat (`mover`: design seat) with the verifier's finding, while unlanded sibling parts that depended on the closed part wait on that repair instead of naming the operator. Through the split extension, the design seat either files a corrected required part (or parts) that replaces the closed `defective` part in the parent's required parts, coverage table and unlanded siblings' dependencies while keeping the closed part in the split's history as replaced without the owner dropping it, or states that the decision is the owner's — the only path here that makes the owner the mover. A required part closed any other way without the owner's release still names the owner. **Rejected:** holding the parent on the owner immediately when a required part closes as `defective` and leaving dependent siblings on the operator to rewire by hand (the 2026-11-27 failure on the worktree-ownership split); reopening the frozen `defective` part in place; or deleting the closed part from the split's history | 2026-11-27, designer, from an operator request | [§4](#4-the-rules-a-split-keeps) (P1), [§7.5](#75-when-the-parent-is-finished), [§7.6](#76-failure-and-edge-cases), [§9](#9-what-the-queue-and-the-status-surfaces-show), [§10.4](#104-the-landing-principles), [§11](#11-what-this-does-not-do) | — |
