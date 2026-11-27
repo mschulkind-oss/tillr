@@ -322,3 +322,176 @@ func TestDrainItemFifthAttemptRule(t *testing.T) {
 		t.Fatalf("tillr watch lint failed: code=%d stdout=%q stderr=%q", code, lintOut.String(), lintErr.String())
 	}
 }
+
+func TestDrainItemFifthAttemptRuleSettleSuppressesUntilNextMilestone(t *testing.T) {
+	const (
+		ruleID       = "drain-item-fifth-attempt"
+		allocateKind = "run.allocate"
+		itemID       = "item-planned-build"
+		trackItemID  = "item-track-cause"
+	)
+
+	rules, err := watch.LoadRules("rules")
+	if err != nil {
+		t.Fatal(err)
+	}
+	idx := slices.IndexFunc(rules, func(rule watch.Rule) bool { return rule.ID == ruleID })
+	if idx < 0 {
+		t.Fatalf("missing %s rule in rules/", ruleID)
+	}
+	rule := rules[idx]
+
+	ctx := context.Background()
+	s, err := store.Open(ctx, filepath.Join(t.TempDir(), "state.db"), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+
+	now := time.Date(2026, 11, 27, 15, 0, 0, 0, time.UTC)
+	e := watch.Evaluator{Store: s, Rules: []watch.Rule{rule}, Clock: func() time.Time { return now }}
+	if _, err := e.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.WriteTx(ctx, func(tx *store.Tx) error {
+		for _, id := range []string{itemID, trackItemID} {
+			if _, err := tx.Exec(
+				`INSERT INTO items (item_id, title, state, updated_at) VALUES (?, ?, 'in-queue', ?)`,
+				id, id, now.UnixMilli(),
+			); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	appendAllocate := func(runID, seat, node, laneID string, at time.Time) {
+		t.Helper()
+		payload := map[string]any{
+			"run_id":     runID,
+			"item_id":    itemID,
+			"backend":    "pi-" + seat,
+			"lane_id":    laneID,
+			"seat":       seat,
+			"workflow":   "planned-build@v1",
+			"node":       node,
+			"started_at": at.UTC().Format(time.RFC3339),
+		}
+		body, err := json.Marshal(payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lane := laneID
+		if err := s.WriteTx(ctx, func(tx *store.Tx) error {
+			_, err := tx.Append(event.Event{
+				Kind:       allocateKind,
+				ObjectType: "lane",
+				ObjectID:   &lane,
+				At:         at,
+				Payload:    body,
+			})
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	evalAndPending := func() []watch.Notice {
+		t.Helper()
+		results, err := e.EvaluateRules(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(results) != 1 || results[0].ID != ruleID || results[0].Diagnostic() != "" || results[0].Skipped != 0 {
+			t.Fatalf("unexpected evaluation results: %+v", results)
+		}
+		notices, err := e.Pending(ctx, "foreground")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return notices
+	}
+
+	episodeCounts := func() (episodes, reopened int) {
+		t.Helper()
+		if err := s.ReadTx(ctx, func(r *store.Reader) error {
+			if err := r.QueryRow(`SELECT COUNT(*) FROM alert_episodes WHERE rule_id = ? AND subject_key = ?`, ruleID, itemID).Scan(&episodes); err != nil {
+				return err
+			}
+			return r.QueryRow(`SELECT COUNT(*) FROM events WHERE kind = 'watch.alert.reopened'`).Scan(&reopened)
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return episodes, reopened
+	}
+
+	// Attempt 5 opens one warning alert.
+	now = now.Add(5 * time.Minute)
+	appendAllocate(fmt.Sprintf("run-%s-a5-n1", itemID), "plan", "plan", "lane-1", now)
+	first := evalAndPending()
+	if len(first) != 1 || first[0].Bundle.RuleID != ruleID || first[0].Bundle.Subject != itemID {
+		t.Fatalf("attempt 5: want 1 notice for %s, got %+v", itemID, first)
+	}
+	alertID := first[0].AlertID
+
+	// Settle the alert after attempt 5.
+	now = now.Add(5 * time.Minute)
+	if err := e.Settle(ctx, alertID, watch.SettleOptions{
+		By:       "operator",
+		Outcome:  "fix-fault",
+		ItemID:   trackItemID,
+		Cause:    "planned build went to design seat before retrying",
+		Evidence: "inspected run logs for attempts 1-5",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Same-attempt retries/judge/cfix and attempts 6 through 9 (plan, design, work)
+	// must neither open a new alert nor reopen the settled episode.
+	quietRuns := []struct {
+		runID string
+		seat  string
+		node  string
+	}{
+		{fmt.Sprintf("run-%s-a5-n1-restart", itemID), "plan", "plan"},
+		{fmt.Sprintf("run-%s-a5-n1-002-failover", itemID), "plan", "plan"},
+		{fmt.Sprintf("run-%s-a5-n3-judge", itemID), "verify", "verify"},
+		{fmt.Sprintf("run-%s-a5-n3-cfix", itemID), "verify", "verify"},
+		{fmt.Sprintf("run-%s-a6-n1", itemID), "design", "design"},
+		{fmt.Sprintf("run-%s-a6-n2", itemID), "build", "work"},
+		{fmt.Sprintf("run-%s-a7-n1", itemID), "plan", "plan"},
+		{fmt.Sprintf("run-%s-a7-n2", itemID), "build", "work"},
+		{fmt.Sprintf("run-%s-a8-n1", itemID), "plan", "plan"},
+		{fmt.Sprintf("run-%s-a8-n2", itemID), "build", "work"},
+		{fmt.Sprintf("run-%s-a9-n1", itemID), "plan", "plan"},
+	}
+	for _, qr := range quietRuns {
+		now = now.Add(4 * time.Minute)
+		appendAllocate(qr.runID, qr.seat, qr.node, "lane-1", now)
+		if notices := evalAndPending(); len(notices) != 0 {
+			t.Fatalf("after settlement on attempt 5, %s unexpectedly opened/reopened notice: %+v", qr.runID, notices)
+		}
+	}
+	if episodes, reopened := episodeCounts(); episodes != 1 || reopened != 0 {
+		t.Fatalf("attempts 6..9 after settlement: episodes=%d reopened=%d, want 1 and 0", episodes, reopened)
+	}
+
+	// Reaching attempt 10 (five more attempts since the settled milestone) is
+	// materially new and reopens the episode with a foreground notice.
+	now = now.Add(4 * time.Minute)
+	tenthRun := fmt.Sprintf("run-%s-a10-n1", itemID)
+	appendAllocate(tenthRun, "plan", "plan", "lane-1", now)
+	reopenedNotices := evalAndPending()
+	if len(reopenedNotices) != 1 || reopenedNotices[0].AlertID != alertID {
+		t.Fatalf("attempt 10 should reopen settled alert %s, got %+v", alertID, reopenedNotices)
+	}
+	if !strings.Contains(reopenedNotices[0].Bundle.Guidance.Summary, tenthRun) {
+		t.Fatalf("reopened summary %q does not name %q", reopenedNotices[0].Bundle.Guidance.Summary, tenthRun)
+	}
+	if episodes, reopened := episodeCounts(); episodes != 1 || reopened != 1 {
+		t.Fatalf("after attempt 10: episodes=%d reopened=%d, want 1 and 1", episodes, reopened)
+	}
+}

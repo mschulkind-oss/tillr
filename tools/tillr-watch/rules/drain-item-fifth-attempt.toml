@@ -1,9 +1,20 @@
 # On 2026-11-23 item-request-f47a9d41f7 reached its 26th attempt with no alert
 # because drain-repeated-step-dispatches only counts five starts of one step
-# within 10 minutes, missing attempts spread over hours. Read registered
-# run.allocate events (and land.landing to clear on landing), grouped by
-# item_id, and warn when an item starts its fifth (or later) attempt from the
-# attempt ordinal in run_id.
+# within 10 minutes, missing attempts spread over hours.
+#
+# On 2026-11-27 between 10:00 and 10:47 Eastern, two items past five attempts
+# (a trunk fixer and a planned build that went to the design seat three times)
+# produced six foreground notices or reminders in 47 minutes; settling the
+# planned build at 10:23 was followed by new notices at 10:27 (attempt 6) and
+# 10:47 (attempt 8) because every attempt after the fifth and every retry,
+# failover, judge, or conflict-fix run matched as a new instance.
+#
+# Materially-new condition: match only primary run.allocate starts on every
+# fifth attempt milestone (attempts 5, 10, 15, ...), excluding failover,
+# restart, fresh, interrupted, judge, and cfix runs. An unsettled alert stays
+# open across intermediate attempts until landing or terminal item state, while
+# a settled alert stays closed across the next four attempts and reopens only
+# if the item accumulates five more attempts without landing.
 [[rule]]
 id = "drain-item-fifth-attempt"
 scope = "core"
@@ -15,7 +26,7 @@ events = ["run.allocate", "land.landing"]
 [rule.when]
 group_by = "item_id"
 pattern = "predicate_match"
-match = 'event.kind == "run.allocate" and event.run_id matches "^run-.+-a([5-9]|[1-9][0-9]+)(-n[0-9]+(-g[0-9]+-[0-9a-f]{8})?)?(-[0-9a-f]{16})?(-([0-9]{3,12}-)?(failover|restart|fresh|interrupted))?(-(judge|cfix))?$"'
+match = 'event.kind == "run.allocate" and event.run_id matches "^run-.+-a(5|[1-9][0-9]*[05])(-n[0-9]+(-g[0-9]+-[0-9a-f]{8})?)?(-[0-9a-f]{16})?$"'
 clear_when = 'event.kind == "land.landing" and event.result == "landed"'
 
 [rule.guidance]
