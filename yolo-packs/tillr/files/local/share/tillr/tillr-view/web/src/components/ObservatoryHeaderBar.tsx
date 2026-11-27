@@ -22,7 +22,7 @@ import { durationText } from "../models/now";
 import { formatSnapshotLaneSummary } from "../models/lanes";
 import { FALLBACK_POLL_MS } from "../models/queries";
 import type { BoardCounts, BoardFilter, BoardView } from "../models/board";
-import type { ApiEnvelope, LaneView, PushSummary, SnapshotData } from "../models/types";
+import type { ApiEnvelope, LaneView, PushSummary, RunningWorkSummary, SnapshotData } from "../models/types";
 import { BackendAlarms } from "./BackendAlarms";
 
 export interface ObservatoryHeaderBarProps {
@@ -131,20 +131,49 @@ export function PushPill({ push }: { push?: PushSummary }) {
   </span>;
 }
 
-/** LanePill is the header's always-visible lane state: how many of the store's lanes have
- * running work, out of how many the store knows. Settling leases are not running work. It is drawn even when the answer is zero,
- * which is the whole point: a stopped board says `0/1 lanes running · idle` instead of
- * leaving the operator to infer an idle drain from a `working` glyph over no live run. It
- * sits beside the R37 projection fix rather than replacing the NowBand, which stays absent
- * when there is no live run (design §4.4, ledger `D-OBS12`). */
-function LanePill({ lanes, configured }: { lanes?: LaneView[]; configured?: string[] }) {
+/** RunningWorkPill is the header's always-visible running-work state: how many active
+ * ordinary agent nodes are running against the running-agent limit (`R of L running`),
+ * plus any owner-awaited nodes running outside the limit. Idle worktrees on disk are
+ * never counted as slots. Falls back to legacy `lanes` when an older server omits
+ * `running_work`. */
+function RunningWorkPill({ runningWork, lanes, configured }: { runningWork?: RunningWorkSummary; lanes?: LaneView[]; configured?: string[] }) {
+  if (runningWork !== undefined) {
+    const r = runningWork.ordinary_running;
+    const l = runningWork.agent_limit;
+    const express = runningWork.express_running;
+    const idle = r === 0 && express === 0 && runningWork.command_running === 0;
+    if (l === null) {
+      const label = r === 0 && express === 0 ? "0 running · idle" : `${r} running${express > 0 ? `, ${express} owner-awaited` : ""}`;
+      return (
+        <span
+          className={idle ? "lane-pill lane-pill--idle" : "lane-pill lane-pill--running"}
+          title="running-agent limit is unrecorded (no active loop session)"
+        >
+          <span className="lane-pill__dot" />
+          {label}
+        </span>
+      );
+    }
+    const base = `${r} of ${l} running`;
+    const extra = express > 0 ? `, ${express} owner-awaited` : "";
+    const suffix = idle ? " · idle" : "";
+    return (
+      <span
+        className={idle ? "lane-pill lane-pill--idle" : "lane-pill lane-pill--running"}
+        title={`${r} of ${l} ordinary agent nodes running${express > 0 ? `; ${express} owner-awaited running outside the limit` : ""}; ${runningWork.worktrees.on_disk} worktrees on disk`}
+      >
+        <span className="lane-pill__dot" />
+        {base}{extra}{suffix}
+      </span>
+    );
+  }
   if (lanes === undefined) {
     return (
       <span
         className="lane-pill lane-pill--unknown"
-        title="the first read of the store is still in flight, so the lane count is unknown"
+        title="the first read of the store is still in flight, so the running-work count is unknown"
       >
-        <span className="lane-pill__dot" />—/— lanes running
+        <span className="lane-pill__dot" />— of — running
       </span>
     );
   }
@@ -153,7 +182,7 @@ function LanePill({ lanes, configured }: { lanes?: LaneView[]; configured?: stri
   const total = ordinary.length;
   if ([...ordinary, ...express].some(lane => lane.work_state === undefined && lane.state === "leased")) {
     return <span className="lane-pill lane-pill--unknown" title="this server records leases but not whether their runs are still running or settling">
-      <span className="lane-pill__dot" />—/— lanes running · work state unrecorded
+      <span className="lane-pill__dot" />— of — running · work state unrecorded
     </span>;
   }
   const configuredSummary = formatSnapshotLaneSummary(lanes, configured);
@@ -182,7 +211,7 @@ function LanePill({ lanes, configured }: { lanes?: LaneView[]; configured?: stri
       }
     >
       <span className="lane-pill__dot" />
-      {express.length ? `${running} of ${total} running, ${expressRunning} of ${express.length} express` : `${running}/${total} lanes running`}{idle ? " · idle" : ""}
+      {express.length ? `${running} of ${total} running, ${expressRunning} of ${express.length} express` : `${running} of ${total} running`}{idle ? " · idle" : ""}
     </span>
   );
 }
@@ -657,7 +686,7 @@ export function ObservatoryHeaderBar({
         </div>
         <div className="head-meta__row">
           <LiveChip live={live} paused={paused} />
-          <LanePill />
+          <RunningWorkPill />
           <PauseControl
             paused={paused}
             onPause={onPause}
@@ -691,7 +720,7 @@ export function ObservatoryHeaderBar({
           <span className="head-artifact">Reading the store…</span>
           <LiveSentence live={live} paused={paused} readAtMs={readAtMs} />
           <div className="head-meta__row">
-            <LanePill />
+            <RunningWorkPill />
           </div>
         </div>
       </header>
@@ -735,7 +764,7 @@ export function ObservatoryHeaderBar({
         <div className="head-meta__row">
           <LiveChip live={live} paused={paused} />
           <LoopBand drain={drain} />
-          <LanePill lanes={snapshot.data.lanes} configured={drain.session?.lanes} />
+          <RunningWorkPill runningWork={snapshot.data.running_work} lanes={snapshot.data.lanes} configured={drain.session?.lanes} />
           <PushPill push={snapshot.data.push} />
           <PauseControl
             paused={paused}

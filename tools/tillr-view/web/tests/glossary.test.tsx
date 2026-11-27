@@ -4,7 +4,7 @@ import glossary from "../src/models/glossary.json";
 import { Glossary, attachDefinitions, glossaryTerms } from "../src/components/Glossary";
 
 afterEach(cleanup);
-const required = ["pass", "hold", "hold-only pass", "action", "lane", "run", "candidate", "gate", "landing", "heartbeat", "session"];
+const required = ["pass", "wait", "action", "lane", "node", "path", "run", "candidate", "gate", "landing", "heartbeat", "session", "loop"];
 test("one glossary defines every required term and attaches definitions to page usage", async () => {
   for (const term of required) expect(glossary[term as keyof typeof glossary]).toMatch(/\.$/);
   const { container } = render(<Glossary><main>{required.map(term => <p key={term}>{term}</p>)}</main></Glossary>);

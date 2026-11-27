@@ -1,6 +1,5 @@
 import { cleanup, render, within } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
-import { Home } from "../src/components/Home";
 import { LaneStrip, LANE_QUIET_MS } from "../src/components/LaneStrip";
 import type { LaneRow } from "../src/models/types";
 
@@ -20,20 +19,20 @@ test("express lanes sit outside the cap and desks count in neither pool", () => 
     { ...lanes[0], lane_id: "express-1" },
     { ...lanes[0], lane_id: "express-2", state: "idle" as const },
     { ...lanes[0], lane_id: "desk-design" }];
-  const { container } = render(<Home lanes={rows} now={now} />);
+  const { container } = render(<LaneStrip lanes={rows} now={now} />);
   expect(container.textContent).toContain("7 of 10 running, 1 of 2 express");
   expect(container.querySelectorAll(".lane-strip li")).toHaveLength(13);
 });
 
 test("Home keeps parallel readers on one lane and names the running node count", () => {
-  const { container } = render(<Home lanes={[{ ...lanes[0], running_nodes: 4 }]} now={now} />);
+  const { container } = render(<LaneStrip lanes={[{ ...lanes[0], running_nodes: 4 }]} now={now} />);
   expect(container.textContent).toContain("1 of 1 running");
   expect(container.textContent).toContain("4 nodes running");
   expect(container.querySelectorAll(".lane-strip li")).toHaveLength(1);
 });
 
 test("Home renders every lane and counts exactly the same ten rows", () => {
-  const { container } = render(<Home lanes={lanes} now={now} />);
+  const { container } = render(<LaneStrip lanes={lanes} now={now} />);
   const strip = container.querySelector(".lane-strip")!;
   expect(strip.textContent).toContain("4 of 10 running · 3 settling · 3 idle");
   const rows = strip.querySelectorAll("li");
@@ -66,7 +65,7 @@ test("missing clocks and missing action records never become zero ages", () => {
 });
 
 test("lane refusal is explicit, not an idle count", () => {
-  const { container } = render(<Home lanesError={new Error("store unreadable")} />);
+  const { container } = render(<LaneStrip error={new Error("store unreadable")} />);
   expect(within(container).getByRole("alert").textContent).toContain("Lanes refused: store unreadable");
   expect(container.textContent).not.toContain("0 of 0");
 });

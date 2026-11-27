@@ -118,12 +118,13 @@ describe("the live channel invalidates the cache the panels already read", () =>
       event_head_seq: 49,
       changed: ["items:item-seed-02", "runs:run-item-seed-02", "snapshot"],
     });
-    expect(invalidate).toHaveBeenCalledTimes(6);
+    expect(invalidate).toHaveBeenCalledTimes(7);
     expect(invalidate).toHaveBeenNthCalledWith(2, { queryKey: ["lanes"] }, { cancelRefetch: false });
-    expect(invalidate).toHaveBeenNthCalledWith(3, { queryKey: ["waiting"] }, { cancelRefetch: false });
-    expect(invalidate).toHaveBeenNthCalledWith(4, { queryKey: ["items", "item-seed-02"] }, { cancelRefetch: false });
-    expect(invalidate).toHaveBeenNthCalledWith(5, { queryKey: ["runs", "run-item-seed-02"] }, { cancelRefetch: false });
-    expect(invalidate).toHaveBeenNthCalledWith(6, { queryKey: ["snapshot"] }, { cancelRefetch: false });
+    expect(invalidate).toHaveBeenNthCalledWith(3, { queryKey: ["running-work"] }, { cancelRefetch: false });
+    expect(invalidate).toHaveBeenNthCalledWith(4, { queryKey: ["waiting"] }, { cancelRefetch: false });
+    expect(invalidate).toHaveBeenNthCalledWith(5, { queryKey: ["items", "item-seed-02"] }, { cancelRefetch: false });
+    expect(invalidate).toHaveBeenNthCalledWith(6, { queryKey: ["runs", "run-item-seed-02"] }, { cancelRefetch: false });
+    expect(invalidate).toHaveBeenNthCalledWith(7, { queryKey: ["snapshot"] }, { cancelRefetch: false });
   });
 
   // 2026-11-22, the owner's HAR: 58 of 78 /snapshot reads ended net::ERR_ABORTED because each

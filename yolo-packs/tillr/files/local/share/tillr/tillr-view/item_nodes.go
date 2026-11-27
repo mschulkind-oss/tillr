@@ -38,8 +38,50 @@ type itemGraphNode struct {
 	State      string                  `json:"state"`
 	Level      int                     `json:"level"`
 	Runs       []string                `json:"runs"`
+	Executions []itemNodeExecution     `json:"executions"`
 	Children   map[string]childrenView `json:"children"`
 	Outputs    []itemNodeOutput        `json:"outputs"`
+}
+type itemNodeSegment struct {
+	Ordinal     int   `json:"ordinal"`
+	StartedAtMS int64 `json:"started_at_ms,omitempty"`
+}
+type itemNodeLog struct {
+	Path          string `json:"path,omitempty"`
+	Present       bool   `json:"present"`
+	Bytes         int64  `json:"bytes,omitempty"`
+	TranscriptURL string `json:"transcript_url,omitempty"`
+}
+type itemNodeLease struct {
+	LaneID        string `json:"lane_id"`
+	Active        bool   `json:"active"`
+	LeasedUntilMS *int64 `json:"leased_until_ms,omitempty"`
+	LeaseNoExpiry bool   `json:"lease_no_expiry,omitempty"`
+}
+type itemNodeEnding struct {
+	State        string `json:"state"`
+	ExitCode     *int   `json:"exit_code,omitempty"`
+	EndCause     string `json:"end_cause,omitempty"`
+	StartedAtMS  int64  `json:"started_at_ms,omitempty"`
+	FinishedAtMS int64  `json:"finished_at_ms,omitempty"`
+}
+type itemNodeSpend struct {
+	Turns   *int     `json:"turns,omitempty"`
+	Tokens  *int64   `json:"tokens,omitempty"`
+	CostUSD *float64 `json:"cost_usd,omitempty"`
+	Live    bool     `json:"live,omitempty"`
+	Note    string   `json:"note,omitempty"`
+}
+type itemNodeExecution struct {
+	RunID        string            `json:"run_id"`
+	Backend      string            `json:"backend,omitempty"`
+	Seat         string            `json:"seat,omitempty"`
+	SegmentCount int               `json:"segment_count"`
+	Segments     []itemNodeSegment `json:"segments"`
+	Log          *itemNodeLog      `json:"log,omitempty"`
+	Lease        *itemNodeLease    `json:"lease,omitempty"`
+	Ending       *itemNodeEnding   `json:"ending,omitempty"`
+	Spend        *itemNodeSpend    `json:"spend,omitempty"`
 }
 type itemNodeOutput struct {
 	Name  string  `json:"name"`
@@ -209,7 +251,7 @@ func readItemGraphIn(r *store.Reader, id, selection string, runs []storeRun, chi
 		}
 		a := itemGraphAttempt{Attempt: attempt, Nodes: []itemGraphNode{}}
 		if len(graph.Stages) == 0 {
-			n := itemGraphNode{ID: "worker", Kind: "agent", State: "not started", Runs: []string{}, Children: map[string]childrenView{}, Outputs: []itemNodeOutput{}}
+			n := itemGraphNode{ID: "worker", Kind: "agent", State: "not started", Runs: []string{}, Executions: []itemNodeExecution{}, Children: map[string]childrenView{}, Outputs: []itemNodeOutput{}}
 			for _, run := range workers[attempt] {
 				// The latest execution supplies the node state; all runs retain their links.
 				if run.Backend == "command" {
@@ -247,7 +289,7 @@ func readItemGraphIn(r *store.Reader, id, selection string, runs []storeRun, chi
 			}
 		}
 		for _, stage := range graph.Stages {
-			n := itemGraphNode{ID: stage.ID, Parent: stage.Parent, Kind: stage.Kind, Seat: stage.Seat, CommandRef: stage.CommandRef, Command: stage.Command, Access: stage.Access, State: "not started", Level: levels[stage.ID], Runs: []string{}, Children: map[string]childrenView{}, Outputs: []itemNodeOutput{}}
+			n := itemGraphNode{ID: stage.ID, Parent: stage.Parent, Kind: stage.Kind, Seat: stage.Seat, CommandRef: stage.CommandRef, Command: stage.Command, Access: stage.Access, State: "not started", Level: levels[stage.ID], Runs: []string{}, Executions: []itemNodeExecution{}, Children: map[string]childrenView{}, Outputs: []itemNodeOutput{}}
 			addRun := func(run string) {
 				if run == "" {
 					return
@@ -321,6 +363,89 @@ func readItemGraphIn(r *store.Reader, id, selection string, runs []storeRun, chi
 		}
 	}
 	return result, nil
+}
+
+func enrichItemGraphExecutions(r *store.Reader, attempts []itemGraphAttempt, runs []storeRun, lanes []storeLane, laneRoot string) {
+	runsByID := make(map[string]storeRun, len(runs))
+	for _, run := range runs {
+		runsByID[run.RunID] = run
+	}
+	leaseByRun := make(map[string]storeLane)
+	for _, l := range lanes {
+		if l.State != laneStateLeased {
+			continue
+		}
+		if l.RunID != "" {
+			leaseByRun[l.RunID] = l
+		}
+		for _, activeRunID := range l.ActiveNodes {
+			if activeRunID != "" {
+				leaseByRun[activeRunID] = l
+			}
+		}
+	}
+	for i := range attempts {
+		for j := range attempts[i].Nodes {
+			node := &attempts[i].Nodes[j]
+			node.Executions = make([]itemNodeExecution, 0, len(node.Runs))
+			for _, runID := range node.Runs {
+				run, hasRun := runsByID[runID]
+				laneID := run.LaneID
+				var lease *itemNodeLease
+				if l, ok := leaseByRun[runID]; ok {
+					if laneID == "" {
+						laneID = l.LaneID
+					}
+					lease = &itemNodeLease{
+						LaneID:        l.LaneID,
+						Active:        true,
+						LeasedUntilMS: l.LeasedUntilMS,
+						LeaseNoExpiry: l.LeasedUntilMS == nil,
+					}
+				}
+				segs := readNodeRunSegments(r, runID, run.StartedAtMS)
+				logInfo := resolveNodeLog(laneRoot, laneID, runID)
+				var ending *itemNodeEnding
+				if hasRun {
+					ending = &itemNodeEnding{
+						State:        run.State,
+						ExitCode:     run.ExitCode,
+						EndCause:     readRunEndCause(r, runID),
+						StartedAtMS:  run.StartedAtMS,
+						FinishedAtMS: run.FinishedAtMS,
+					}
+				}
+				var spend *itemNodeSpend
+				if hasRun && (run.UsageTokens != nil || run.CostUSD != nil) {
+					spend = &itemNodeSpend{
+						Tokens:  run.UsageTokens,
+						CostUSD: run.CostUSD,
+					}
+				} else if hasRun && run.State == "running" {
+					logPath := runLogPath(laneRoot, laneID, runID)
+					live, _ := readLiveRunStream(logPath)
+					spend = &itemNodeSpend{
+						Turns:   live.Turns,
+						Tokens:  live.Tokens,
+						CostUSD: live.CostUSD,
+						Live:    true,
+						Note:    live.Note,
+					}
+				}
+				node.Executions = append(node.Executions, itemNodeExecution{
+					RunID:        runID,
+					Backend:      run.Backend,
+					Seat:         run.Seat,
+					SegmentCount: len(segs),
+					Segments:     segs,
+					Log:          logInfo,
+					Lease:        lease,
+					Ending:       ending,
+					Spend:        spend,
+				})
+			}
+		}
+	}
 }
 
 // groupWorkerRuns receives runs in chronological order. An attempt can have

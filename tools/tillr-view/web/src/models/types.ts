@@ -484,6 +484,59 @@ export interface PushSummary {
   since?: string;
 }
 
+export interface RunningWorkWorktrees {
+  on_disk: number;
+  in_use: number;
+  idle: number;
+  count_limit: number;
+  worktree_bytes: number;
+  scratch_bytes: number;
+  total_bytes: number;
+  disk_budget_bytes: number;
+  run_log_bytes: number;
+}
+
+export interface RunningWorkSummary {
+  ordinary_running: number;
+  express_running: number;
+  command_running: number;
+  agent_limit: number | null;
+  worktrees: RunningWorkWorktrees;
+}
+
+export interface LiveSpend {
+  turns?: number | null;
+  tokens?: number | null;
+  cost_usd?: number | null;
+  note?: string;
+}
+
+export interface RunningWorkRow {
+  run_id: string;
+  item_id: string;
+  item_title?: string;
+  place?: number;
+  node_id?: string;
+  node_kind: string;
+  seat?: string;
+  seat_source?: string;
+  backend?: string;
+  express: boolean;
+  lane_id?: string;
+  started_at_ms: number;
+  state_since_ms: number;
+  leased_until_ms?: number | null;
+  lease_no_expiry?: boolean;
+  log_grew_at_ms?: number | null;
+  latest_action: { kind: string; text: string };
+  spend: LiveSpend;
+}
+
+export interface RunningWorkPayload {
+  summary: RunningWorkSummary;
+  rows: RunningWorkRow[];
+}
+
 export interface SnapshotData {
   push?: PushSummary;
   alarms?: BackendAlarm[];
@@ -492,6 +545,7 @@ export interface SnapshotData {
   counts?: ServerCounts;
   drain_summary: DrainSummary;
   lanes: LaneView[];
+  running_work?: RunningWorkSummary;
   items: ItemView[];
   recent_runs: RunSummary[];
 }
@@ -716,6 +770,53 @@ export interface GraphRevisionView {
   recorded_at_ms: number;
 }
 
+export interface ItemNodeSegment {
+  ordinal: number;
+  started_at_ms?: number;
+}
+
+export interface ItemNodeLog {
+  path?: string;
+  present: boolean;
+  bytes?: number;
+  transcript_url?: string;
+}
+
+export interface ItemNodeLease {
+  lane_id: string;
+  active: boolean;
+  leased_until_ms?: number | null;
+  lease_no_expiry?: boolean;
+}
+
+export interface ItemNodeEnding {
+  state: string;
+  exit_code?: number | null;
+  end_cause?: string;
+  started_at_ms?: number;
+  finished_at_ms?: number;
+}
+
+export interface ItemNodeSpend {
+  turns?: number | null;
+  tokens?: number | null;
+  cost_usd?: number | null;
+  live?: boolean;
+  note?: string;
+}
+
+export interface ItemNodeExecution {
+  run_id: string;
+  backend?: string;
+  seat?: string;
+  segment_count: number;
+  segments: ItemNodeSegment[];
+  log?: ItemNodeLog;
+  lease?: ItemNodeLease;
+  ending?: ItemNodeEnding;
+  spend?: ItemNodeSpend;
+}
+
 export interface ItemGraphNode {
   id: string;
   parent: string;
@@ -727,6 +828,7 @@ export interface ItemGraphNode {
   state: string;
   level: number;
   runs: string[];
+  executions?: ItemNodeExecution[];
   children: Record<string, ChildrenRecord>;
   outputs: { name: string; type: string; run_id: string; body: string | null; note?: string }[];
 }

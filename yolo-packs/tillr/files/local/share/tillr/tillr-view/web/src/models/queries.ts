@@ -19,6 +19,7 @@ import {
   fetchRunTranscript,
   fetchSnapshot,
   fetchLanes,
+  fetchRunningWork,
   fetchPasses,
   fetchPassHistory,
   fetchWaiting,
@@ -56,6 +57,7 @@ export const FALLBACK_POLL_MS = 5_000;
  * (`runlog:<id>`, the payload only) cost one read instead of four. */
 export const queryKeys = {
   lanes: (): readonly unknown[] => ["lanes"],
+  runningWork: (): readonly unknown[] => ["running-work"],
   snapshot: (): readonly unknown[] => ["snapshot"],
   passes: (): readonly unknown[] => ["passes"],
   waiting: (): readonly unknown[] => ["waiting"],
@@ -131,6 +133,10 @@ function useRead<T>(
 export const useLanesQuery = (enabled: boolean, paused = false, laneOpen = false, historyLane?: string) =>
   useQuery({queryKey: historyLane ? [...queryKeys.lanes(), historyLane] : queryKeys.lanes(), queryFn: ({signal}) => fetchLanes(signal, historyLane), enabled,
     retry: false, refetchOnWindowFocus: false, refetchInterval: paused ? false : laneOpen ? 1000 : FALLBACK_POLL_MS});
+
+export const useRunningWorkQuery = (enabled: boolean, paused = false) =>
+  useQuery({queryKey: queryKeys.runningWork(), queryFn: ({signal}) => fetchRunningWork(signal), enabled,
+    retry: false, refetchOnWindowFocus: false, refetchInterval: paused ? false : FALLBACK_POLL_MS});
 
 export const usePassesQuery = (enabled: boolean, paused = false) =>
   useRead(queryKeys.passes(), fetchPasses, enabled, false, paused);

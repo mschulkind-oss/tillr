@@ -426,6 +426,7 @@ func (s *server) routes() http.Handler {
 	mux.HandleFunc("GET /api/v1/passes", arrival(s.get(s.passesPayload)))
 	mux.HandleFunc("GET /api/v1/landings", s.get(s.landingsPayload))
 	mux.HandleFunc("GET /api/v1/lanes", arrival(s.get(s.lanesPayload)))
+	mux.HandleFunc("GET /api/v1/running-work", arrival(s.get(s.runningWorkRoutePayload)))
 	mux.HandleFunc("GET /api/v1/landings/{id}", s.get(s.landingsPayload))
 	mux.HandleFunc("GET /api/v1/perf/checks", s.get(s.performanceChecksPayload))
 	mux.HandleFunc("GET /api/v1/perf/items", s.get(s.performanceItemsPayload))
@@ -984,12 +985,13 @@ func liveRuns(lanes []storeLane, known []storeRun, allocations map[string]alloca
 // store stamp, pre-cleaned JSON for the large invariant slices so polls do not re-strip or
 // re-encode them, and the clock-independent alarms the quota alarms are added to.
 type snapshotShared struct {
-	data       snapshotData
-	alarms     *alarms.Stored
-	counts     json.RawMessage
-	lanes      json.RawMessage
-	items      json.RawMessage
-	recentRuns json.RawMessage
+	data        snapshotData
+	alarms      *alarms.Stored
+	counts      json.RawMessage
+	lanes       json.RawMessage
+	items       json.RawMessage
+	recentRuns  json.RawMessage
+	runningWork json.RawMessage
 }
 
 // snapshotPayload is the initial screen load: the whole board as one moment. The board is
@@ -1066,6 +1068,7 @@ func (s *server) snapshotPayload(r *store.Reader, req *http.Request) (any, *apiF
 		"items":         built.items,
 		"lanes":         built.lanes,
 		"recent_runs":   built.recentRuns,
+		"running_work":  built.runningWork,
 		"sources":       cleanSources,
 	}
 	if len(activeAlarms) > 0 {
@@ -1397,13 +1400,22 @@ func (s *server) snapshotBuild(r *store.Reader, req *http.Request, session *loop
 	if err != nil {
 		return nil, unreadable(err)
 	}
+	rwPayload, err := buildRunningWork(r, s.root, s.obs.laneRoot, s.obs.loopDir, session, s.clock().UTC())
+	if err != nil {
+		return nil, unreadable(err)
+	}
+	runningWorkRaw, err := marshalClean(rwPayload.Summary)
+	if err != nil {
+		return nil, unreadable(err)
+	}
 	return &snapshotShared{
-		data:       out,
-		alarms:     stored,
-		counts:     countsRaw,
-		lanes:      lanesRaw,
-		items:      itemsRaw,
-		recentRuns: recentRaw,
+		data:        out,
+		alarms:      stored,
+		counts:      countsRaw,
+		lanes:       lanesRaw,
+		items:       itemsRaw,
+		recentRuns:  recentRaw,
+		runningWork: runningWorkRaw,
 	}, nil
 }
 
@@ -1821,6 +1833,7 @@ func (s *server) itemPayload(r *store.Reader, req *http.Request) (any, *apiFailu
 	if err != nil {
 		return nil, unreadable(err)
 	}
+	enrichItemGraphExecutions(r, out.GraphAttempts, itemRuns, lanes, s.obs.laneRoot)
 	for i := range itemRuns {
 		if itemRuns[i].State == "running" {
 			active = &itemRuns[i]

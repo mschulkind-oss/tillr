@@ -57,7 +57,7 @@ describe("the lane pill is drawn at zero as well as at work", () => {
       { lane_id: "desk-doc", state: "leased", work_state: "running", run_id: "desk-live", leased_until_ms: null },
     ] };
     const pill = header(data).container.querySelector(".lane-pill");
-    expect(pill?.textContent).toContain("0/1 lanes running · idle");
+    expect(pill?.textContent).toContain("0 of 1 running · idle");
     expect(pill?.getAttribute("title")).toContain("ordinary and express pools are idle");
     expect(pill?.getAttribute("title")).not.toContain("the drain is idle");
   });
@@ -67,7 +67,7 @@ describe("the lane pill is drawn at zero as well as at work", () => {
     ] };
     expect(header(data).container.querySelector(".lane-pill")?.textContent).toContain("work state unrecorded");
   });
-  test("a stopped board says 0/1 lanes running · idle", () => {
+  test("a stopped board says 0 of 1 running · idle", () => {
     const stopped: SnapshotData = {
       ...snapshotData,
       counts: { by_state: {}, dispatchable: 0, blocked: 0, runs_live: 0 },
@@ -76,7 +76,7 @@ describe("the lane pill is drawn at zero as well as at work", () => {
     const { container } = header(stopped);
     const pill = container.querySelector(".lane-pill");
     expect(pill).not.toBeNull();
-    expect(pill?.textContent).toContain("0/1 lanes running · idle");
+    expect(pill?.textContent).toContain("0 of 1 running · idle");
     expect(pill?.className).toContain("lane-pill--idle");
 
     // The band is still absent: the pill is the answer to "is anything running", and the
@@ -85,7 +85,7 @@ describe("the lane pill is drawn at zero as well as at work", () => {
     expect(bandContainer.querySelector(".now-band")).toBeNull();
   });
 
-  test("two working lanes say 2/2 lanes running", () => {
+  test("two working lanes say 2 of 2 running", () => {
     const busy: SnapshotData = {
       ...liveSnapshotData,
       counts: { by_state: {}, dispatchable: 0, blocked: 0, runs_live: 2 },
@@ -96,7 +96,7 @@ describe("the lane pill is drawn at zero as well as at work", () => {
     };
     const { container } = header(busy);
     const pill = container.querySelector(".lane-pill");
-    expect(pill?.textContent).toContain("2/2 lanes running");
+    expect(pill?.textContent).toContain("2 of 2 running");
     expect(pill?.textContent).not.toContain("idle");
     expect(pill?.className).toContain("lane-pill--running");
   });
@@ -118,6 +118,34 @@ describe("the lane pill is drawn at zero as well as at work", () => {
     const pill = container.querySelector(".lane-pill");
     expect(pill).not.toBeNull();
     // An unknown count is `—`, never a zero that would read as an idle board.
-    expect(pill?.textContent).toContain("—/— lanes running");
+    expect(pill?.textContent).toContain("— of — running");
+  });
+
+  test("running_work summary shows R of L running, owner-awaited count, and never counts idle worktrees as slots", () => {
+    const idleWithWorktrees: SnapshotData = {
+      ...snapshotData,
+      running_work: {
+        ordinary_running: 0,
+        express_running: 0,
+        command_running: 0,
+        agent_limit: 4,
+        worktrees: { on_disk: 5, in_use: 0, idle: 5, count_limit: 8, worktree_bytes: 1000, scratch_bytes: 2000, total_bytes: 3000, disk_budget_bytes: 10000, run_log_bytes: 100 },
+      },
+    };
+    expect(header(idleWithWorktrees).container.querySelector(".lane-pill")?.textContent).toContain("0 of 4 running · idle");
+
+    const activeWithExpress: SnapshotData = {
+      ...liveSnapshotData,
+      running_work: {
+        ordinary_running: 2,
+        express_running: 1,
+        command_running: 1,
+        agent_limit: 4,
+        worktrees: { on_disk: 5, in_use: 3, idle: 2, count_limit: 8, worktree_bytes: 1000, scratch_bytes: 2000, total_bytes: 3000, disk_budget_bytes: 10000, run_log_bytes: 100 },
+      },
+    };
+    const pill = header(activeWithExpress).container.querySelector(".lane-pill");
+    expect(pill?.textContent).toContain("2 of 4 running, 1 owner-awaited");
+    expect(pill?.textContent).not.toContain("idle");
   });
 });

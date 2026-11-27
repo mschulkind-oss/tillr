@@ -105,6 +105,9 @@ async function read<T>(path: string, signal?: AbortSignal): Promise<ApiEnvelope<
 export const fetchLanes = (signal?: AbortSignal, historyLane?: string) =>
   read<LaneRow[]>(historyLane ? `/api/v1/lanes?history=${encodeURIComponent(historyLane)}` : "/api/v1/lanes", signal);
 
+export const fetchRunningWork = (signal?: AbortSignal) =>
+  read<import("./types").RunningWorkPayload>("/api/v1/running-work", signal);
+
 export const fetchLandings = (signal?: AbortSignal) => read<LandingsData>("/api/v1/landings", signal);
 export const fetchLanding = (id: string, signal?: AbortSignal) => read<LandingRow>(`/api/v1/landings/${encodeURIComponent(id)}`, signal);
 

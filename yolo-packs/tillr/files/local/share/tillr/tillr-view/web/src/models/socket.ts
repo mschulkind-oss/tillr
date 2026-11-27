@@ -177,6 +177,7 @@ export function useObservatorySocket(
       if (wait <= 0) {
         lanesAt = now();
         void refresh(client, { queryKey: queryKeys.lanes() });
+        void refresh(client, { queryKey: queryKeys.runningWork() });
         return;
       }
       if (lanesTimer !== null) return;
@@ -185,6 +186,7 @@ export function useObservatorySocket(
         if (stopped || paused.current) return;
         lanesAt = now();
         void refresh(client, { queryKey: queryKeys.lanes() });
+        void refresh(client, { queryKey: queryKeys.runningWork() });
       }, wait);
     };
 

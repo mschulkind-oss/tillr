@@ -1,8 +1,8 @@
 import { localTime } from "../models/board";
 import { formatSnapshotLaneSummary } from "../models/lanes";
-import { LaneStrip } from "./LaneStrip";
+import { RunningWork, formatRunningWorkSummaryLine } from "./RunningWork";
 import { loopAlive } from "../models/loop";
-import type { AlertsData, DrainSummary, LaneRow, PassRow, SnapshotData, WaitingRow, WhySource } from "../models/types";
+import type { AlertsData, DrainSummary, LaneRow, PassRow, RunningWorkPayload, SnapshotData, WaitingRow, WhySource } from "../models/types";
 import { HomeAlertsPanel, isAlertsPromoted } from "./AlertsPage";
 import { DesignsWaiting, WhySourceLine } from "./WhyPass";
 import { ClassState, EntityLink, type EntityKind } from "./EntityLink";
@@ -56,7 +56,8 @@ export function LoopSummary({ drain, passes, error, readError, snapshot, now = D
   const repeated = drain?.repeated_stop;
   const state = stop || ended ? "stopped" : alive ? "moving" : "not known";
   const latest = newestPasses(passes ?? [])[0];
-  const laneSummary = snapshot?.lanes ? formatSnapshotLaneSummary(snapshot.lanes, session?.lanes) : null;
+  const runningSummary = snapshot?.running_work ? formatRunningWorkSummaryLine(snapshot.running_work) : null;
+  const laneSummary = !runningSummary && snapshot?.lanes ? formatSnapshotLaneSummary(snapshot.lanes, session?.lanes) : null;
   return <section className="loop-summary" aria-label="Loop summary">
     <div className="loop-summary__state"><ClassState value={state} />
       <span>{alive ? "Loop alive: the recorded heartbeat is current." : "no loop is running"}</span>
@@ -77,7 +78,7 @@ export function LoopSummary({ drain, passes, error, readError, snapshot, now = D
       <p>last pass <EntityLink kind="pass" id={passStamp(latest.dispatched_at_ms)} /> → {passCounts(latest)}</p>
     </> : <p>{passes ? "No pass recorded." : "Reading passes…"}</p>}
     {session ? <p>started {localTime(session.started_at_ms)} · last heartbeat {localTime(session.refreshed_at_ms)}</p> : null}
-    {laneSummary ? <p className="loop-summary__lanes">lanes: {laneSummary}</p> : null}
+    {runningSummary ? <p className="loop-summary__lanes">running: {runningSummary}</p> : laneSummary ? <p className="loop-summary__lanes">lanes: {laneSummary}</p> : null}
     <p>session {session ? <a className="session-link" href={`/passes?session=${encodeURIComponent(session.session_id)}`}><code>{session.session_id}</code></a> : "not recorded"}</p>
   </section>;
 }
@@ -109,9 +110,10 @@ export function EntityText({ value, snapshot, rows = [], passes = [] }: { value:
 }
 
 const CLASSES = ["alarm", "needs you", "needs a cause", "waits on work", "waits on the loop", "ready", "moving"];
-export function Home({ snapshot, waiting, waitingError, passes, passesError, lanes, lanesError, now, whySource, designsWaiting, alerts, alertsError }: {
+export function Home({ snapshot, waiting, waitingError, passes, passesError, runningWork, runningWorkError, now, whySource, designsWaiting, alerts, alertsError }: {
   whySource?: WhySource; designsWaiting?: WaitingRow[];
-  lanes?: LaneRow[]; lanesError?: Error | null; now?: number;
+  lanes?: LaneRow[]; lanesError?: Error | null;
+  runningWork?: RunningWorkPayload; runningWorkError?: Error | null; now?: number;
   snapshot?: SnapshotData; waiting?: WaitingRow[]; waitingError?: Error | null;
   passes?: PassRow[]; passesError?: Error | null;
   alerts?: AlertsData; alertsError?: Error | null;
@@ -151,7 +153,7 @@ export function Home({ snapshot, waiting, waitingError, passes, passesError, lan
       </div>
       <aside>
         {!promotedAlerts ? <HomeAlertsPanel data={alerts} error={alertsError} promoted={false} /> : null}
-        <LaneStrip lanes={lanes} error={lanesError} now={now} configured={snapshot?.drain_summary.session?.lanes} />
+        <RunningWork data={runningWork} summaryFallback={snapshot?.running_work} error={runningWorkError} now={now} />
         <h2>Last passes</h2>
         {passesError ? <p role="alert">Passes refused: {passesError.message}</p> : passes ? passes.length ? <ul>{newestPasses(passes).slice(0, 3).map(pass => <li key={pass.dispatched_at_ms}>
           <EntityLink kind="pass" id={passStamp(pass.dispatched_at_ms)} /> · {passCounts(pass)}

@@ -1,7 +1,8 @@
 import { cleanup, fireEvent, render } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
 import { within } from "@testing-library/react";
-import { Home, LoopSummary } from "../src/components/Home";
+import { LoopSummary } from "../src/components/Home";
+import { LaneStrip } from "../src/components/LaneStrip";
 import { LaneDetail } from "../src/components/LanePage";
 import { ObservatoryHeaderBar } from "../src/components/ObservatoryHeaderBar";
 import { RunsPage } from "../src/components/RunsPage";
@@ -46,8 +47,8 @@ test("runs page folds idle lanes into one line that expands", () => {
   expect(rows()).toHaveLength(9);
 });
 
-test("home lane strip folds the same lanes", () => {
-  const { container } = render(<Home lanes={lanes} now={now} snapshot={{ drain_summary: { session: { lanes: ["lane-1"] } } } as never} />);
+test("lane strip folds idle lanes", () => {
+  const { container } = render(<LaneStrip lanes={lanes} now={now} configured={["lane-1"]} />);
   expect(container.querySelectorAll(".lane-strip li")).toHaveLength(2);
   expect(container.textContent).toContain("7 more idle lanes (show)");
 });
@@ -122,8 +123,8 @@ test("1 configured lane, 2 draining lanes and 20 idle historical lanes render as
   };
   const expectedHeader = "1 configured, 3 busy (1 of 1 configured + 2 draining old work) · 20 idle holding nothing";
 
-  // Home LaneStrip: header + three labeled groups + folded 20 idle lanes.
-  const home = render(<Home lanes={fixtureLanes} now={now} snapshot={snap} />);
+  // LaneStrip: header + three labeled groups + folded 20 idle lanes.
+  const home = render(<LaneStrip lanes={fixtureLanes} now={now} configured={snap.drain_summary.session?.lanes} />);
   const strip = home.container.querySelector(".lane-strip")!;
   expect(strip.textContent).toContain(expectedHeader);
   const confGroup = strip.querySelector('[data-lane-group="configured"]') as HTMLElement;

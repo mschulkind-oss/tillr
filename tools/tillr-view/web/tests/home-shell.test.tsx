@@ -33,7 +33,7 @@ function mount(refused = false, lanes: LaneRow[] = []) {
 test("Home shell reads snapshot, passes and the planner's why rows; nav and pause are real controls", async () => {
   const { container, fetch } = mount();
   await screen.findAllByRole("link", { name: "item-held" });
-  expect(new Set(fetch.mock.calls.map(([path]) => String(path)))).toEqual(new Set(["/api/v1/snapshot", "/api/v1/passes", "/api/v1/why", "/api/v1/lanes", "/api/v1/alerts"]));
+  expect(new Set(fetch.mock.calls.map(([path]) => String(path)))).toEqual(new Set(["/api/v1/snapshot", "/api/v1/passes", "/api/v1/why", "/api/v1/running-work", "/api/v1/alerts"]));
   expect(container.textContent).toContain("all held");
   for (const id of ["item-held", "OQ-1"]) {
     const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
