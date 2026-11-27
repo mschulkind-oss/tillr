@@ -348,7 +348,8 @@ Eighth: these report what sections 3 and 4 repair.
 54. [Read-face timing](../design/tillr-read-face-timing.md): a slow read command is measured and
     alerted on without the read writing to the store.
 
-55. [Session recording](../design/session-recording.md): its second and third slices.
+55. [Session recording](../design/session-recording.md): four owed slices, first the reader
+    that reads a Claude run's log and every backend's run record.
 
 56. [A watch any agent can use without tillr](../design/general-agent-watch.md): lower priority
     than the drain's own work by the owner's instruction. Seven slices wait on no question.

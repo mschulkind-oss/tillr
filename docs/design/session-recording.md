@@ -1,8 +1,8 @@
 ---
 title: "Session Recording — How Do We Record Agent Work Once and Query Every Claim, Cost, and Tick Later?"
 status: in-review
-stage: DESIGN
-next: "Decide whether the unbuilt parts (Section 10.2) are still wanted; if not, graduate the built part into the tillr-trace README."
+stage: DECIDED
+next: "Write the implementation plan for the four owed slices in Section 10.2, starting with reading a Claude run's log and run record."
 tags: [design, tillr, observability, recording, provenance]
 summary: "A recording layer that fills two missing observation seams (a fail-open shell command shim and per-run preservation of staged inputs), correlates the stores a run already writes, and checks a lane's report against the commands that actually ran."
 vantage:
@@ -11,11 +11,12 @@ vantage:
 
 # Session Recording — How Do We Record Agent Work Once and Query Every Claim, Cost, and Tick Later?
 
-**Status:** Partly built. The command shim, per-run record directory, the
-[`tillr-trace`](../../tools/tillr-trace/README.md) query commands and the slot-wait recording of
-[Section 4.4](#44-worker-test-slot-wait-recording-run-wall-time-split-and-chronological-scheduling-decisions-d-sr1)
-exist; [Section 10.2](#102-what-is-not-built) lists what does not. Where this document and the
-tillr-trace README differ, the README describes what runs.
+**Status:** 2026-11-27. Every decision is made; no question is open. The command shim, the per-run
+record directory and the [`tillr-trace`](../../tools/tillr-trace/README.md) query commands are
+built, and they answer in full only for a run on the `pi` backend. Four slices are owed and seven
+earlier proposals are dropped; [Section 10.2](#102-what-is-not-built) lists both. The decisions
+of 2026-11-27 (`D-SR2` to `D-SR6`) are the designer's, and the owner may overturn any of them.
+Where this document and the tillr-trace README differ, the README describes what runs.
 
 > **In short.** Do not build a network proxy and do not duplicate the stores a run already writes.
 > Add the two observations nothing else makes — every shell command a run starts, and the exact
@@ -33,7 +34,7 @@ for the mechanisms and
 **Reads with:** the [tillr-trace README](../../tools/tillr-trace/README.md) (what is built) and
 [the observatory reference](../reference/observatory-redesign.md) (where a run's record is shown).
 
-**Terms.** Three are coined here:
+**Terms.** Three are coined here, and one is tillr's own:
 
 - **`trace_key`** *(coined here)* — the correlation string
   `tick_id/item_id/run_id/session_id/span_id`, with `~` for an absent segment. It says where an
@@ -44,6 +45,9 @@ for the mechanisms and
 - **`claim_check`** *(coined here)* — a derived comparison of an assertion in a lane's report (such
   as "all five suites exit 0") with the `proc.exec` observations of the same run, including whether
   a suite ran after the last edit to the code it tests. It is not a gate verdict.
+- **Run record** — `run.record.json`, the file [`tillr-run`](../../tools/tillr-run/) writes in a
+  run's record directory when the run ends. It names the run's backend, state and exit code, and
+  carries the tokens and dollars the backend reported, in one shape for every backend.
 
 ---
 
@@ -58,8 +62,8 @@ plans and verdicts, and git. Three kinds of evidence fall between them:
 2. **What a run actually executed.** An agent's `bash` tool result records the outer shell string
    and its exit code. It cannot say which suites ran inside a compound command, in which directory,
    or whether one ran after the last edit to the code it tests.
-3. **What a run cost and called.** The adapter's report extraction reads the final report and
-   discards per-turn usage and tool calls that the run log holds.
+3. **What a run cost and called.** The adapter's report extraction reads the final report. The
+   run record keeps the usage each turn reported, and only the run log holds the tool calls.
 
 ---
 
@@ -73,8 +77,8 @@ invisible.
 
 | Seam | Reader over existing files | Shell command shim | Out-of-process HTTP proxy |
 | :--- | :--- | :--- | :--- |
-| Provider call (tokens, cost, route) | Complete for finished turns, from the run log | Blind | Sees wire bytes, but sits on the critical path and needs a trusted certificate in every runtime |
-| Agent tool calls | Complete, from the run log | Sees shell spawns only | Only by re-parsing each provider's stream format |
+| Provider call (tokens, cost, route) | Complete for finished turns, from the run record | Blind | Sees wire bytes, but sits on the critical path and needs a trusted certificate in every runtime |
+| Agent tool calls | Complete, from the run log, for a backend whose log shape the reader parses | Sees shell spawns only | Only by re-parsing each provider's stream format |
 | Run process (exit, timing) | Complete, from the store | Complete | Blind |
 | Staged inputs (brief, fence, base sha) | Lost when a lane is reused, unless kept per run | — | Blind |
 | Commands inside a shell | Blind | Complete: one row per command with its directory and exit code | Blind |
@@ -86,18 +90,28 @@ Recording uses cooperating mechanisms and rejects an out-of-process HTTP proxy:
 
 1. **A reader over existing artifacts.** [`tillr-trace`](../../tools/tillr-trace/README.md) parses
    the run log, `proc-exec.jsonl`, the gate plan and verdict, and opens `.tillr/state.db` read-only.
-   It re-captures nothing.
-2. **A fail-open shell command shim.** The run adapters
+   It re-captures nothing. [Section 4.5](#45-one-reader-for-every-backend-d-sr2) says what it reads
+   for each backend.
+2. **A fail-open shell command shim.** Three run adapters
    ([`run-pi`](../../tools/tillr-run/backends/pi/run-pi),
-   [`run-claude`](../../tools/tillr-run/backends/claude/run-claude)) export `TILLR_TRACE_DIR` and
+   [`run-claude`](../../tools/tillr-run/backends/claude/run-claude) and
+   [`run-native`](../../tools/tillr-run/backends/native/run-native)) export `TILLR_TRACE_DIR` and
    set `BASH_ENV` to [`bash-shim.sh`](../../tools/tillr-trace/bash-shim.sh), so every
    non-interactive shell a run starts appends one `proc.exec` line per command. `BASH_ENV` is
    chosen over system-call tracing, library preloading and kernel probes because it works
-   unprivileged in a container and covers statically linked binaries.
+   unprivileged in a container and covers statically linked binaries. **Owed (`D-SR4`, the
+   designer's decision):** [`run-agy`](../../tools/tillr-run/backends/agy/run-agy) and
+   [`run-muse`](../../tools/tillr-run/backends/muse/run-muse) set neither variable
+   (`rg -l BASH_ENV tools/tillr-run/backends` names only the `pi`, `claude` and `native`
+   directories, 2026-11-27), so a run on either records no command. Each sets both, and unsets the
+   git trace variables, exactly as the other three do. Where a backend's agent runs its shells
+   somewhere the adapter's environment does not reach, the shim records nothing and the run's
+   command record reads `missing`; that is the fail-open outcome and not a fault.
 3. **Per-run preservation of staged inputs.** The brief, fence and base sha a run was staged with
    are kept in that run's own record directory, not only in the reusable lane.
-4. **Provider usage from the agent's own stream.** Per-turn tokens and cost are read from the run
-   log the agent already emits. No network proxy is placed on the provider path.
+4. **Provider usage from what the agent already reported.** Tokens and dollars are read from the
+   run record, which holds what the agent's own stream reported. No network proxy is placed on the
+   provider path.
 
 > [!IMPORTANT]
 > **Git trace2 is not recorded** (owner ruling, 2026-11-17). A `GIT_TRACE2_EVENT` variable set for
@@ -123,7 +137,7 @@ Two directories hold one run's artifacts, and `tillr-trace` reads both:
 <root>/.tillr/loop/<run-id>/        the drain's per-run record directory
 ├── brief.md, fence.txt, base_sha   the staged inputs of this run
 ├── proc-exec.jsonl                 one line per shell command (the shim)
-├── slot-waits.jsonl                one line per test-slot wait
+├── run.record.json                 the run record: backend, state, exit code, usage
 └── gate.plan.json, gate.verdict.json
 
 <trace-root>/runs/<run-id>/         an optional recorder directory
@@ -193,45 +207,80 @@ Every row has a flat header and a typed payload:
 | :--- | :--- | :--- |
 | `tick.decision` | the store's `dispatches` | dispatch or hold, reason, route |
 | `run.lifecycle` | the store's `runs` | state, exit code, base and head sha |
-| `llm.turn` | the run log | provider, model, tokens, cost, stop reason |
+| `llm.turn` | the run record and the run log ([Section 4.5](#45-one-reader-for-every-backend-d-sr2)) | provider, model, tokens, cost, stop reason |
 | `tool.call` | the run log | tool name, target path or command preview, error flag, result size |
 | `proc.exec` | `proc-exec.jsonl` | command, directory, exit code, duration |
-| `slot.wait` | `slot-waits.jsonl` | wait interval, slot, class, whether acquired |
 | `gate.plan` | `gate.plan.json` | plan id, base, tree, check ids |
 | `gate.verdict` | `gate.verdict.json` | verdict, failed check ids, timings |
 | `claim.verdict` | `tillr-trace` | claim text, `verified`, `disproved` or `unverified`, reason |
 | `unreadable` | `tillr-trace` | the artifact that could not be read and why |
 
 `unreadable` exists so that an artifact nobody could read is a recorded fact, not an empty result
-that reads as "nothing happened". Kinds the design names and nothing emits are listed in
+that reads as "nothing happened". Kinds this design once named and no longer wants are listed in
 [Section 10.2](#102-what-is-not-built).
 
 ### 4.4 Worker Test-Slot Wait Recording, Run Wall-Time Split, and Chronological Scheduling Decisions (`D-SR1`)
 
-A run's wall time can be dominated by a worker tool waiting for a test slot, which neither the run
-log nor the model's turn durations show. `D-SR1` (cross-referenced as `D-OR7` in
+`D-SR1` (cross-referenced as `D-OR7` in
 [the observatory reference](../reference/observatory-redesign.md#why-its-this-way)) is a designer's
 decision from an operator-filed request, not an owner ruling; the owner may overturn it. It
-specifies three things:
+specified three things, and two remain:
 
-1. **Fail-open slot-wait spans.** Whenever `acquire_shard_slot` in
-   `tools/go-test-shards.py` finishes waiting, and
-   `$TILLR_TRACE_DIR` names a directory, it appends one JSON line to `slot-waits.jsonl` with the
-   wait's start and end, `waited_ms`, slot, class and whether the slot was acquired. An immediate
-   acquisition records `waited_ms: 0`, so an observed zero wait is distinct from an unrecorded
-   run. A write failure is swallowed.
+1. **Slot-wait recording is retired (`D-SR5`, the designer's decision).** `D-SR1` had the test
+   runner append one line per test-slot wait to `slot-waits.jsonl`. The owner's ruling
+   [`OQ-GTC1`](./gate-test-capacity.md#OQ-GTC1) of 2026-11-25 removed the limit those waits came
+   from: tillr imposes no machine-wide limit on concurrent test processes, and the cross-run slot
+   pool was deleted with its recording. Nothing writes the file now
+   (`rg 'slot-waits' tools -g '*.go' -g '!*_test.go'` finds only readers in
+   [`tools/tillr-view`](../../tools/tillr-view/) and a documentation check in `tools/tillr`,
+   2026-11-27), and a run cannot wait on a slot that does not exist. The `slot.wait` row kind and
+   the file leave this design. What still reads them is owed for removal
+   ([Section 10.2](#102-what-is-not-built)).
 2. **A per-run wall-time split.** [`tillr-view`](../../tools/tillr-view/) serves, on the run page
-   and `GET /api/v1/runs/{id}`, total wall time, model time, tool time and test-slot wait. Slot
-   wait is the **union** of the recorded intervals, never the sum across concurrent shard threads,
-   and active tool time is tool time minus slot wait, so the parts partition the wall time. A
-   quantity nothing recorded reads `not recorded`, never `0`.
+   and `GET /api/v1/runs/{id}`, total wall time, model time and tool time. A quantity nothing
+   recorded reads `not recorded`, never `0`. Until the removal above lands, the split also carries
+   a test-slot wait that reads `not recorded` on every run started after 2026-11-25.
 3. **The drain's scheduling decisions for the run, in order.** Allocation and launch, gate start
    and end, refusal or landing, and retry or continuation, read on demand from the store and the
    run's record directory.
 
-**Rejected:** scraping stderr notices as the primary source of slot waits; summing concurrent
-per-thread waits; showing `0 ms` for an unrecorded wait; a persistent trace index or a writable
-store handle in `tillr-view`.
+**Rejected:** showing `0 ms` for a quantity nothing recorded; a persistent trace index or a
+writable store handle in `tillr-view`.
+
+### 4.5 One reader for every backend (`D-SR2`)
+
+The reader was written against the `pi` backend's log and reads nothing from any other. Measured
+on 2026-11-27, `tillr-trace audit` of a finished run on the Claude backend reported the log `ok`
+with `0 rows`: no `llm.turn`, no `tool.call` and no claim verdict. `tillr-trace cost --runs 30`
+answered `no llm.turn row` while the run records of the same runs held their tokens and dollars.
+That is the answer [Section 4.3](#43-obsevent-jsonl-schema) says a recorder must never give by
+accident: an unread log shown as an empty one. Of the 300 most recent run record directories that
+day, 34 were Claude runs.
+
+`D-SR2` is the designer's decision of 2026-11-27, and the owner may overturn it:
+
+1. **Tokens and dollars come from the run record, for every backend.** `tillr-run` already
+   reduces each backend's usage report to one shape there, so the reader needs no per-backend
+   arithmetic. A run with no run record takes its usage from the log when a parser for that log
+   yields usage, and otherwise its tokens and dollars read `not recorded`, never `0`.
+2. **Tool calls, turn timing and stop reason come from the run log, through a parser for that
+   backend's log shape.** Two shapes are owed: the `pi` shape, which is built, and the Claude
+   shape. Each parser maps its backend's tool names onto the three the claim join of
+   [Section 8.3](#83-mechanical-claim-verification-tillr-trace-verify-claims) uses: a file edit, a
+   file write and a shell command.
+3. **A log in a shape no parser recognizes reads `unreadable`,** with a reason that names the
+   backend. It never reads `ok` with no rows. Its claims are `unverified`. How the reader
+   recognizes a shape is the implementer's choice.
+4. **Dollars are never split by a guess.** The run record gives tokens for each model and one
+   dollar total for the run. In the per-model table of `tillr-trace cost`, a run that spent tokens
+   on more than one model is counted under `mixed`. Its dollars still count in full under its lane
+   and its route.
+5. **When the run record and the log disagree about usage, the run record is right**
+   ([Section 6.3](#63-single-source-of-truth-which-store-is-authoritative-for-which-fact)).
+
+The slice is done when `tillr-trace audit` of a Claude run lists its turns, tool calls and claim
+verdicts, and `tillr-trace cost` over runs that are all Claude runs prints a dollar total equal to
+the sum of those runs' run-record totals.
 
 ---
 
@@ -252,8 +301,14 @@ answer shows.
 | File and tool-result content | Stored as path, size and digest, never as text; only `bash` command previews are kept, capped at 200 characters | `tillr-trace` |
 | Third-party conversation and browser page dumps | Timing and byte count only | `tillr-trace`, by tool name |
 
-*Not enforced:* scrubbing at the emitter. `proc-exec.jsonl` holds the command text as typed, so a
-secret passed on a command line reaches disk in that file.
+**The emitter does not scrub, and will not (`D-SR6`, the designer's decision).**
+`proc-exec.jsonl` holds the command text as typed, so a secret passed on a command line reaches
+disk in that file. Scrubbing in the shim would not keep it off the disk: the run log beside it
+records the same command string as the agent typed it, and the shim's budget
+([Section 7.2](#72-overhead)) allows shell builtins only, which cannot match token shapes
+reliably. The boundary that holds is the directory: `.tillr/` is ignored by git
+(`git check-ignore .tillr/loop/x` matches, 2026-11-27), is never delivered, and is read only
+through a reader that scrubs what it shows.
 
 ### 5.2 What the record cannot answer
 
@@ -268,13 +323,17 @@ bytes came back, and whether two reads returned the same content.
 ### 6.1 Volume
 
 The shim writes one line per shell command. In one measured corpus of 1,204 runs, logs held 6.4 GB
-and `proc-exec.jsonl` files 2.2 GB; the largest single `proc-exec.jsonl` was 152 MB.
+and `proc-exec.jsonl` files 2.2 GB; the largest single `proc-exec.jsonl` was 152 MB. On
+2026-11-27 this workspace's 1,290 run record directories held 3.7 GB (`du -sh .tillr/loop`).
 
 ### 6.2 Retention
 
-No retention or compaction of run record directories is built. It is an open part of this design:
-a policy must keep the evidence behind a failure (a failing command, a failed verdict, a disproved
-claim) longer than the output of passing commands.
+This design sets no retention policy (`D-SR6`, the designer's decision). A run's record directory
+is part of the execution record that
+[the queue persistence reference](../reference/tillr-queue-persistence.md#why-its-this-way) owns:
+it is retained across restarts, and deleting any of it is the unbuilt `tillr store retire-epoch`
+and size caps named there. A second policy here would give one directory two owners. The recorder
+never deletes, truncates or rewrites a record file.
 
 ### 6.3 Single Source of Truth: Which Store Is Authoritative for Which Fact
 
@@ -285,8 +344,9 @@ The recorder never competes with `.tillr/state.db`. Every fact has one authorita
 | Item lifecycle, dispatch decisions, run terminal state, landings | `.tillr/state.db` | Opens it read-only; never writes or migrates it |
 | Gate plan and verdict | `.tillr/loop/<run-id>/gate.{plan,verdict}.json` | Parses them |
 | Committed trees and landed commits | Git | Reads recorded shas |
-| Model turns, tool calls, usage | The run log | Parses turn and tool rows |
-| Staged inputs per run, shell commands, slot waits | The run's record directory | Authoritative here: no other store keeps them |
+| Tokens and dollars a run spent | The run record | Reads its usage ([Section 4.5](#45-one-reader-for-every-backend-d-sr2)) |
+| Tool calls, turn timing, stop reason | The run log | Parses turn and tool rows |
+| Staged inputs per run, shell commands | The run's record directory | Authoritative here: no other store keeps them |
 
 When a derived row and a source file disagree, the source file is right, and every command prints
 the artifact path its answer was read from.
@@ -307,6 +367,14 @@ The recorder must not be able to fail a launch, a run or a landing.
    run. Readers open it read-only.
 4. **Bounded capture.** Each command's recorded text is capped, and readers parse JSONL one line at
    a time, so peak memory is the rows kept, not the size of the largest file.
+
+**Owed (`D-SR3`, the designer's decision): every line the shim writes is valid JSON, whatever the
+command contains.** Measured on 2026-11-27, one multi-line command left a raw control character
+inside a JSON string, so 1 of a run's 655 `proc-exec.jsonl` lines did not parse and the run's whole
+command record read `corrupt`. The shim escapes or replaces every character JSON forbids in a
+string; which of the two is the implementer's choice, inside the same builtins-only budget and
+the same 512-byte cap. The slice is done when a command holding a tab, a newline and an escape
+character yields one row that parses.
 
 ### 7.2 Overhead
 
@@ -375,24 +443,40 @@ when the record cannot answer it; absent evidence is never promoted to proof or 
 
 ### 10.1 Scope and Files Touched (`ESTIMATE: 3–4 hours`, ~430 LoC)
 
-The first slice, which is built, has three parts:
+The first slice is built and has three parts. Its reader answers in full only for a `pi` run
+([Section 4.5](#45-one-reader-for-every-backend-d-sr2)):
 
 | Part | Where |
 | :--- | :--- |
 | Per-run record directory holding the staged brief, fence and base sha | [`tools/tillr-drain`](../../tools/tillr-drain/) |
-| Fail-open shell command shim, set by the run adapters | [`bash-shim.sh`](../../tools/tillr-trace/bash-shim.sh), [`run-pi`](../../tools/tillr-run/backends/pi/run-pi), [`run-claude`](../../tools/tillr-run/backends/claude/run-claude) |
+| Fail-open shell command shim, set by three of the five run adapters | [`bash-shim.sh`](../../tools/tillr-trace/bash-shim.sh), [`run-pi`](../../tools/tillr-run/backends/pi/run-pi), [`run-claude`](../../tools/tillr-run/backends/claude/run-claude), [`run-native`](../../tools/tillr-run/backends/native/run-native) |
 | Reader and query commands `tick`, `audit`, `run`, `cost`, `discrepancies` | [`tools/tillr-trace`](../../tools/tillr-trace/) |
 
 ### 10.2 What is not built
 
-- Indexing interactive agent sessions that did not run under `tillr-run`.
-- A content-addressed store of full command output, and any retention policy
-  ([Section 6.2](#62-retention)).
-- Provider retry events (`llm.retry`), `tick.stage` and `boundary.check` rows, and writing
-  `claim.verdict` rows back to disk.
-- Restoring a run's staged inputs into a scratch worktree for re-dispatch.
-- Reading more than one workspace in a single query.
-- Scrubbing secrets at the emitter ([Section 5.1](#51-what-is-excluded-and-how-it-is-enforced-at-two-mechanical-gates)).
+**Owed.** Four slices, none of which waits on another. The first restores answers the current
+backend has lost, so it goes first:
+
+| Slice | Decision | Done when |
+| :--- | :--- | :--- |
+| The reader reads a Claude run's log and every backend's run record | `D-SR2`, [Section 4.5](#45-one-reader-for-every-backend-d-sr2) | The outcome stated at the end of that section |
+| Every `proc.exec` line is valid JSON | `D-SR3`, [Section 7.1](#71-four-mechanical-fail-open-guarantees) | The outcome stated there |
+| `run-agy` and `run-muse` set the shim | `D-SR4`, [Section 2.2](#22-architectural-ruling-collector-commandgit-shim-and-in-process-hook-no-network-proxy) | A run on either backend leaves a `proc-exec.jsonl` with its commands, or reads `missing` where the adapter's environment does not reach the agent's shells |
+| Remove what still reads slot waits | `D-SR5`, [Section 4.4](#44-worker-test-slot-wait-recording-run-wall-time-split-and-chronological-scheduling-decisions-d-sr1) | The run page and `GET /api/v1/runs/{id}` carry no test-slot wait, and no code or README under `tools/` names `slot-waits.jsonl` |
+
+**Dropped (`D-SR6`, the designer's decision of 2026-11-27; the owner may overturn any line).** Each
+was proposed in an earlier form of this design and none is built. Nothing in the tree reads or
+waits on any of them:
+
+| Proposal | Why it is dropped |
+| :--- | :--- |
+| Indexing interactive agent sessions that did not run under `tillr-run` | Such a session has no run, brief, fence or item to join to, and [`OQ-SR2`](#122-decision-ledger) rules the shim out of a shell a person opens |
+| A content-addressed store of full command output | [Section 5.1](#51-what-is-excluded-and-how-it-is-enforced-at-two-mechanical-gates) excludes output text from the record, and the store would be the credential cache that section exists to prevent |
+| A retention policy of this design's own | [Section 6.2](#62-retention): the persistence reference owns the directory |
+| `llm.retry`, `tick.stage` and `boundary.check` rows, and writing `claim.verdict` rows to disk | A written verdict is cached derived data, which [`OQ-SR7`](#122-decision-ledger) rules out. The drain's own `steps.jsonl` already records a run's stages and `tillr-view` reads it directly |
+| Restoring a run's staged inputs into a scratch worktree for re-dispatch | The inputs are kept and readable; dispatching again from an item is the drain's job and needs no restore |
+| Reading more than one workspace in a single query | [`OQ-SR3`](#122-decision-ledger) keeps one trace per workspace; a second workspace is a second command |
+| Scrubbing secrets at the emitter | [Section 5.1](#51-what-is-excluded-and-how-it-is-enforced-at-two-mechanical-gates) |
 
 ---
 
@@ -405,7 +489,8 @@ The first slice, which is built, has three parts:
 | A suite that ran before the last edit is counted as proof | The post-edit join of [Section 8.3](#83-mechanical-claim-verification-tillr-trace-verify-claims) |
 | A compound shell command hides a skipped or failed suite | One `proc.exec` row per command, independent of the outer shell's exit |
 | The recorder fails or slows a run | The fail-open guarantees of [Section 7.1](#71-four-mechanical-fail-open-guarantees) |
-| A new agent backend records nothing | The shim sits in the adapter's environment, below the agent binary |
+| A new agent backend records nothing | The shim sits in the adapter's environment, below the agent binary, and every adapter sets it (`D-SR4`, owed for two) |
+| A backend's log is in a shape the reader does not parse, and the run reads as having done nothing | An unrecognized log reads `unreadable` and names the backend (`D-SR2`, owed) |
 
 ---
 
@@ -416,10 +501,15 @@ The first slice, which is built, has three parts:
 | ID | Ruling / Decision | Date | Settled in | Built |
 | :--- | :--- | :--- | :--- | :--- |
 | OQ-SR1 | A disproved report claim is **advisory**: it is recorded beside the verdict and never rejects a candidate before the gate. A parser heuristic that blocks a valid candidate is worse than a slow gate. Owner ruling | 2026-11-12 | [Section 8.3](#83-mechanical-claim-verification-tillr-trace-verify-claims) | Yes |
-| OQ-SR2 | The shim is enabled for **every agent-spawned shell** and never for a shell a person opens. Owner ruling | 2026-11-12 | [Section 2.2](#22-architectural-ruling-collector-commandgit-shim-and-in-process-hook-no-network-proxy) | For `tillr-run` workers |
+| OQ-SR2 | The shim is enabled for **every agent-spawned shell** and never for a shell a person opens. Owner ruling | 2026-11-12 | [Section 2.2](#22-architectural-ruling-collector-commandgit-shim-and-in-process-hook-no-network-proxy) | For runs on the `pi`, `claude` and `native` adapters; `agy` and `muse` are owed (`D-SR4`) |
 | OQ-SR3 | One trace **per workspace**; no shared writable file across workspaces. Owner ruling | 2026-11-12 | [Section 3.2](#32-concrete-directory-layout) | Yes |
 | OQ-SR4 | Reader over existing artifacts plus a shell shim; no HTTP proxy | 2026-11-12 | [Section 2.2](#22-architectural-ruling-collector-commandgit-shim-and-in-process-hook-no-network-proxy) | Yes |
 | OQ-SR5 | Trace child commands through `BASH_ENV`. Git trace2 is not recorded (owner ruling, 2026-11-17) | 2026-11-17 | [Section 2.2](#22-architectural-ruling-collector-commandgit-shim-and-in-process-hook-no-network-proxy) | Yes |
 | OQ-SR6 | Keep each run's brief, fence and base sha in a per-run directory | 2026-11-12 | [Section 3.2](#32-concrete-directory-layout) | Yes |
 | OQ-SR7 | `.tillr/state.db` is joined strictly read-only and stays the sole source of workflow state. No persistent index (owner ruling, 2026-11-18) | 2026-11-18 | [Section 6.3](#63-single-source-of-truth-which-store-is-authoritative-for-which-fact) | Yes |
-| D-SR1 | Record worker test-slot waits fail-open, and show a per-run wall-time split and the run's scheduling decisions. Designer's decision; the owner may overturn it | 2026-11-20 | [Section 4.4](#44-worker-test-slot-wait-recording-run-wall-time-split-and-chronological-scheduling-decisions-d-sr1) | Yes: `slot-waits.jsonl` in `tools/go-test-shards.py`; `run_timing.go` and `run_schedule.go` in `tools/tillr-view` |
+| D-SR1 | Record worker test-slot waits fail-open, and show a per-run wall-time split and the run's scheduling decisions. Designer's decision; the owner may overturn it | 2026-11-20 | [Section 4.4](#44-worker-test-slot-wait-recording-run-wall-time-split-and-chronological-scheduling-decisions-d-sr1) | The wall-time split and the schedule: `run_timing.go` and `run_schedule.go` in `tools/tillr-view`. The slot-wait recording is retired by `D-SR5` |
+| D-SR2 | The reader takes tokens and dollars from the run record for every backend and tool calls from the run log through a parser for each backend's log shape; an unrecognized log reads `unreadable`. **Rejected:** per-backend usage arithmetic in the reader; splitting a run's dollars across models by token share. Designer's decision; the owner may overturn it | 2026-11-27 | [Section 4.5](#45-one-reader-for-every-backend-d-sr2) | No: only the `pi` log shape is read |
+| D-SR3 | Every line the shim writes is valid JSON whatever the command contains. Designer's decision; the owner may overturn it | 2026-11-27 | [Section 7.1](#71-four-mechanical-fail-open-guarantees) | No |
+| D-SR4 | `run-agy` and `run-muse` set the shim as the other three adapters do, which completes [`OQ-SR2`](#122-decision-ledger). Designer's decision; the owner may overturn it | 2026-11-27 | [Section 2.2](#22-architectural-ruling-collector-commandgit-shim-and-in-process-hook-no-network-proxy) | No |
+| D-SR5 | Slot-wait recording is retired, and its readers are removed, because the owner's ruling [`OQ-GTC1`](./gate-test-capacity.md#OQ-GTC1) of 2026-11-25 deleted the cross-run slot pool. **Rejected:** keeping a wait that reads `not recorded` on every run. Designer's decision; the owner may overturn it | 2026-11-27 | [Section 4.4](#44-worker-test-slot-wait-recording-run-wall-time-split-and-chronological-scheduling-decisions-d-sr1) | No: the readers remain in `tools/tillr-view` |
+| D-SR6 | Seven earlier proposals are dropped: interactive sessions, a store of command output, a retention policy of this design's own, the `llm.retry`, `tick.stage` and `boundary.check` rows with written claim verdicts, restoring staged inputs, multi-workspace queries, and scrubbing at the emitter. Designer's decision; the owner may overturn any of them | 2026-11-27 | [Section 10.2](#102-what-is-not-built) | Nothing to build |
