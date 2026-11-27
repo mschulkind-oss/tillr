@@ -540,15 +540,51 @@ func carryReturnedNodeInputs(tx *store.Tx, d Decision) error {
 	}
 	for i := 0; i < d.NodeIndex; i++ {
 		id := d.Workflow.Stages[i].ID
-		source, err := nodeSourceAttempt(tx.Reader(), d.ItemID, old.Attempt, id)
+		source, ok, err := returnedNodeSource(tx.Reader(), d.ItemID, old.Attempt, d.Attempt, id)
 		if err != nil {
 			return err
+		}
+		if !ok {
+			continue
 		}
 		if _, err := tx.Exec(`INSERT INTO node_reused(item_id,attempt,node_id,source_attempt) VALUES(?,?,?,?) ON CONFLICT(item_id,attempt,node_id) DO NOTHING`, d.ItemID, d.Attempt, id, source); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// returnedNodeSource answers the attempt whose run of node a returned resume reuses: the
+// returned session's attempt, or the attempt that one reused the node from, provided a run
+// of the node is recorded there. A session recorded without an attempt, or a reuse that
+// names an attempt where the node never ran, falls back to the latest earlier attempt in
+// which the node passed. Reusing an attempt with no run of the node would leave the node
+// without an outcome, so the workflow would dispatch it again after the resumed writer,
+// and a first node's staging resets the lane to the base, away from the offered commit.
+// ok is false when no earlier attempt ran the node.
+func returnedNodeSource(r *store.Reader, itemID string, from, before int, node string) (int, bool, error) {
+	if from > 0 {
+		source, err := nodeSourceAttempt(r, itemID, from, node)
+		if err != nil {
+			return 0, false, err
+		}
+		var ran bool
+		if err := r.QueryRow(`SELECT EXISTS(SELECT 1 FROM node_runs WHERE item_id=? AND attempt=? AND node_id=?)`, itemID, source, node).Scan(&ran); err != nil {
+			return 0, false, err
+		}
+		if ran {
+			return source, true, nil
+		}
+	}
+	var source int
+	err := r.QueryRow(`SELECT attempt FROM node_runs WHERE item_id=? AND node_id=? AND outcome='passed' AND attempt<? ORDER BY attempt DESC LIMIT 1`, itemID, node, before).Scan(&source)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	return source, true, nil
 }
 
 // judgedCandidateReturn identifies a retained candidate, not merely a resumed conversation.
