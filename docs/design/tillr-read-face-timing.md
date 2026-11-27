@@ -1,11 +1,11 @@
 ---
 title: "A single-flight sampler in tillr-drain loop times read faces into drain.read-face-timing so read faces stay read-only"
-status: in-review
-stage: DESIGN
-updated: 2026-11-24
+status: accepted
+stage: DECIDED
+updated: 2026-11-27
 tags: [tillr, watch, drain, alerting, performance, contracts, design]
 summary: "A read face opens the store read-only and emits no events, so nothing alerts when one grows slow. A bounded, non-overlapping sampler in tillr-drain loop runs each configured read face as a subprocess and appends one drain.read-face-timing event per sample, which tillr-watch rules read with no engine change. Alert thresholds are computed from a recorded baseline of live samples, never guessed."
-next: "The owner reviews D-RFT1 to D-RFT6; then build slice 1, record the live baseline, and build slice 2 from it."
+next: "Plan and build slice 1, record the live baseline, then build slice 2 from it."
 depends-on:
   - tillr-watch.md
   - tillr-utility-contracts.md
@@ -17,7 +17,7 @@ vantage:
 
 # A single-flight sampler in `tillr-drain loop` times read faces into `drain.read-face-timing` so read faces stay read-only
 
-**Status:** Nothing in this design is built: `rg -n 'read-face-timing|readFaceSampler' tools config` returns nothing.
+**Status:** 2026-11-27. Every decision is in and no question is open. Nothing in this design is built: `rg -n 'read-face-timing|readFaceSampler' tools config` returns nothing.
 
 > **In short.** A read face such as `tillr drain why` must stay read-only and silent, yet it regresses precisely when nobody is calling it. `tillr-drain loop` therefore samples each configured read face on a timer and records the duration as an event, so `tillr-watch` can alert on a slow or broken read face without touching the read face or the watch engine.
 
@@ -31,7 +31,7 @@ vantage:
 
 **Needs your ruling:** None. The design neither depends on nor guesses [OQ-GW2](./general-agent-watch.md#OQ-GW2) or [OQ-GW3](./general-agent-watch.md#OQ-GW3).
 
-**Awaits your review:** the designer's decisions `D-RFT1` to `D-RFT6` in the [Decision Ledger](#decision-ledger).
+**Designer's decisions:** `D-RFT1` to `D-RFT6` in the [Decision Ledger](#decision-ledger). The owner may overturn any of them; none holds the build ([the design-to-planning rule](./tillr-design-to-planning-transition.md#41-one-mechanical-test-for-owner-holds-unanswered-question-directives-d-dt1-d-dt2)).
 
 **Reads with:** [the tillr-watch design](./tillr-watch.md) ([Section 5.5](./tillr-watch.md#55-fast-gate-time-two-rules-and-the-event-they-read-d-tw43), the fast-gate timing event this follows; [Section 6.9](./tillr-watch.md#69-rule-load-baselines-judging-only-events-from-a-rules-first-load-onward-d-tw66), rule load baselines), [the utility contracts](./tillr-utility-contracts.md), [the `tillr-watch` contract](./tillr-utility-contracts/tillr-watch.md), [the general agent watch design](./general-agent-watch.md), and [scheduling and notifications](./tillr-scheduling-and-notifications.md) (background work stays outside the scheduling pass).
 
@@ -59,18 +59,18 @@ Non-goals:
 Two facts in the tree constrain the choice:
 
 1. **Read faces have no side effects.** `whyFace` in [`tools/tillr-drain/why.go`](../../tools/tillr-drain/why.go) opens the store read-only, and `TestAReadOnlyOpenDoesNotMigrate` in [`conformance_test.go`](../../tools/tillr/conformance/conformance_test.go) pins that a read-only open does not migrate. The top-level `tillr` wrapper cannot time a face either: [`tools/tillr-cli/main.go`](../../tools/tillr-cli/main.go) replaces its own process with `syscall.Exec`.
-2. **`tillr-watch` reads store events and projections only.** `TillrStoreSource` ([`tillr_source.go`](../../tools/tillr/watch/tillr_source.go)) is the one source wired into [`tools/tillr-watch/main.go`](../../tools/tillr-watch/main.go). A `drain.*` event kind registered in `tools/tillr-drain/drain` is accepted by rule loading, which is how `drain.fast-gate-timing` ([`gate_timing.go`](../../tools/tillr-drain/drain/gate_timing.go)) already works.
+2. **`tillr-watch` reads store events and projections only.** `TillrStoreSource` ([`tillr_source.go`](../../tools/tillr/watch/tillr_source.go)) is the one source wired into [`tools/tillr-watch/main.go`](../../tools/tillr-watch/main.go). A `drain.*` event kind registered with the drain's other kinds ([`events.go`](../../tools/tillr-drain/internal/storelog/events.go)) is accepted by rule loading, which is how `drain.fast-gate-timing` ([`gate_timing.go`](../../tools/tillr-drain/internal/gatespans/gate_timing.go)) already works.
 
 | Candidate | With nobody calling the face | Effect on read-only contracts | Readable by `tillr-watch` today | Verdict |
 | :--- | :--- | :--- | :--- | :--- |
 | **The read face records its own duration** (in the store or a file beside it) | No samples. | Breaks them: a store write fails on a read-only store and contends for the writer lock; a file write fails on a read-only path unless the error is dropped ([R-RFT5](#R-RFT5)). | Store write yes; a file no. | Rejected |
-| **The Observatory records `/api/v1/why` latency** | No samples without an open browser tab. And while a loop is running, `whyPayload` in [`tools/tillr-view/why.go`](../../tools/tillr-view/why.go) answers from the last recorded pass (`whyFromPass`) and does not run `tillr-drain why` at all. | Its timing log stays outside the store; writing the store from a read route would break the server's own contract. | No. | Rejected |
+| **The Observatory records `/api/v1/why` latency** | No samples without an open browser tab. And while a loop is running, `whyPayload` in [`tools/tillr-view/why.go`](../../tools/tillr-view/why.go) answers from the last recorded pass (`whyFromPass` in [`why_pass.go`](../../tools/tillr-view/why_pass.go)) and does not run `tillr-drain why` at all. | Its timing log stays outside the store; writing the store from a read route would break the server's own contract. | No. | Rejected |
 | **A sampler in `tillr-drain loop`** | Samples whenever the loop is up. | Preserves them: only the loop, already a store writer, commits one small write after each sample. | Yes, with no engine change. | **Selected (`D-RFT1`)** |
 
 The sampler lives in the loop rather than in a separate process or in `tillr-watch` because:
 
 - the loop is already kept alive and already watched for silence by `drain-loop-no-pass` ([D-TW45](./tillr-watch.md#D-TW45)), where a separate sampler process could die unnoticed;
-- the loop already runs periodic external probes outside store transactions (`refreshQuotas` in [`quota_probe.go`](../../tools/tillr-drain/drain/quota_probe.go)) and already records a duration with a rolling median for a watch rule (`appendFastGateTiming`);
+- the loop already runs periodic external probes outside store transactions (`RefreshQuotas` in [`quota_probe.go`](../../tools/tillr-drain/internal/policy/quota_probe.go)) and already records a duration with a rolling median for a watch rule (`AppendFastGateTiming` in [`gate_timing.go`](../../tools/tillr-drain/internal/gatespans/gate_timing.go));
 - whether a watch rule may itself run a command is an open question ([OQ-GW2](./general-agent-watch.md#OQ-GW2)), and this design works under either answer.
 
 ---
@@ -104,7 +104,7 @@ The loop starts one sampler goroutine, bound by six rules:
    <tillr-drain> why --store <store> --root <root> [--policy <policy>] --json
    ```
 
-   With no lane or question-index flags, `whyFace` resolves the live loop's lanes and its saved question index exactly as it does for an operator.
+   With no `--lanes`, `--questions-cmd` or `--questions-index` flag, `whyFace` resolves the live loop's lanes and its saved question index exactly as it does for an operator.
 4. **Single flight.** The sampler waits `30s` after the loop starts, runs the face list sequentially, and arms a `5m` timer only after the cycle finishes. A second sample cannot start while one is running, however slow.
 5. **Bounded memory, and a ceiling for deadlock only.** Standard output is counted and discarded; standard error is kept up to 4 KiB. A slow run is never killed for being slow, since that would destroy the measurement ([R-RFT4](#R-RFT4)). A `10m` ceiling, or loop shutdown, ends the child's process group.
 6. **Degenerate cases.**
@@ -115,7 +115,7 @@ The loop starts one sampler goroutine, bound by six rules:
 
 ### 3.2 The event: `drain.read-face-timing` (`D-RFT3`)
 
-Registered by `tools/tillr-drain/drain`, with object type `read_face` and the face as object id. After a sample, the sampler reads the size of the store's write-ahead log file and appends one event in one short write transaction:
+Registered with the drain's other event kinds ([`events.go`](../../tools/tillr-drain/internal/storelog/events.go)), with object type `read_face` and the face as object id. After a sample, the sampler reads the size of the store's write-ahead log file and appends one event in one short write transaction:
 
 | Field | Type | Meaning |
 | :--- | :--- | :--- |
@@ -161,7 +161,7 @@ The producer and the rules ship separately, with a measurement window between th
 
 ### 4.3 The rules (`D-RFT4`)
 
-One file, `config/tillr/watch/read-face-slow.toml`, holds three `core` rules that read `drain.read-face-timing`, group by `face`, deliver to the foreground and to subscribers, and run no remedy:
+One file, `tools/tillr-watch/rules/read-face-slow.toml`, shipped with `tillr-watch` beside [`fast-gate-slow.toml`](../../tools/tillr-watch/rules/fast-gate-slow.toml), holds three `core` rules that read `drain.read-face-timing`, group by `face`, deliver to the foreground and to subscribers, and run no remedy:
 
 | Rule | Severity | Window | Fires when | Clears when | Catches |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -180,7 +180,7 @@ Guidance renders the subject and the event's `wall_ms`, `median12_wall_ms`, `wal
 | Slice | What lands | Done when |
 | ---: | :--- | :--- |
 | **1** | The sampler and the `drain.read-face-timing` event in `tools/tillr-drain`. | Tests show the face itself writes nothing, a slow child never overlaps the next sample, the median appears on the twelfth successful sample and ignores failures, shutdown during a sample writes no event, and the median query uses `events_by_object`. A live loop emits one event per `5m`. |
-| **2** | `config/tillr/watch/read-face-slow.toml`, calibrated from the live baseline, with a rule test in `tools/tillr-watch`. Follows slice 1 and the baseline window. | Tests show the rules load, fire and hold at each threshold boundary, clear on recovery, and keep episodes apart per face. |
+| **2** | `tools/tillr-watch/rules/read-face-slow.toml`, calibrated from the live baseline, with a rule test in `tools/tillr-watch`. Follows slice 1 and the baseline window. | Tests show the rules load, fire and hold at each threshold boundary, clear on recovery, and keep episodes apart per face. |
 
 ### 5.2 Alternatives and risks
 
