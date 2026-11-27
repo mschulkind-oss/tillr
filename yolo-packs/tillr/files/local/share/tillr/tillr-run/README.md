@@ -146,6 +146,9 @@ TILLR_RUN_EXEC_ID         Always: a unique per-execution token used to end detac
 TILLR_ITEM_ID             Always: the request's item_id, empty when omitted.
 TILLR_NODE_ID             Only when node_id is nonempty: the request's node_id; otherwise unset.
 TILLR_LANE_ID             Always: the resolved lane id (allocated if omitted).
+TILLR_ACCESS              Always: read_only or write, resolved from access, read_only_group or triage seat, staged access metadata, or write by default.
+TILLR_SEAT                Only when seat is nonempty: the request's seat; otherwise unset.
+TILLR_OUTPUTS_DIR         When run_id is nonempty: <store parent>/loop/<run_id>/artifacts; otherwise unset.
 TILLR_SESSION_MODE        Always: new for fresh/non-resumable sessions, resume for resumable continuations.
 TILLR_RESUME_PROMPT_FILE  Always: the continuation prompt path, empty for a fresh execution.
 TILLR_PAUSE_REQUEST       Always: the request-file path in this run's scratch directory.
