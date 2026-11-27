@@ -235,7 +235,7 @@ func TestRecordedVerdictExampleREADME(t *testing.T) {
 		if err := json.Unmarshal([]byte(line), &call); err != nil {
 			t.Fatal(err)
 		}
-		if expected[call.Item] == "" || (call.Node != "reproduce" && call.Node != "investigate") || call.Cwd != filepath.Join(root, ".tillr/lanes", call.Item, "work") {
+		if expected[call.Item] == "" || (call.Node != "reproduce" && call.Node != "investigate") || call.Cwd != filepath.Join(root, ".tillr/items", call.Item, "work") {
 			t.Fatalf("workflow call: %s", line)
 		}
 		if call.Node == "investigate" && seen[call.Item+":reproduce"] != 1 {
