@@ -533,6 +533,8 @@ func planRefSweep(r *store.Reader, refs []RefDisposition, operators map[string][
 			default:
 				ref.Reason = "saved edits; item can still be retried"
 			}
+		case strings.HasPrefix(ref.Ref, itemPinPrefix) || strings.HasPrefix(ref.Ref, itemPinLongPrefix):
+			ref.Reason = "item branch head pin; retained"
 		case strings.HasPrefix(ref.Ref, endedWorkPrefix):
 			ref.Reason = "ended item's saved uncommitted work; retained"
 		case strings.HasPrefix(ref.Ref, remoteSyncRefPrefix):

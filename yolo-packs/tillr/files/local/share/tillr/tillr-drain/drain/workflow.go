@@ -1028,7 +1028,7 @@ func (l *Loop) settleNodeFormat(ctx context.Context, d Decision, rec run.Record,
 		return true, err
 	}
 	if !l.nonLanding && effectiveAccess == "write" && head != "" && head != nodeBase {
-		if err := l.pinLane(ctx, d.LaneID, rec.RunID, head); err != nil {
+		if err := l.pinLane(ctx, d.LaneID, d.ItemID, rec.RunID, head); err != nil {
 			return true, err
 		}
 	}

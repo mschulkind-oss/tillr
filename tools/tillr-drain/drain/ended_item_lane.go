@@ -724,7 +724,7 @@ func (l *Loop) reclaimEndedItemLanes(ctx context.Context) error {
 		}
 		if saved {
 			if head, err := l.revParse(ctx, target, "HEAD"); err == nil && head != "" {
-				if err := l.pinLane(ctx, c.lane, c.runID, head); err != nil {
+				if err := l.pinLane(ctx, c.lane, c.itemID, c.runID, head); err != nil {
 					l.reportf("loop: lane %s head could not be pinned before restore: %v\n", c.lane, err)
 					continue
 				}

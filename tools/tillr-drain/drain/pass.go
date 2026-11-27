@@ -1561,7 +1561,7 @@ func (l *Loop) passPlansMode(ctx context.Context, at time.Time, generation *stri
 				l.retainUnpreserved(ctx, d.LaneID, id, l.headOf(ctx, d.LaneID), err)
 				continue
 			}
-			if err := l.pinLane(ctx, d.LaneID, id, l.headOf(ctx, d.LaneID)); err != nil {
+			if err := l.pinLane(ctx, d.LaneID, d.ItemID, id, l.headOf(ctx, d.LaneID)); err != nil {
 				if holdErr := l.holdItemFault(ctx, Candidate{ItemID: d.ItemID, RunID: id, LaneID: d.LaneID}, ReasonSettleFailed, err.Error()); holdErr != nil && asItemTerminal(holdErr) == nil {
 					return nil, nil, holdErr
 				}
@@ -3829,7 +3829,7 @@ func (l *Loop) examineClaimed(ctx context.Context, d Decision, work *pendingWork
 				head, headErr := l.revParse(ctx, l.laneTarget(d.LaneID), "HEAD")
 				err = headErr
 				if err == nil {
-					err = l.pinLane(ctx, d.LaneID, d.RunRequest.RunID, head)
+					err = l.pinLane(ctx, d.LaneID, d.ItemID, d.RunRequest.RunID, head)
 				}
 			}
 			if err == nil {

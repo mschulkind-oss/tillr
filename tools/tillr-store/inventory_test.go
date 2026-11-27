@@ -335,3 +335,21 @@ func TestInventoryRefusesMissingRootWithoutCreatingFiles(t *testing.T) {
 		t.Fatalf("root created: %v", err)
 	}
 }
+
+func TestInventoryDescribesItemPinRefs(t *testing.T) {
+	root, _ := inventoryFixture(t)
+	tree := strings.TrimSpace(inventoryGit(t, root, "mktree"))
+	inventoryGit(t, root, "update-ref", "refs/tillr/items/item-a", tree)
+	inventoryGit(t, root, "update-ref", "refs/tillr/items-long/0123456789abcdef", tree)
+
+	p, _ := readInventory(t, root)
+	for _, name := range []string{"items", "items-long"} {
+		row := findInventoryRow(t, p, "refs/tillr", name)
+		if row.Count != 1 || row.Bytes != nil {
+			t.Fatalf("%s row = %+v, want count=1 bytes=nil", name, row)
+		}
+		if row.Description == "" || row.Description == "undescribed" {
+			t.Fatalf("%s description = %q, want described", name, row.Description)
+		}
+	}
+}

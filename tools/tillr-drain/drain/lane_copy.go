@@ -46,7 +46,7 @@ type laneCopyCleared struct {
 // one of them contains is a copy and not the only copy of anyone's work. Preserved-work refs
 // (refs/tillr/preserved/) do not count: retention prunes them.
 func (s *LaneStager) retainingRunPins(ctx context.Context, repo, sha string) ([]string, error) {
-	out, err := s.git(ctx, repo, "for-each-ref", "--contains", sha, "--format=%(refname)", "refs/tillr/runs/", "refs/tillr/runs-long/")
+	out, err := s.git(ctx, repo, "for-each-ref", "--contains", sha, "--format=%(refname)", "refs/tillr/runs/", "refs/tillr/runs-long/", itemPinPrefix, itemPinLongPrefix)
 	if err != nil {
 		return nil, err
 	}

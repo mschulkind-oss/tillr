@@ -346,6 +346,9 @@ func (l *Loop) releaseCandidateMode(ctx context.Context, work *pendingWork, reas
 			pinErr = l.pinHeldFork(ctx, c)
 		} else {
 			pinErr = l.pin(ctx, c.RunID, c.HeadSHA)
+			if pinErr == nil {
+				pinErr = writeItemPin(ctx, l.git, l.cfg.Root, c.ItemID, c.HeadSHA)
+			}
 		}
 		if pinErr != nil {
 			kept = "candidate pin failed: " + pinErr.Error()

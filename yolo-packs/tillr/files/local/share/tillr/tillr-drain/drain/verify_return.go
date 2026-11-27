@@ -247,5 +247,8 @@ func (l *Loop) pinCandidateHead(ctx context.Context, c Candidate) error {
 	if c.Worktree != "" && filepath.Clean(c.Worktree) != filepath.Clean(l.lanePath(c.LaneID)) {
 		repo = c.Worktree
 	}
-	return writeRunPin(ctx, l.git, repo, c.RunID, c.HeadSHA, false)
+	if err := writeRunPin(ctx, l.git, repo, c.RunID, c.HeadSHA, false); err != nil {
+		return err
+	}
+	return writeItemPin(ctx, l.git, repo, c.ItemID, c.HeadSHA)
 }

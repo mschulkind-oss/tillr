@@ -421,6 +421,8 @@ var tableDescriptions = map[string]string{
 	"landing_attempts":  "Landing attempts; shows the number of recorded attempts to integrate work.",
 }
 var refDescriptions = map[string]string{
-	"runs":      "Run candidate references; shows how many run tips Git retains for inspection.",
-	"preserved": "Preserved worker references; shows how many worker tips Git keeps across recovery.",
+	"runs":       "Run candidate references; shows how many run tips Git retains for inspection.",
+	"items":      "Item branch-head references; shows how many items have a pinned newest branch head.",
+	"items-long": "Hashed item branch-head references; shows how many long or ref-unsafe item ids have a pinned newest branch head.",
+	"preserved":  "Preserved worker references; shows how many worker tips Git keeps across recovery.",
 }

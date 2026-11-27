@@ -331,6 +331,9 @@ func (l *Loop) SetAside(ctx context.Context, itemID, why string) (string, error)
 		if err := l.pin(ctx, c.RunID, head); err != nil {
 			return err
 		}
+		if err := writeItemPin(ctx, l.git, l.cfg.Root, c.ItemID, head); err != nil {
+			return err
+		}
 		if _, err := l.git(ctx, worktree, "reset", "--hard", resetHead); err != nil {
 			return err
 		}

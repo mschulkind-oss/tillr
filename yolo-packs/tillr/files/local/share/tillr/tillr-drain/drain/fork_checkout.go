@@ -90,7 +90,7 @@ func (s *LaneStager) refreshForkCheckout(ctx context.Context, fork ForkTarget) e
 	// A ref in this checkout that contains HEAD keeps its entire history. A
 	// pin for just an ancestor is not enough, nor is a pin in another repo.
 	refs, err := s.git(ctx, fork.Checkout, "for-each-ref", "--contains", head, "--count=1", "--format=%(refname)",
-		"refs/tillr/runs/", "refs/tillr/runs-long/", preserved.Prefix)
+		"refs/tillr/runs/", "refs/tillr/runs-long/", itemPinPrefix, itemPinLongPrefix, preserved.Prefix)
 	if err != nil {
 		return err
 	}

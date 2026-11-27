@@ -224,7 +224,7 @@ func (l *Loop) intakeLandingOffer(ctx context.Context, d Decision, rec run.Recor
 	// only where it used to call it.
 	validated, validateErr := l.validateLandingOffer(ctx, d, rec, mainSHA, offer)
 	if validateErr == nil && validated.Commit != "" {
-		if err := l.pinLane(ctx, d.LaneID, rec.RunID, validated.Commit); err != nil {
+		if err := l.pinLane(ctx, d.LaneID, d.ItemID, rec.RunID, validated.Commit); err != nil {
 			return landingOfferAbsent, err
 		}
 	}

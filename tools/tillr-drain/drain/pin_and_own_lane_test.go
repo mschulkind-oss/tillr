@@ -298,21 +298,24 @@ func TestPinLaneDoesNotCrossRepositoryBoundaries(t *testing.T) {
 		t.Fatalf("lane target = %q, want the fork checkout %q", l.laneTarget("lane-2"), fork)
 	}
 
-	if err := l.pinLane(ctx, "lane-1", "run-missing", forkHead); err == nil {
+	if err := l.pinLane(ctx, "lane-1", "item-missing", "run-missing", forkHead); err == nil {
 		t.Fatal("an ordinary lane's missing object must still fail the pin")
 	}
 
-	if err := l.pinLane(ctx, "lane-2", "run-held", rootHead); err == nil {
+	if err := l.pinLane(ctx, "lane-2", "item-held", "run-held", rootHead); err == nil {
 		t.Fatal("a fork lane must not fall back to pinning a root-only commit")
 	}
 	if _, err := l.revParse(ctx, root, pinRef("run-held")+"^{commit}"); err == nil {
 		t.Fatal("fork lane wrote a pin in the root repository")
 	}
 
-	if err := l.pinLane(ctx, "lane-1", "run-plain", rootHead); err != nil {
+	if err := l.pinLane(ctx, "lane-1", "item-plain", "run-plain", rootHead); err != nil {
 		t.Fatal(err)
 	}
 	if got := runGit(t, root, "rev-parse", "--verify", pinRef("run-plain")+"^{commit}"); got != rootHead {
 		t.Fatalf("ordinary lane pin = %s, want %s", got, rootHead)
+	}
+	if got := runGit(t, root, "rev-parse", "--verify", itemPinRef("item-plain")+"^{commit}"); got != rootHead {
+		t.Fatalf("ordinary lane item pin = %s, want %s", got, rootHead)
 	}
 }

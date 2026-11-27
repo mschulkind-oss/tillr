@@ -118,7 +118,7 @@ func (l *Loop) discardTerminalLane(ctx context.Context, lane, runID, headSHA str
 	if l.abortInProgress(ctx, target) || headSHA == "" {
 		headSHA, _ = l.revParse(ctx, target, "HEAD")
 	}
-	if err := l.pinLane(ctx, lane, runID, headSHA); err != nil {
+	if err := l.pinLane(ctx, lane, terminal.ItemID, runID, headSHA); err != nil {
 		if holdErr := l.holdItemFault(ctx, Candidate{ItemID: terminal.ItemID, LaneID: lane}, ReasonSettleFailed, err.Error()); holdErr != nil {
 			l.reportf("loop: lane %s retained, and its pin failure could not be recorded: %v\n", lane, holdErr)
 			return StopFault

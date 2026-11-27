@@ -184,7 +184,7 @@ func TestForkCheckoutLeftoverReportedWhenRunEnds(t *testing.T) {
 				if mode == "at-tip" {
 					runGit(t, c.Worktree, "reset", "--hard", c.BaseSHA)
 				} else {
-					if err := l.pinLane(ctx, c.LaneID, c.RunID, c.HeadSHA); err != nil {
+					if err := l.pinLane(ctx, c.LaneID, c.ItemID, c.RunID, c.HeadSHA); err != nil {
 						t.Fatal(err)
 					}
 				}

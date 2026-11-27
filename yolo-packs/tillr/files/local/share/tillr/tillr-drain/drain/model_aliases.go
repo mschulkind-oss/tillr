@@ -96,6 +96,8 @@ const (
 	maxRunItemSlugLen         = drainmodel.MaxRunItemSlugLen
 	maxRunIDBaseLen           = drainmodel.MaxRunIDBaseLen
 	maxRefComponent           = drainmodel.MaxRefComponent
+	itemPinPrefix             = drainmodel.ItemPinPrefix
+	itemPinLongPrefix         = drainmodel.ItemPinLongPrefix
 	pinTimeout                = drainmodel.PinTimeout
 	generationDDL             = drainmodel.GenerationDDL
 	rewriteAcceptedKind       = drainmodel.RewriteAcceptedKind
@@ -160,8 +162,14 @@ func markRunIDTurns(base, kind string, turns int) string {
 
 func pinRef(runID string) string { return drainmodel.PinRef(runID) }
 
+func itemPinRef(itemID string) string { return drainmodel.ItemPinRef(itemID) }
+
 func writeRunPin(ctx context.Context, git func(context.Context, string, ...string) (string, error), repo, runID, sha string, createOnly bool) error {
 	return drainmodel.WriteRunPin(ctx, git, repo, runID, sha, createOnly)
+}
+
+func writeItemPin(ctx context.Context, git func(context.Context, string, ...string) (string, error), repo, itemID, sha string) error {
+	return drainmodel.WriteItemPin(ctx, git, repo, itemID, sha)
 }
 
 func NewSessionID() (string, error) { return drainmodel.NewSessionID() }

@@ -79,11 +79,14 @@ func TestPinLaneKeepsForkCandidateInFork(t *testing.T) {
 	if head != c.HeadSHA {
 		t.Fatalf("worker HEAD = %s, want fork candidate %s", head, c.HeadSHA)
 	}
-	if err := l.pinLane(ctx, c.LaneID, c.RunID, head); err != nil {
+	if err := l.pinLane(ctx, c.LaneID, c.ItemID, c.RunID, head); err != nil {
 		t.Fatalf("pinning a candidate absent from root: %v", err)
 	}
 	if got := runGit(t, c.Worktree, "rev-parse", pinRef(c.RunID)+"^{commit}"); got != c.HeadSHA {
 		t.Fatalf("fork run pin = %s, want %s", got, c.HeadSHA)
+	}
+	if got := runGit(t, c.Worktree, "rev-parse", itemPinRef(c.ItemID)+"^{commit}"); got != c.HeadSHA {
+		t.Fatalf("fork item pin = %s, want %s", got, c.HeadSHA)
 	}
 	if _, err := l.revParse(ctx, f.root, c.HeadSHA+"^{commit}"); err == nil {
 		t.Fatal("pinning imported the fork-only commit into the root repository")
@@ -114,7 +117,7 @@ func TestForkRunPinFailureHoldsItemWithoutStoppingLoop(t *testing.T) {
 	f, l, c := heldForkFixture(t)
 	ctx := context.Background()
 	lockRunPin(t, c.Worktree, c.RunID)
-	pinErr := l.pinLane(ctx, c.LaneID, c.RunID, c.HeadSHA)
+	pinErr := l.pinLane(ctx, c.LaneID, c.ItemID, c.RunID, c.HeadSHA)
 	if pinErr == nil || !strings.Contains(pinErr.Error(), "lock") || !strings.Contains(pinErr.Error(), pinRef(c.RunID)) {
 		t.Fatalf("pin error = %v, want this run's ref-lock failure", pinErr)
 	}

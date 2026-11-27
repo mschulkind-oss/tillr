@@ -3104,7 +3104,7 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 	}
 	if deferJudge {
 		if candidate.HeadSHA != "" && candidate.HeadSHA != candidate.BaseSHA {
-			if err := l.pinLane(ctx, lane, request.RunID, candidate.HeadSHA); err != nil {
+			if err := l.pinLane(ctx, lane, candidate.ItemID, request.RunID, candidate.HeadSHA); err != nil {
 				return laneOutcome{err: err}
 			}
 		}
@@ -3124,12 +3124,17 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 	if stop != "" {
 		// A stop is still a non-landing outcome: the head is pinned before this lane lets
 		// go, so an operator can inspect what the gate or the harness saw.
-		if err := l.pinLane(ctx, lane, request.RunID, candidate.HeadSHA); err != nil {
+		if err := l.pinLane(ctx, lane, candidate.ItemID, request.RunID, candidate.HeadSHA); err != nil {
 			return laneOutcome{err: err}
 		}
 		return laneOutcome{stop: stop}
 	}
 	if landed {
+		if candidate.HeadSHA != "" {
+			if err := writeItemPin(ctx, l.git, l.lanePinRepository(lane), candidate.ItemID, candidate.HeadSHA); err != nil {
+				return laneOutcome{err: err}
+			}
+		}
 		l.reportRefSweepFailure(l.prunePreservedWork(ctx))
 		return laneOutcome{stop: l.abandon(ctx, lane, "", "")}
 	}
@@ -3607,7 +3612,7 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 				// never to the owner (the owner's ruling of 2026-11-17).
 				// An identical repeat (the same conflict, given the same block) goes to the owner
 				// instead (design_repeat.go).
-				if err := l.pinLane(ctx, candidate.LaneID, candidate.RunID, candidate.HeadSHA); err != nil {
+				if err := l.pinLane(ctx, candidate.LaneID, candidate.ItemID, candidate.RunID, candidate.HeadSHA); err != nil {
 					return "", false, err
 				}
 				return "", false, l.settleDesignStatement(ctx, *candidate.BlockConflict, candidate.RunID, designCauseBlockRemoved, "removed its item block", func(c *item.Conflict) {
@@ -4376,8 +4381,12 @@ func (l *Loop) lanePinRepository(lane string) string {
 }
 
 // pinLane also handles fork lanes, whose candidates live in a separate repository.
-func (l *Loop) pinLane(ctx context.Context, lane, runID, sha string) error {
-	return writeRunPin(ctx, l.git, l.lanePinRepository(lane), runID, sha, false)
+func (l *Loop) pinLane(ctx context.Context, lane, itemID, runID, sha string) error {
+	repo := l.lanePinRepository(lane)
+	if err := writeRunPin(ctx, l.git, repo, runID, sha, false); err != nil {
+		return err
+	}
+	return writeItemPin(ctx, l.git, repo, itemID, sha)
 }
 
 func (l *Loop) pendingItemBase(ctx context.Context, itemID string) (string, error) {
@@ -4635,9 +4644,13 @@ func (l *Loop) abandonFromBase(ctx context.Context, lane, runID, headSHA, base s
 	if err := l.preserveWorkFromBase(ctx, lane, runID, base, reason); err != nil {
 		return l.retainUnpreserved(ctx, lane, runID, headSHA, err)
 	}
+	var itemID string
 	var itemEnded bool
 	if runID != "" {
-		itemID, state, ended, err := l.runItemTerminalState(ctx, runID)
+		var state string
+		var ended bool
+		var err error
+		itemID, state, ended, err = l.runItemTerminalState(ctx, runID)
 		if err != nil {
 			return l.retainUnpreserved(ctx, lane, runID, headSHA, err)
 		}
@@ -4648,7 +4661,7 @@ func (l *Loop) abandonFromBase(ctx context.Context, lane, runID, headSHA, base s
 			}
 		}
 	}
-	if err := l.pinLane(ctx, lane, runID, headSHA); err != nil {
+	if err := l.pinLane(ctx, lane, itemID, runID, headSHA); err != nil {
 		return l.retainUnpreserved(ctx, lane, runID, headSHA, err)
 	}
 	if runID != "" && !itemEnded {

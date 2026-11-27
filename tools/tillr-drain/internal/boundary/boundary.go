@@ -406,7 +406,7 @@ func trunkHistoryRef(ref string) bool {
 // lost. A sibling lane's landing writes both while this bracket's run is in flight.
 func LanderRef(ref string) bool {
 	// The heavy runner owns the proof ref, just as the lander owns its receipt refs.
-	return ref == heavyrun.GreenRef || strings.HasPrefix(ref, "refs/tillr/runs/") || strings.HasPrefix(ref, "refs/tillr/landed/") || strings.HasPrefix(ref, preserved.Prefix) || strings.HasPrefix(ref, EndedWorkPrefix) || strings.HasPrefix(ref, ownerRecoveryPrefix)
+	return ref == heavyrun.GreenRef || strings.HasPrefix(ref, "refs/tillr/runs/") || strings.HasPrefix(ref, "refs/tillr/landed/") || strings.HasPrefix(ref, drainmodel.ItemPinPrefix) || strings.HasPrefix(ref, drainmodel.ItemPinLongPrefix) || strings.HasPrefix(ref, preserved.Prefix) || strings.HasPrefix(ref, EndedWorkPrefix) || strings.HasPrefix(ref, ownerRecoveryPrefix)
 }
 
 // ownerRecoveryPrefix is the lander's recovery copy of the owner's uncommitted content on the

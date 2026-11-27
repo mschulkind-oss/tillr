@@ -205,6 +205,10 @@ func (l *Loop) supersedeCandidate(ctx context.Context, s supersession) error {
 			l.reportf("loop: retry %s cannot supersede %s: %v\n", s.retry.RetryID, runID, err)
 			return nil
 		}
+		if err := writeItemPin(ctx, l.git, repo, c.ItemID, c.HeadSHA); err != nil {
+			l.reportf("loop: retry %s cannot supersede %s: %v\n", s.retry.RetryID, runID, err)
+			return nil
+		}
 		record.PinSHA = c.HeadSHA
 	}
 	lane := s.work.Decision.LaneID

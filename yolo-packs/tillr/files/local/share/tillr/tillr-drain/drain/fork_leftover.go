@@ -168,7 +168,7 @@ func (l *Loop) checkForkUnretainedHead(ctx context.Context, checkout, ref string
 	}
 
 	refs, err := l.git(ctx, checkout, "for-each-ref", "--contains", head, "--count=1", "--format=%(refname)",
-		"refs/tillr/runs/", "refs/tillr/runs-long/", preserved.Prefix)
+		"refs/tillr/runs/", "refs/tillr/runs-long/", itemPinPrefix, itemPinLongPrefix, preserved.Prefix)
 	if err != nil {
 		return "", "", err
 	}

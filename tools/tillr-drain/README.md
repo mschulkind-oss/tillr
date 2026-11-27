@@ -1001,6 +1001,7 @@ lander's crash-recovery pointer
 | :--- | :--- |
 | `runs/<run>` | The loop or lander. Removed once the trunk contains the commit and the pin names that run's landed head, or the item is finished or removed. For retryable items the newest eight examined pins are kept (`RetryPinLimit`). |
 | `runs/<run>-set-aside-base`, `runs/<run>-superseded-head` | The loop, for `set-aside` and a superseding retry. |
+| `items/<item>`, `items-long/<digest>` | The loop. Moves to each item's most recently pinned commit whenever the loop pins a run for that item; ref cleanup retains it. |
 | `landed/<run>` | The lander. Removed after that run's `landed` row and a matching published commit. |
 | `preserved/<run>` | The loop. Removed when the item finishes or is removed. |
 | `held-forks/<digest>` | The loop, for a held fork candidate. |

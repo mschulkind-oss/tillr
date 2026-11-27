@@ -83,7 +83,7 @@ func (l *Loop) recordWorkflowRestart(ctx context.Context, d Decision, base strin
 				return retainedAfter(d.LaneID, stop)
 			}
 		}
-		if err := l.pinLane(ctx, d.LaneID, rec.RunID, head); err != nil {
+		if err := l.pinLane(ctx, d.LaneID, d.ItemID, rec.RunID, head); err != nil {
 			return err
 		}
 	}
