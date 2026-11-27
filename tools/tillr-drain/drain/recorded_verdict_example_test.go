@@ -216,7 +216,7 @@ func TestRecordedVerdictExampleREADME(t *testing.T) {
 			}
 		}
 	}
-	// Both workflow nodes must have run once for each finding, in the plain lane.
+	// Both workflow nodes must have run once for each finding, in the item's plain lane.
 	raw, err := os.ReadFile(filepath.Join(root, "stage-calls.jsonl"))
 	if err != nil {
 		t.Fatal(err)
@@ -226,7 +226,7 @@ func TestRecordedVerdictExampleREADME(t *testing.T) {
 		t.Fatalf("want six workflow calls: %s", raw)
 	}
 	seen := map[string]int{}
-	for i, line := range lines {
+	for _, line := range lines {
 		var call struct {
 			Item string `json:"item"`
 			Node string `json:"node"`
@@ -235,12 +235,11 @@ func TestRecordedVerdictExampleREADME(t *testing.T) {
 		if err := json.Unmarshal([]byte(line), &call); err != nil {
 			t.Fatal(err)
 		}
-		want := "reproduce"
-		if i%2 == 1 {
-			want = "investigate"
-		}
-		if call.Node != want || expected[call.Item] == "" || call.Cwd != filepath.Join(root, ".tillr/lanes/lane-1/work") {
+		if expected[call.Item] == "" || (call.Node != "reproduce" && call.Node != "investigate") || call.Cwd != filepath.Join(root, ".tillr/lanes", call.Item, "work") {
 			t.Fatalf("workflow call: %s", line)
+		}
+		if call.Node == "investigate" && seen[call.Item+":reproduce"] != 1 {
+			t.Fatalf("investigate ran before reproduce: %s", line)
 		}
 		seen[call.Item+":"+call.Node]++
 	}
