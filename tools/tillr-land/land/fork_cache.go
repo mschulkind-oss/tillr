@@ -100,9 +100,10 @@ type cacheRefresh struct {
 }
 
 type forkCacheState struct {
-	main, patch string
-	detached    bool
-	refresh     cacheRefresh
+	main, patch     string
+	restackedParent string
+	detached        bool
+	refresh         cacheRefresh
 }
 
 // checkForkCache also captures the exact local tips refresh may replace.
@@ -148,7 +149,12 @@ func (t *Trunk) checkForkCache(ref, tip string, rebase forkRebase, recovering bo
 	}
 	if !rebase.verified() {
 		if _, err := t.forkGit(cache, "merge-base", "--is-ancestor", "HEAD", tip); err != nil {
-			return state, Externalf("fork cache %s has unlanded or divergent commits; delivery will not reset it", cache)
+			head, parent, ok := t.sameTreeParent(cache, tip)
+			if !ok {
+				return state, Externalf("fork cache %s has unlanded or divergent commits; delivery will not reset it", cache)
+			}
+			state.main = head
+			state.restackedParent = parent
 		}
 		return state, nil
 	}
@@ -270,6 +276,11 @@ func (t *Trunk) RefreshForkCache(ref, tip string, rebase forkRebase) error {
 			return err
 		}
 	} else {
+		if state.restackedParent != "" {
+			if _, err := t.forkGit(cache, "update-ref", "refs/heads/main", state.restackedParent, state.main); err != nil {
+				return err
+			}
+		}
 		if _, err := t.forkGit(cache, "-c", "merge.autoStash=false", "merge", "--ff-only", "--no-edit", tip); err != nil {
 			return err
 		}
@@ -321,6 +332,32 @@ func (t *Trunk) finishCacheRefresh(cache string, state forkCacheState, move cach
 func (t *Trunk) clearCacheRefresh(cache string, move cacheRefresh) error {
 	_, err := t.forkGit(cache, "update-ref", "--no-deref", "-d", move.ref, move.target)
 	return err
+}
+
+// sameTreeParent reports whether cache HEAD has the same tree as tip's first parent,
+// returning both commit SHAs when it does.
+func (t *Trunk) sameTreeParent(cache, tip string) (head, parent string, ok bool) {
+	head, err := t.forkGit(cache, "rev-parse", "--verify", "HEAD")
+	if err != nil {
+		return "", "", false
+	}
+	headTree, err := t.forkGit(cache, "rev-parse", "--verify", "HEAD^{tree}")
+	if err != nil {
+		return "", "", false
+	}
+	parent, err = t.forkGit(cache, "rev-parse", "--verify", "--quiet", tip+"^")
+	if err != nil {
+		return "", "", false
+	}
+	parentTree, err := t.forkGit(cache, "rev-parse", "--verify", "--quiet", tip+"^^{tree}")
+	if err != nil {
+		return "", "", false
+	}
+	headTree = strings.TrimSpace(headTree)
+	if headTree == "" || headTree != strings.TrimSpace(parentTree) {
+		return "", "", false
+	}
+	return strings.TrimSpace(head), strings.TrimSpace(parent), true
 }
 
 // forkGit classifies a cache operation that could not complete as infrastructure,
