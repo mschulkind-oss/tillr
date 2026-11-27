@@ -1,7 +1,7 @@
 ---
 title: "Every alert gets an investigation and one recorded outcome, and silences bind a rule, variable, item, and bound"
 status: accepted
-stage: DECIDED
+stage: BUILT
 stage-since: 2026-11-23
 created: 2026-11-22
 updated: 2026-11-25
