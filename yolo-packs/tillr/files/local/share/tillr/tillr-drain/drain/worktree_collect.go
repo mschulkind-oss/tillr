@@ -14,6 +14,7 @@ import (
 	"github.com/mschulkind-oss/tillr-drain/holdrules"
 	"github.com/mschulkind-oss/tillr-drain/internal/drainmodel"
 	"github.com/mschulkind-oss/tillr-drain/internal/worktreebudget"
+	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/store"
@@ -50,7 +51,7 @@ type WorktreeBudgetOvershoot struct {
 
 func (l *Loop) effectiveWorktreeBounds() (countLimit int, diskBudgetBytes int64) {
 	w := l.postLandingSettings().Worktrees
-	agentLimit := ordinaryLaneCount(l.cfg.Lanes)
+	agentLimit := ordinaryLaneCount(l.lanes())
 	countLimit = w.EffectiveMaxCount(agentLimit)
 	diskBudgetBytes = w.EffectiveDiskBudgetBytes(agentLimit)
 	if l.cfg.WorktreeCountOverride > 0 {
@@ -67,7 +68,8 @@ type idleWorktreeCandidate struct {
 	itemID        string
 	itemState     string
 	latestRunID   string
-	waitReason    string // "wait-owner", "wait-item", or ""
+	poolSub       string // "scratch" or "durable" for per-run scratch under a pool lane
+	waitReason    string // "wait-owner", "wait-item", "orphaned-pool-scratch", "ended-item", or ""
 	lastActiveAt  int64
 	modTime       time.Time
 	hasWorktree   bool
@@ -108,6 +110,12 @@ func (l *Loop) collectIdleWorktrees(ctx context.Context) (worktreebudget.Snapsho
 	for id := range l.examiningRuns {
 		activeRunIDs[id] = true
 	}
+	for id := range l.gateLand.Gate.Runs {
+		activeRunIDs[id] = true
+	}
+	for id := range l.gateLand.Land.Runs {
+		activeRunIDs[id] = true
+	}
 	l.mu.Unlock()
 
 	if entries, err := os.ReadDir(l.cfg.LaneRoot); err == nil {
@@ -121,6 +129,7 @@ func (l *Loop) collectIdleWorktrees(ctx context.Context) (worktreebudget.Snapsho
 	}
 
 	var idleMeta map[string]idleWorktreeCandidate
+	var poolScratchMeta []idleWorktreeCandidate
 	if l.cfg.Store != "" {
 		s, err := store.OpenRead(ctx, l.cfg.Store)
 		if err != nil {
@@ -219,6 +228,85 @@ func (l *Loop) collectIdleWorktrees(ctx context.Context) (worktreebudget.Snapsho
 				}
 				laneID := entry.Name()
 				if drainmodel.IsPoolLaneName(laneID) {
+					if inUse[laneID] {
+						continue
+					}
+					for _, ps := range l.scanPoolScratchEntries(laneID) {
+						if leasedRunIDs[ps.runID] || activeRunIDs[ps.runID] {
+							continue
+						}
+						runScratchPath := filepath.Join(l.laneDirPath(ps.lane), ps.sub, ps.runID)
+						if l.dirHasLiveChildProcess(runScratchPath) {
+							continue
+						}
+						var itemID, runState string
+						var finishedAt, startedAt int64
+						runErr := queryEndedLaneRow(r,
+							`SELECT COALESCE(item_id, ''), state, COALESCE(finished_at, 0), COALESCE(started_at, 0) FROM runs WHERE run_id = ?`,
+							ps.runID,
+						).Scan(&itemID, &runState, &finishedAt, &startedAt)
+						if runErr == sql.ErrNoRows {
+							// Per docs/design/tillr-vocabulary.md §3.3 ("State that already exists"),
+							// per-run scratch under a pool lane with no run record is collectable.
+							poolScratchMeta = append(poolScratchMeta, idleWorktreeCandidate{
+								laneID:      ps.lane,
+								latestRunID: ps.runID,
+								poolSub:     ps.sub,
+								waitReason:  "orphaned-pool-scratch",
+							})
+							continue
+						}
+						if runErr != nil {
+							return runErr
+						}
+						if runState != run.StateExited && runState != run.StateFailedToStart && runState != run.StateTimedOut {
+							continue
+						}
+						lastActive := finishedAt
+						if lastActive == 0 {
+							lastActive = startedAt
+						}
+						if itemID == "" {
+							poolScratchMeta = append(poolScratchMeta, idleWorktreeCandidate{
+								laneID:       ps.lane,
+								latestRunID:  ps.runID,
+								poolSub:      ps.sub,
+								waitReason:   "orphaned-pool-scratch",
+								lastActiveAt: lastActive,
+							})
+							continue
+						}
+						var state, waitingOn string
+						itemErr := queryEndedLaneRow(r, `SELECT state, COALESCE(waiting_on, '') FROM items WHERE item_id = ?`, itemID).Scan(&state, &waitingOn)
+						if itemErr == sql.ErrNoRows {
+							poolScratchMeta = append(poolScratchMeta, idleWorktreeCandidate{
+								laneID:       ps.lane,
+								itemID:       itemID,
+								itemState:    "removed",
+								latestRunID:  ps.runID,
+								poolSub:      ps.sub,
+								waitReason:   "ended-item",
+								lastActiveAt: lastActive,
+							})
+							continue
+						}
+						if itemErr != nil {
+							return itemErr
+						}
+						waitReason := classifyItemWaitForCollection(r, itemID, state, waitingOn, declared.Parsed)
+						if waitReason == "" && finishedState(declared.Parsed, state) && state != StateLanded {
+							waitReason = "ended-item"
+						}
+						poolScratchMeta = append(poolScratchMeta, idleWorktreeCandidate{
+							laneID:       ps.lane,
+							itemID:       itemID,
+							itemState:    state,
+							latestRunID:  ps.runID,
+							poolSub:      ps.sub,
+							waitReason:   waitReason,
+							lastActiveAt: lastActive,
+						})
+					}
 					continue
 				}
 				if l.dirHasLiveChildProcess(l.laneDirPath(laneID)) {
@@ -292,86 +380,120 @@ func (l *Loop) collectIdleWorktrees(ctx context.Context) (worktreebudget.Snapsho
 	snap.DiskBudgetBytes = diskBudgetBytes
 	snap.RunLogBytes = worktreebudget.MeasureRunLogs(l.cfg.Root)
 
-	if !l.cfg.ItemWorktrees || l.cfg.Store == "" || len(idleMeta) == 0 {
+	if !l.cfg.ItemWorktrees || l.cfg.Store == "" {
 		return snap, nil
 	}
 
-	var waitCands []idleWorktreeCandidate
-	var lruCands []idleWorktreeCandidate
-	for laneID, meta := range idleMeta {
-		usage, ok := snap.Items[laneID]
-		if !ok || (!usage.HasWorktree && usage.ScratchBytes == 0) {
-			continue
-		}
-		meta.hasWorktree = usage.HasWorktree
-		meta.bytes = usage.TotalBytes
-		meta.modTime = usage.ModTime
-		if meta.waitReason != "" {
-			waitCands = append(waitCands, meta)
-		} else {
-			lruCands = append(lruCands, meta)
-		}
-	}
-
-	sort.Slice(waitCands, func(i, j int) bool {
-		return waitCands[i].laneID < waitCands[j].laneID
-	})
-	sort.Slice(lruCands, func(i, j int) bool {
-		if lruCands[i].lastActiveAt != lruCands[j].lastActiveAt {
-			return lruCands[i].lastActiveAt < lruCands[j].lastActiveAt
-		}
-		if !lruCands[i].modTime.Equal(lruCands[j].modTime) {
-			return lruCands[i].modTime.Before(lruCands[j].modTime)
-		}
-		return lruCands[i].laneID < lruCands[j].laneID
-	})
-
-	// Phase 2: idle items whose wait names the owner or another item — always, at once.
-	for _, c := range waitCands {
-		if l.collectOneIdleWorktree(ctx, c) {
-			if c.hasWorktree {
-				snap.OnDisk--
-				snap.Idle--
+	if len(idleMeta) > 0 || len(poolScratchMeta) > 0 {
+		var waitCands []idleWorktreeCandidate
+		var lruCands []idleWorktreeCandidate
+		for laneID, meta := range idleMeta {
+			usage, ok := snap.Items[laneID]
+			if !ok || (!usage.HasWorktree && usage.ScratchBytes == 0) {
+				continue
 			}
-			snap.TotalBytes -= c.bytes
-		}
-	}
-
-	// Phase 3: other idle items (including landed-unproven), LRU first, while over bound.
-	overBound := func() bool {
-		if countLimit > 0 && snap.OnDisk > countLimit {
-			return true
-		}
-		if diskBudgetBytes > 0 && snap.TotalBytes > diskBudgetBytes {
-			return true
-		}
-		return false
-	}
-	for _, c := range lruCands {
-		if !overBound() {
-			break
-		}
-		c.waitReason = "lru-bound"
-		if l.collectOneIdleWorktree(ctx, c) {
-			if c.hasWorktree {
-				snap.OnDisk--
-				snap.Idle--
+			meta.hasWorktree = usage.HasWorktree
+			meta.bytes = usage.TotalBytes
+			meta.modTime = usage.ModTime
+			if meta.waitReason != "" {
+				waitCands = append(waitCands, meta)
+			} else {
+				lruCands = append(lruCands, meta)
 			}
-			snap.TotalBytes -= c.bytes
 		}
-	}
+		for _, meta := range poolScratchMeta {
+			runScratchPath := filepath.Join(l.laneDirPath(meta.laneID), meta.poolSub, meta.latestRunID)
+			fi, err := os.Stat(runScratchPath)
+			if err != nil {
+				continue
+			}
+			meta.modTime = fi.ModTime()
+			if usage, ok := snap.Items[meta.laneID]; ok {
+				for _, sd := range usage.ScratchDirs {
+					if sd.Path == runScratchPath {
+						meta.bytes = sd.Bytes
+						break
+					}
+				}
+			}
+			if meta.waitReason != "" {
+				waitCands = append(waitCands, meta)
+			} else {
+				lruCands = append(lruCands, meta)
+			}
+		}
 
-	// Re-measure after collections so returned snapshot is exact.
-	snap, err = worktreebudget.MeasureLaneRoot(l.cfg.LaneRoot, inUse)
-	if err != nil {
-		return worktreebudget.Snapshot{}, err
+		sort.Slice(waitCands, func(i, j int) bool {
+			if waitCands[i].laneID != waitCands[j].laneID {
+				return waitCands[i].laneID < waitCands[j].laneID
+			}
+			if waitCands[i].poolSub != waitCands[j].poolSub {
+				return waitCands[i].poolSub < waitCands[j].poolSub
+			}
+			return waitCands[i].latestRunID < waitCands[j].latestRunID
+		})
+		sort.Slice(lruCands, func(i, j int) bool {
+			if lruCands[i].lastActiveAt != lruCands[j].lastActiveAt {
+				return lruCands[i].lastActiveAt < lruCands[j].lastActiveAt
+			}
+			if !lruCands[i].modTime.Equal(lruCands[j].modTime) {
+				return lruCands[i].modTime.Before(lruCands[j].modTime)
+			}
+			if lruCands[i].laneID != lruCands[j].laneID {
+				return lruCands[i].laneID < lruCands[j].laneID
+			}
+			if lruCands[i].poolSub != lruCands[j].poolSub {
+				return lruCands[i].poolSub < lruCands[j].poolSub
+			}
+			return lruCands[i].latestRunID < lruCands[j].latestRunID
+		})
+
+		// Phase 2: idle items whose wait names the owner or another item — always, at once.
+		for _, c := range waitCands {
+			if l.collectOneIdleWorktree(ctx, c) {
+				if c.hasWorktree {
+					snap.OnDisk--
+					snap.Idle--
+				}
+				snap.TotalBytes -= c.bytes
+			}
+		}
+
+		// Phase 3: other idle items (including landed-unproven) and ended pool-lane
+		// scratch, LRU first, while over bound.
+		for _, c := range lruCands {
+			overCount := countLimit > 0 && snap.OnDisk > countLimit
+			overDisk := diskBudgetBytes > 0 && snap.TotalBytes > diskBudgetBytes
+			if !overCount && !overDisk {
+				break
+			}
+			if c.poolSub != "" && !overDisk {
+				continue
+			}
+			c.waitReason = "lru-bound"
+			if l.collectOneIdleWorktree(ctx, c) {
+				if c.hasWorktree {
+					snap.OnDisk--
+					snap.Idle--
+				}
+				snap.TotalBytes -= c.bytes
+			}
+		}
+
+		// Re-measure after collections so returned snapshot is exact.
+		snap, err = worktreebudget.MeasureLaneRoot(l.cfg.LaneRoot, inUse)
+		if err != nil {
+			return worktreebudget.Snapshot{}, err
+		}
+		snap.CountLimit = countLimit
+		snap.DiskBudgetBytes = diskBudgetBytes
+		snap.RunLogBytes = worktreebudget.MeasureRunLogs(l.cfg.Root)
 	}
-	snap.CountLimit = countLimit
-	snap.DiskBudgetBytes = diskBudgetBytes
-	snap.RunLogBytes = worktreebudget.MeasureRunLogs(l.cfg.Root)
 
 	if diskBudgetBytes > 0 && snap.TotalBytes > diskBudgetBytes {
 		l.reportOvershoot(ctx, snap)
+	} else {
+		l.endedLanes.lastOvershoot = ""
 	}
 	return snap, nil
 }
@@ -435,6 +557,9 @@ func classifyItemWaitForCollection(r *store.Reader, itemID, state, waitingOn str
 }
 
 func (l *Loop) collectOneIdleWorktree(ctx context.Context, c idleWorktreeCandidate) bool {
+	if c.poolSub != "" {
+		return l.collectOnePoolRunScratch(ctx, c)
+	}
 	itemDir := l.laneDirPath(c.laneID)
 	if l.dirHasLiveChildProcess(itemDir) {
 		return false
@@ -498,6 +623,29 @@ func (l *Loop) collectOneIdleWorktree(ctx context.Context, c idleWorktreeCandida
 	return len(deleted) > 0
 }
 
+func (l *Loop) collectOnePoolRunScratch(ctx context.Context, c idleWorktreeCandidate) bool {
+	runScratchPath := filepath.Join(l.laneDirPath(c.laneID), c.poolSub, c.latestRunID)
+	if _, err := os.Stat(runScratchPath); os.IsNotExist(err) {
+		return false
+	} else if err != nil {
+		l.recordCollectionFailed(ctx, c.itemID, c.itemState, c.laneID, runScratchPath, err)
+		return false
+	}
+	if l.dirHasLiveChildProcess(runScratchPath) {
+		return false
+	}
+	if err := preserveRunScratchFiles(l.cfg.Root, runScratchPath, c.latestRunID); err != nil {
+		l.recordCollectionFailed(ctx, c.itemID, c.itemState, c.laneID, runScratchPath, err)
+		return false
+	}
+	if err := removeEndedDir(runScratchPath); err != nil {
+		l.recordCollectionFailed(ctx, c.itemID, c.itemState, c.laneID, runScratchPath, err)
+		return false
+	}
+	l.recordIdleWorktreeCollected(ctx, c.itemID, c.laneID, c.waitReason, []string{c.poolSub + "/" + c.latestRunID}, c.bytes)
+	return true
+}
+
 func (l *Loop) recordIdleWorktreeCollected(ctx context.Context, itemID, laneID, reason string, deleted []string, freedBytes int64) {
 	l.reportf("loop: collected idle worktree %s (%s: %s, freed %s)\n", laneID, reason, strings.Join(deleted, ", "), worktreebudget.FormatBytes(freedBytes))
 	if l.cfg.Store == "" {
@@ -522,11 +670,17 @@ func (l *Loop) recordIdleWorktreeCollected(ctx context.Context, itemID, laneID, 
 		return
 	}
 	defer s.Close()
+	objType := "item"
+	objID := &itemID
+	if itemID == "" {
+		objType = "lane"
+		objID = &laneID
+	}
 	_ = s.WriteTx(ctx, func(tx *store.Tx) error {
 		_, err := tx.Append(event.Event{
 			Kind:       worktreeCollectedKind,
-			ObjectType: "item",
-			ObjectID:   &itemID,
+			ObjectType: objType,
+			ObjectID:   objID,
 			Payload:    raw,
 			At:         now,
 		})
@@ -535,6 +689,18 @@ func (l *Loop) recordIdleWorktreeCollected(ctx context.Context, itemID, laneID, 
 }
 
 func (l *Loop) reportOvershoot(ctx context.Context, snap worktreebudget.Snapshot) {
+	raw, err := json.Marshal(WorktreeBudgetOvershoot{
+		TotalBytes:      snap.TotalBytes,
+		DiskBudgetBytes: snap.DiskBudgetBytes,
+		LargestScratch:  snap.LargestScratch,
+	})
+	if err != nil {
+		return
+	}
+	key := string(raw)
+	if key == l.endedLanes.lastOvershoot {
+		return
+	}
 	var parts []string
 	for _, sc := range snap.LargestScratch {
 		parts = append(parts, fmt.Sprintf("%s (%s)", sc.Path, worktreebudget.FormatBytes(sc.Bytes)))
@@ -543,17 +709,10 @@ func (l *Loop) reportOvershoot(ctx context.Context, snap worktreebudget.Snapshot
 	if len(parts) > 0 {
 		detail = strings.Join(parts, ", ")
 	}
-	l.reportf("loop: worktree disk budget overshoot: %s used > %s budget; largest scratch: %s\n",
-		worktreebudget.FormatBytes(snap.TotalBytes), worktreebudget.FormatBytes(snap.DiskBudgetBytes), detail)
 	if l.cfg.Store == "" {
-		return
-	}
-	raw, err := json.Marshal(WorktreeBudgetOvershoot{
-		TotalBytes:      snap.TotalBytes,
-		DiskBudgetBytes: snap.DiskBudgetBytes,
-		LargestScratch:  snap.LargestScratch,
-	})
-	if err != nil {
+		l.endedLanes.lastOvershoot = key
+		l.reportf("loop: worktree disk budget overshoot: %s used > %s budget; largest scratch: %s\n",
+			worktreebudget.FormatBytes(snap.TotalBytes), worktreebudget.FormatBytes(snap.DiskBudgetBytes), detail)
 		return
 	}
 	now := time.Now().UTC()
@@ -565,7 +724,7 @@ func (l *Loop) reportOvershoot(ctx context.Context, snap worktreebudget.Snapshot
 		return
 	}
 	defer s.Close()
-	_ = s.WriteTx(ctx, func(tx *store.Tx) error {
+	if err := s.WriteTx(ctx, func(tx *store.Tx) error {
 		_, err := tx.Append(event.Event{
 			Kind:       worktreeBudgetOvershootKind,
 			ObjectType: "loop",
@@ -573,5 +732,10 @@ func (l *Loop) reportOvershoot(ctx context.Context, snap worktreebudget.Snapshot
 			At:         now,
 		})
 		return err
-	})
+	}); err != nil {
+		return
+	}
+	l.endedLanes.lastOvershoot = key
+	l.reportf("loop: worktree disk budget overshoot: %s used > %s budget; largest scratch: %s\n",
+		worktreebudget.FormatBytes(snap.TotalBytes), worktreebudget.FormatBytes(snap.DiskBudgetBytes), detail)
 }

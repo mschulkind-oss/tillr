@@ -450,10 +450,11 @@ type reclaimedCleanLane struct {
 }
 
 type endedLaneHistory struct {
-	storePath   string
-	lastSeq     int64
-	eventOwners map[string]endedLaneOwner
-	cleanLanes  map[string]reclaimedCleanLane
+	storePath     string
+	lastSeq       int64
+	eventOwners   map[string]endedLaneOwner
+	cleanLanes    map[string]reclaimedCleanLane
+	lastOvershoot string // canonical JSON of the last recorded drain.worktree-budget-overshoot payload
 }
 
 type endedLaneEventPayload struct {
