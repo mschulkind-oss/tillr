@@ -238,7 +238,7 @@ func (l *Loop) refreshLaneCount(ctx context.Context, startup bool) error {
 	if slices.Equal(current, target) {
 		return nil
 	}
-	if !startup && !l.nonLanding && len(added) > 0 {
+	if !startup && !l.nonLanding && !l.cfg.ItemWorktrees && len(added) > 0 {
 		// Prepare only the new slots, without moving a worktree used by a run.
 		if err := l.stageLaneSet(ctx, added, false); err != nil {
 			return err

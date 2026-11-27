@@ -66,10 +66,11 @@ func recoveryWork(r *store.Reader, runID string) (*pendingWork, error) {
 	if !w.LaneReleased {
 		var state string
 		var leasedRun *string
-		if err := r.QueryRow(`SELECT state,run_id FROM lanes WHERE lane_id=?`, w.Decision.LaneID).Scan(&state, &leasedRun); err != nil {
+		err := r.QueryRow(`SELECT state,run_id FROM lanes WHERE lane_id=?`, w.Decision.LaneID).Scan(&state, &leasedRun)
+		if err != nil && (err != sql.ErrNoRows || isPoolLaneName(w.Decision.LaneID)) {
 			return nil, err
 		}
-		if state != run.LaneStateIdle || leasedRun != nil {
+		if err == nil && (state != run.LaneStateIdle || leasedRun != nil) {
 			return nil, Usagef("lane %q is held; stop its loop before recovery", w.Decision.LaneID)
 		}
 	}
@@ -125,11 +126,16 @@ func (l *Loop) Examine(ctx context.Context, runID string) (LoopResult, error) {
 		// Use the complete planner, not pendingDecision alone: it observes
 		// current repair inputs and invalidates changed workflows. Planning
 		// does not apply other items or reap other lanes for this command.
+		itemWorktrees := l.cfg.ItemWorktrees || (!isPoolLaneName(w.Decision.LaneID) && !documentDesk(w.Decision.LaneID))
 		lanes := []string{w.Decision.LaneID}
 		if w.LaneReleased {
-			lanes = l.cfg.Lanes
+			if itemWorktrees {
+				lanes = []string{w.Decision.ItemID}
+			} else {
+				lanes = l.cfg.Lanes
+			}
 		}
-		tick := Pass{examineItem: w.Decision.ItemID, Build: &l.build, Now: at.Format(time.RFC3339), AvailableLanes: &lanes}
+		tick := Pass{examineItem: w.Decision.ItemID, Build: &l.build, Now: at.Format(time.RFC3339), AvailableLanes: &lanes, ItemWorktrees: itemWorktrees}
 		if stager, ok := l.cfg.Stage.(*LaneStager); ok {
 			tick.BriefTemplate = &stager.Template
 		}

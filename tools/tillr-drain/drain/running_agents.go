@@ -96,6 +96,28 @@ func collectActiveOrdinaryAgents(r *store.Reader, at time.Time, works, byRun map
 			continue
 		}
 		if work.Decision.Workflow == nil {
+			if isPoolLaneName(lane) || leasedLanes[lane] {
+				continue
+			}
+			paused, err := pausedPendingWork(r, work)
+			if err != nil {
+				return nil, err
+			}
+			if paused {
+				continue
+			}
+			finished, err := workCurrentNodeTerminal(r, work)
+			if err != nil {
+				return nil, err
+			}
+			if !finished {
+				continue
+			}
+			key := workRunID(work)
+			if key == "" {
+				key = "settling:" + itemID
+			}
+			active[key] = lane
 			continue
 		}
 		if work.Ready {

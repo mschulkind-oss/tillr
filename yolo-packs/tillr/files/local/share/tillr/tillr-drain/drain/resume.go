@@ -110,12 +110,14 @@ func Resume(ctx context.Context, cfg ResumeConfig, spec ResumeSpec) (ResumeResul
 		now = cfg.Now
 	}
 	at := now().UTC()
+	fromStore := false
 	if len(cfg.Lanes) == 0 {
 		lanes, err := StoreLanes(ctx, cfg.Store)
 		if err != nil {
 			return ResumeResult{}, err
 		}
 		cfg.Lanes = lanes
+		fromStore = true
 	}
 	row, err := readRunForResume(ctx, cfg.Store, spec.RunID)
 	if err != nil {
@@ -152,14 +154,14 @@ func Resume(ctx context.Context, cfg ResumeConfig, spec ResumeSpec) (ResumeResul
 		return ResumeResult{}, err
 	}
 	targets := []string{worktree}
-	before, err := boundaryFor(ctx, cfg, row.LaneID, targets)
+	before, err := boundaryFor(ctx, cfg, row.LaneID, targets, fromStore)
 	if err != nil {
 		return ResumeResult{}, err
 	}
 	rec, log, runErr := cfg.Steps.Run(ctx, *request)
 	// The bracket is closed on the state the resume left, whatever the run answered: a run
 	// that failed still wrote, and a bracket left open is a bracket nobody compared.
-	after, err := boundaryFor(ctx, cfg, row.LaneID, targets)
+	after, err := boundaryFor(ctx, cfg, row.LaneID, targets, fromStore)
 	if err != nil {
 		return ResumeResult{}, err
 	}
@@ -457,7 +459,7 @@ func resumeRequest(cfg ResumeConfig, row resumeRun, spec ResumeSpec) (*run.Reque
 
 // boundaryFor takes one side of the resume's bracket: the lane worktree the segment owns, and
 // the sibling lanes the loop holds (snapshot's own rule, applied to a resume's target set).
-func boundaryFor(ctx context.Context, cfg ResumeConfig, laneID string, targets []string) (*Boundary, error) {
+func boundaryFor(ctx context.Context, cfg ResumeConfig, laneID string, targets []string, skipMissing bool) (*Boundary, error) {
 	spec := BoundarySpec{Repo: cfg.Root, Targets: targets, LaneRoot: cfg.LaneRoot}
 	for _, lane := range cfg.Lanes {
 		// A lane is watched at its worktree, which is the directory a run writes in:
@@ -466,6 +468,11 @@ func boundaryFor(ctx context.Context, cfg ResumeConfig, laneID string, targets [
 		path := filepath.Join(cfg.LaneRoot, lane, WorktreeDir)
 		if isTarget(targets, path) {
 			continue
+		}
+		if skipMissing || !isPoolLaneName(lane) {
+			if _, err := os.Stat(path); os.IsNotExist(err) {
+				continue
+			}
 		}
 		spec.Lanes = append(spec.Lanes, path)
 	}

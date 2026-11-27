@@ -1378,6 +1378,9 @@ func (l *Loop) stageLandingLanes(ctx context.Context) error {
 	if err := authorizeWorktreeRoot(l.cfg.Root); err != nil {
 		return err
 	}
+	if l.cfg.ItemWorktrees {
+		return l.recheckLanes(ctx)
+	}
 	if err := l.stageLanes(ctx); err != nil {
 		return err
 	}

@@ -128,7 +128,7 @@ func (l *Loop) idleLaneEpochs() map[string]int {
 		epochs[lane] = changes[lane]
 	}
 	for _, lane := range lanes {
-		add(lane, l.cfg.LaneRoot != "" && !isPoolLaneName(lane))
+		add(lane, l.cfg.LaneRoot != "" && (l.cfg.ItemWorktrees || !isPoolLaneName(lane)))
 	}
 	if l.cfg.LaneRoot != "" {
 		if entries, err := os.ReadDir(l.cfg.LaneRoot); err == nil {

@@ -1649,7 +1649,7 @@ func (l *Loop) readPassPlans(ctx context.Context, r *store.Reader, at time.Time,
 		return err
 	}
 	for lane, busy := range held {
-		if busy && documentDesk(lane) {
+		if busy && (documentDesk(lane) || l.cfg.ItemWorktrees) && !slices.Contains(observed, lane) {
 			observed = append(observed, lane)
 		}
 	}
