@@ -482,7 +482,7 @@ test-level `"Action": "fail"` event or `--- FAIL:` line for the running test. Co
 printed the `fork-check: triage --` block), while `gateFailingChecks` in
 [`tools/tillr-drain/drain/returned.go`](../../tools/tillr-drain/drain/returned.go) already
 calls `readTriageBlock`
-([`tools/tillr-drain/drain/refusal_cases.go`](../../tools/tillr-drain/drain/refusal_cases.go))
+([`tools/tillr-drain/drain/refusal_cases.go`](../../tools/tillr-drain/internal/runhistory/refusal_cases.go))
 directly on `go-affected`'s recorded check log (`change-logs/<NN>-go-affected.log`). To make
 `drain.refusal` name blocked tests while changing only
 `tools/gate/go_affected.py` (and its unit tests in
@@ -522,7 +522,7 @@ directly on `go-affected`'s recorded check log (`change-logs/<NN>-go-affected.lo
    truncated, or
    `       no case named in the output; reproduce with: python3 tools/gate/go_affected.py`
    when no case was named). Placing `SIGQUIT` cases first ensures the 10-case triage bound
-   and `failureSummary` in [`refusal_cases.go`](../../tools/tillr-drain/drain/refusal_cases.go)
+   and `failureSummary` in [`refusal_cases.go`](../../tools/tillr-drain/internal/runhistory/refusal_cases.go)
    keep the blocked test in `drain.refusal` ahead of other failing tests.
 3. **Scope boundary.** Only `tools/gate/go_affected.py`
    and its unit test suite `tests/go-affected.test.py`
@@ -540,7 +540,7 @@ pass before the merge, outside the ten-second fast budget, because **a wrong jud
 failure a revert does not repair: every landing it judged stays judged**. The drain records
 the gate and landing time of such a change apart from ordinary candidates
 (`runnerProofPaths` in
-[`tools/tillr-drain/drain/runner_timing.go`](../../tools/tillr-drain/drain/runner_timing.go)).
+[`tools/tillr-drain/drain/runner_timing.go`](../../tools/tillr-drain/internal/drainmodel/runner_timing.go)).
 
 [`D-GR50`](#D-GR50) (designer's decision from an operator request, 2026-11-23; part 3
 confirmed by the owner on 2026-11-25 in [`OQ-GR6`](#OQ-GR6), while the remaining designer
@@ -704,7 +704,7 @@ drain's **heavy runner** then **proves** the trunk: it runs `tillr-gate checks -
 in a detached checkout of the trunk tip, which selects every heavy tree declaration and lets
 result memory decide which actually execute. Before removing and re-adding its proof
 worktree, `unlockRegisteredWorktree` in
-[`tools/tillr-drain/drain/worktree_registry.go`](../../tools/tillr-drain/drain/worktree_registry.go)
+[`tools/tillr-drain/drain/worktree_registry.go`](../../tools/tillr-drain/internal/boundary/worktree_registry.go)
 checks under the worktree registry lock whether that proof path's registration is left locked
 (such as an `initializing` lock from an interrupted checkout with no directory on disk),
 unlocks only its own path, logs the path, lock reason and lock file modification time, and
@@ -755,7 +755,7 @@ whenever `mode == "tip"`), each of the five [`D-GR25`](#D-GR25) cases reads as f
    [`config/tillr/gate-policy.json`](../../config/tillr/gate-policy.json) sets `lane_base` to
    `tip`, this case is inactive: new lanes already start at the trunk tip (`base = tip`),
    which holds the tip's block, and `pass.go` and `fastStartBase`
-   ([`tools/tillr-drain/drain/start_claim.go`](../../tools/tillr-drain/drain/start_claim.go))
+   (formerly `tools/tillr-drain/drain/start_claim.go`, retired in Scheduling Slice 6)
    skip `blockBase` / `blockBaseAt` when `green == ""` (while `blockBase` and `blockBaseAt`
    also return `base` immediately when `base == ""` or `tip == base`).
 2. **Landed design answer newer than `refs/tillr/green` (`designAnswerLanded` in
@@ -900,7 +900,7 @@ pre-merge `go-affected`):
 | **`gate 5, proof 10` (prior)** | **~2.5 min** median | **~3.8 s** median | **~16–20 min** low contention; **~30–40+ min** in multi-gate bursts | **~20–45 min** | **~9.7/h** (larger batches during bursts) |
 | **`proof 5, gate 10` (current)** | **~3.5–5 min** median (1.3x–2.0x during active proof shards) | **~4–8 s** | **~16–22 min** consistently | **~17–30 min** consistently | **~7–9/h** (smaller unproved tip gap) |
 
-On 2026-11-25 the owner chose option B of [`OQ-GR7`](#OQ-GR7) (`"GR4. B. GR5. A. your choice if ti changes. not high stakes. GR6. A. GR7. B"`), swapping the priority order to `repair > proof > gate > worker` (`repair 0, proof 5, gate 10, worker 15` under `nice`, and `repair=400, proof=200, gate=100, worker=50` under cgroup v2 `cpu.weight` by the designer's [`D-GTC5`](../design/gate-test-capacity.md#D-GTC5) and [`D-GTC11`](../design/gate-test-capacity.md#D-GTC11) in [gate test capacity](../design/gate-test-capacity.md)) with no cap on concurrent gates, because nothing publishes (`refs/tillr/green` does not advance) without a proof. The order `repair > proof > gate > worker` is built in [`tools/tillr-drain/drain/process_priority.go`](../../tools/tillr-drain/drain/process_priority.go) and [`tools/tillr-drain/why.go`](../../tools/tillr-drain/why.go).
+On 2026-11-25 the owner chose option B of [`OQ-GR7`](#OQ-GR7) (`"GR4. B. GR5. A. your choice if ti changes. not high stakes. GR6. A. GR7. B"`), swapping the priority order to `repair > proof > gate > worker` (`repair 0, proof 5, gate 10, worker 15` under `nice`, and `repair=400, proof=200, gate=100, worker=50` under cgroup v2 `cpu.weight` by the designer's [`D-GTC5`](../design/gate-test-capacity.md#D-GTC5) and [`D-GTC11`](../design/gate-test-capacity.md#D-GTC11) in [gate test capacity](../design/gate-test-capacity.md)) with no cap on concurrent gates, because nothing publishes (`refs/tillr/green` does not advance) without a proof. The order `repair > proof > gate > worker` is built in [`tools/tillr-drain/drain/process_priority.go`](../../tools/tillr-drain/internal/procguard/process_priority.go) and [`tools/tillr-drain/why.go`](../../tools/tillr-drain/why.go).
 
 ### A red proof
 
@@ -1056,7 +1056,7 @@ Whole Go suites and affected packages both run through
   processes is weighted by the kernel via cgroup v2 `cpu.weight` subgroups or `nice`
   in the order `repair > proof > gate > worker`
   ([`OQ-GR7`](#OQ-GR7), [`OQ-GTC3`](../design/gate-test-capacity.md#OQ-GTC3),
-  [`tools/tillr-drain/drain/process_priority.go`](../../tools/tillr-drain/drain/process_priority.go)).
+  [`tools/tillr-drain/drain/process_priority.go`](../../tools/tillr-drain/internal/procguard/process_priority.go)).
 - **Unchanged packages are not re-run ([`D-GR49`](#D-GR49)).** With explicit `--cache` (the
   default mode stays uncached), a package under `100` top-level tests (`SHARD_THRESHOLD`)
   runs as one group and a larger one shards by the duration-balanced bucket formula without

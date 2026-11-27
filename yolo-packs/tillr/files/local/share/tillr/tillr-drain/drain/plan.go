@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-drain/internal/bgactors"
 	"github.com/mschulkind-oss/tillr-drain/internal/worktreebudget"
 	"github.com/mschulkind-oss/tillr-drain/obstacles"
 	"github.com/mschulkind-oss/tillr-drain/ownercriteria"
@@ -46,9 +47,6 @@ type Pass struct {
 	// a freshly settled candidate plus active interactive requests that could
 	// contend for its lane) without scanning finished history or unrelated items.
 	examineItems map[string]bool
-	// pendingOnly plans unfinished attempts, including their resume and retry
-	// decisions, but leaves new attempts to the starter.
-	pendingOnly bool
 	// ownerMigration permits only the deterministic conversion of a legacy owner report.
 	ownerMigration bool
 	// loopHolds is the running loop's own in-memory holds (Loop.held), keyed by item, with
@@ -57,7 +55,8 @@ type Pass struct {
 	loopHolds map[string]string
 	// The legacy loop shares one ref observation between dependency planning and
 	// base selection for new starts. Standalone and settlement plans need no snapshot.
-	startRefs *startRefs
+	startRefs  *startRefs
+	docPrereqs *bgactors.DocPrereqsCache
 	// ownExaminationLane and ownExaminationRunID let an in-flight settle examination
 	// ask what the planner would decide once its own lease ends, without clearing
 	// that lease before the gate claim commits.
@@ -305,7 +304,7 @@ func (t Pass) plansItem(id string, work *pendingWork) bool {
 	if len(t.examineItems) > 0 && !t.examineItems[id] {
 		return false
 	}
-	return !t.pendingOnly || (work != nil && !work.Done)
+	return true
 }
 
 // planDetails supplies read faces with facts that are not part of the decisions.
@@ -421,9 +420,21 @@ func planWithDetails(r *store.Reader, tick Pass, policy *Policy, questions Quest
 	unshared := map[string]bool{}
 	rewriteHolds, rewriteOwnerHolds := map[string]string{}, map[string]string{}
 	if hasPrerequisite(def, definition.PrerequisiteDesignDocument) && def.Completes == "landing" {
-		unshared, rewriteHolds, rewriteOwnerHolds, err = documentPrerequisites(r, root, tick.ProseRewrite, questions)
-		if err != nil {
-			return nil, err
+		if tick.docPrereqs != nil && tick.docPrereqs.Valid {
+			if tick.docPrereqs.Unshared != nil {
+				unshared = tick.docPrereqs.Unshared
+			}
+			if tick.docPrereqs.RewriteHolds != nil {
+				rewriteHolds = tick.docPrereqs.RewriteHolds
+			}
+			if tick.docPrereqs.RewriteOwnerHolds != nil {
+				rewriteOwnerHolds = tick.docPrereqs.RewriteOwnerHolds
+			}
+		} else {
+			unshared, rewriteHolds, rewriteOwnerHolds, err = documentPrerequisites(r, root, tick.ProseRewrite, questions)
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 	buildHash, err := build.Hash()
@@ -472,11 +483,15 @@ func planWithDetails(r *store.Reader, tick Pass, policy *Policy, questions Quest
 	}
 	unproved := map[string]string{}
 	if def.Completes == "landing" {
-		tip := trunkBranchFor(root)
-		if tick.startRefs != nil {
-			tip = tick.startRefs.tip
+		if tick.startRefs != nil && tick.startRefs.purePass {
+			unproved, err = unprovedBlockersPure(r, green, tick.startRefs.unprovedSet, states, plannedEdges)
+		} else {
+			tip := trunkBranchFor(root)
+			if tick.startRefs != nil {
+				tip = tick.startRefs.tip
+			}
+			unproved, err = unprovedBlockers(context.Background(), r, root, green, tip, states, plannedEdges)
 		}
-		unproved, err = unprovedBlockers(context.Background(), r, root, green, tip, states, plannedEdges)
 		if err != nil {
 			return nil, err
 		}
@@ -730,26 +745,15 @@ func (p *planner) reserveDrainingWork(r *store.Reader, items []itemRow, edges ma
 		if work == nil || work.Done || work.LaneReleased {
 			continue
 		}
-		var (
-			paused    bool
-			ownLeases []LaneLease
-			err       error
-		)
-		if p.preRead != nil {
-			paused = p.preRead.pending[row.ItemID].paused
-			if paused {
-				ownLeases = p.preRead.activeLeases(p.at, []string{work.Decision.LaneID}, "", "")
-			}
-		} else {
-			paused, err = pausedPendingWork(r, work)
+		paused, err := pausedPendingWork(r, work)
+		if err != nil {
+			return nil, err
+		}
+		var ownLeases []LaneLease
+		if paused {
+			ownLeases, err = activeLeases(r, p.at, []string{work.Decision.LaneID})
 			if err != nil {
 				return nil, err
-			}
-			if paused {
-				ownLeases, err = activeLeases(r, p.at, []string{work.Decision.LaneID})
-				if err != nil {
-					return nil, err
-				}
 			}
 		}
 		if !paused {
@@ -809,15 +813,7 @@ func (p *planner) reserveDrainingWork(r *store.Reader, items []itemRow, edges ma
 		if lane == "" || p.offersLane(lane) || documentDesk(lane) || p.tick.OutLanes[lane] {
 			return nil
 		}
-		var (
-			live bool
-			err  error
-		)
-		if p.preRead != nil {
-			live = p.preRead.pending[itemID].liveDraining
-		} else {
-			live, err = liveDrainingWorker(r, work, p.at)
-		}
+		live, err := liveDrainingWorker(r, work, p.at)
 		if err != nil || !live {
 			return err
 		}
@@ -856,15 +852,7 @@ func (p *planner) reserveDrainingWork(r *store.Reader, items []itemRow, edges ma
 			continue
 		}
 		_, waiting := p.waits[row.ItemID]
-		var (
-			d   Decision
-			err error
-		)
-		if p.preRead != nil {
-			d, err = finishPendingDecision(p.preRead.pending[row.ItemID].drainingDecision, work, p.at, p.inputs[row.ItemID], p.tick.BriefTemplate)
-		} else {
-			d, err = pendingDecisionExcept(r, work, p.at, p.inputs[row.ItemID], p.tick.BriefTemplate, p.policy, p.shut, p.tick.GatesInFlight, p.tick.ownExaminationLane, p.tick.ownExaminationRunID, waiting)
-		}
+		d, err := pendingDecisionExcept(r, work, p.at, p.inputs[row.ItemID], p.tick.BriefTemplate, p.policy, p.shut, p.tick.GatesInFlight, p.tick.ownExaminationLane, p.tick.ownExaminationRunID, waiting)
 		if err != nil {
 			return nil, err
 		}
@@ -937,13 +925,9 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 	}
 	var iceboxSchema versionSchema
 	if len(iceboxDocs) > 0 {
-		if p.preRead != nil {
-			iceboxSchema = p.preRead.versionSchema
-		} else {
-			iceboxSchema, err = readVersionSchema(r)
-			if err != nil {
-				return nil, nil, readFailure(err)
-			}
+		iceboxSchema, err = readVersionSchema(r)
+		if err != nil {
+			return nil, nil, readFailure(err)
 		}
 	}
 	decisions := make([]record.Envelope, 0, len(items))
@@ -977,25 +961,17 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 			// (terminal_item.go); a workflow item is released below on the same fact.
 			settled := false
 			if p.finished(item.State) && work.Decision.Workflow == nil {
-				if p.preRead != nil {
-					decision, settled = p.preRead.pending[item.ItemID].terminalDecision, p.preRead.pending[item.ItemID].terminalSettled
-				} else {
-					decision, settled, err = terminalSettlementExcept(r, work, at, tick.ownExaminationLane, tick.ownExaminationRunID)
-					if err != nil {
-						return nil, nil, readFailure(err)
-					}
+				decision, settled, err = terminalSettlementExcept(r, work, at, tick.ownExaminationLane, tick.ownExaminationRunID)
+				if err != nil {
+					return nil, nil, readFailure(err)
 				}
 			}
 			if !settled && !work.BoundaryFailed {
 				endLive := closedState(def, item.State)
 				if !endLive && item.State == StateLanded {
-					if p.preRead != nil {
-						endLive = p.preRead.pending[item.ItemID].operatorFinished
-					} else {
-						endLive, err = operatorFinishedLanding(r, item.ItemID)
-						if err != nil {
-							return nil, nil, readFailure(err)
-						}
+					endLive, err = operatorFinishedLanding(r, item.ItemID)
+					if err != nil {
+						return nil, nil, readFailure(err)
 					}
 				}
 				if endLive {
@@ -1014,21 +990,15 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 				// treating it as an ordinary hold can stop the loop before it
 				// settles the worker's result.
 				if len(tick.runFaces) != 0 && (waiting || evaluatorNode(work.Decision)) {
-					if p.preRead != nil {
-						liveFirstSegment = p.preRead.pending[item.ItemID].liveFirstSegment
-					} else {
-						liveFirstSegment, err = liveFirstSegmentWorker(r, work, at, tick.runFaces)
-						if err != nil {
-							return nil, nil, readFailure(err)
-						}
+					liveFirstSegment, err = liveFirstSegmentWorker(r, work, at, tick.runFaces)
+					if err != nil {
+						return nil, nil, readFailure(err)
 					}
 				}
 				if liveFirstSegment {
 					decision = work.Decision
 					decision.From, decision.To, decision.Action, decision.Reason = "running", "", ActionHold, ReasonRunLive
 					identifyDecision(&decision)
-				} else if p.preRead != nil {
-					decision, err = finishPendingDecision(p.preRead.pending[item.ItemID].planDecision, definitionWork(def, work), at, inputs[item.ItemID], tick.BriefTemplate)
 				} else {
 					decision, err = pendingDecisionExcept(r, definitionWork(def, work), at, inputs[item.ItemID], tick.BriefTemplate, policy, shut, tick.GatesInFlight, tick.ownExaminationLane, tick.ownExaminationRunID, waiting)
 				}
@@ -1137,27 +1107,19 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 					}
 					var leases []LaneLease
 					if !ownerNextNode || !work.LaneReleased {
-						if p.preRead != nil {
-							leases = p.preRead.activeLeases(at, []string{laneID}, tick.ownExaminationLane, tick.ownExaminationRunID)
-						} else {
-							var leaseErr error
-							leases, leaseErr = activeLeasesExcept(r, at, []string{laneID}, tick.ownExaminationLane, tick.ownExaminationRunID)
-							if leaseErr != nil {
-								return nil, nil, readFailure(leaseErr)
-							}
+						var leaseErr error
+						leases, leaseErr = activeLeasesExcept(r, at, []string{laneID}, tick.ownExaminationLane, tick.ownExaminationRunID)
+						if leaseErr != nil {
+							return nil, nil, readFailure(leaseErr)
 						}
 					}
 					if len(leases) == 0 {
 						keepEnding := false
 						if decision.Action == ActionHold && decision.Reason == ReasonItemAlreadyTerminal {
-							if p.preRead != nil {
-								keepEnding = p.preRead.pending[item.ItemID].unfinishedRun
-							} else {
-								var unfinishedErr error
-								keepEnding, unfinishedErr = workHasUnfinishedRun(r, work)
-								if unfinishedErr != nil {
-									return nil, nil, readFailure(unfinishedErr)
-								}
+							var unfinishedErr error
+							keepEnding, unfinishedErr = workHasUnfinishedRun(r, work)
+							if unfinishedErr != nil {
+								return nil, nil, readFailure(unfinishedErr)
 							}
 						}
 						if !keepEnding {
@@ -1246,7 +1208,7 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 		} else if rewriteHolds[item.ItemID] != "" && !p.finished(item.State) {
 			decision = Decision{ItemID: item.ItemID, Action: ActionHold, Reason: ReasonAwaitsRewrite, DeferredBy: rewriteHolds[item.ItemID], From: "held", Attempt: p.nextAttempt(item.ItemID)}
 			identifyDecision(&decision)
-		} else if iceboxReason, iceboxErr := checkIceboxHold(r, p.preRead, item, root, def.Ready, holdEnabled(def, ReasonIcebox), iceboxDocs, iceboxSchema); iceboxErr != nil {
+		} else if iceboxReason, iceboxErr := checkIceboxHold(r, item, root, def.Ready, holdEnabled(def, ReasonIcebox), iceboxDocs, iceboxSchema); iceboxErr != nil {
 			return nil, nil, readFailure(iceboxErr)
 		} else if iceboxReason != "" {
 			decision = Decision{ItemID: item.ItemID, Action: ActionHold, Reason: iceboxReason, From: "held", Attempt: p.nextAttempt(item.ItemID)}
@@ -1269,11 +1231,7 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 			)
 			_, hasSplit = p.splitCalls[item.ItemID]
 			if !hasSplit || !p.lands() || item.State != def.Ready {
-				if p.preRead != nil {
-					w, selected, source, loadErr = selectWorkflowFromStored(p.preRead.workflowSelections[item.ItemID], root, item, tick.WorkflowDefaults, policy)
-				} else {
-					w, selected, source, loadErr = selectWorkflow(r, root, item, tick.WorkflowDefaults, policy)
-				}
+				w, selected, source, loadErr = selectWorkflow(r, root, item, tick.WorkflowDefaults, policy)
 			}
 			if loadErr == nil && def.Completes == "landing" {
 				w = planDelivery(w, selected, item, known)
@@ -1333,13 +1291,9 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 				if n := p.nodeCounts[item.ItemID]; n > 0 {
 					reusedFrom = n
 				}
-				if p.preRead != nil {
-					resumeNode, reused = retainedReadersFromOutcomes(p.preRead.retainedOutcomes[item.ItemID], reusedFrom, w)
-				} else {
-					resumeNode, reused, err = retainedReaders(r, item.ItemID, reusedFrom, w)
-					if err != nil {
-						return nil, nil, readFailure(err)
-					}
+				resumeNode, reused, err = retainedReaders(r, item.ItemID, reusedFrom, w)
+				if err != nil {
+					return nil, nil, readFailure(err)
 				}
 			}
 			donor, hasWholeDonor := p.splitWholeDonor(item.ItemID)
@@ -1369,13 +1323,9 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 			_, hasRetry := retries[item.ItemID]
 			obstacleReleased := p.latest[item.ItemID] != "" && p.releasedObstacles[item.ItemID] == p.latest[item.ItemID]
 			if w != nil && hasNodes && !p.finished(item.State) && !hasRetry && !obstacleReleased && !p.waitReleased(item.ItemID) {
-				if p.preRead != nil {
-					hold = p.preRead.commandHolds[item.ItemID]
-				} else {
-					hold, err = commandNodeHold(r, item.ItemID)
-					if err != nil {
-						return nil, nil, readFailure(err)
-					}
+				hold, err = commandNodeHold(r, item.ItemID)
+				if err != nil {
+					return nil, nil, readFailure(err)
 				}
 			}
 			if loadErr == nil && w != nil {
@@ -1463,7 +1413,7 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 				return nil, nil, err
 			}
 		}
-		if err := describeBackendHoldWithPreRead(r, p.preRead, &decision, policy, at, p.shut, p.infrastructureClosed); err != nil {
+		if err := describeBackendHoldWithClosed(r, &decision, policy, at, p.shut, p.infrastructureClosed); err != nil {
 			return nil, nil, err
 		}
 		if def.Completes != "landing" && decision.RunRequest != nil && decision.RunRequest.WorkingDir == WorktreeDir {
@@ -1507,7 +1457,6 @@ func plannerDocumentKey(root, doc string) string {
 type planner struct {
 	// Shadow evaluation shares routing without consuming lanes, desks or forks.
 	captureStart  func(itemRow, Decision) error
-	preRead       *startRepairInputs
 	workerLanes   map[string]string
 	retryLaneWait map[string]bool // only populated for why, in the final planning round
 	maskedWorkers map[string]Decision

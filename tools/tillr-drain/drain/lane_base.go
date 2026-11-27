@@ -446,6 +446,43 @@ func unprovedBlockers(ctx context.Context, r *store.Reader, root, green, tip str
 	return unprovedBlockersFromCommits(ctx, root, green, tip, states, edges, commits)
 }
 
+// unprovedBlockersPure checks landed blockers against the precomputed set of
+// commits in green..tip without spawning any git subprocesses (D-SN1).
+func unprovedBlockersPure(r *store.Reader, green string, unprovedSet map[string]bool, states map[string]string, edges map[string][]itemEdge) (map[string]string, error) {
+	waits := map[string]string{}
+	if green == "" {
+		return waits, nil
+	}
+	commits, err := readLandedBlockerCommits(r, states, edges)
+	if err != nil {
+		return nil, err
+	}
+	for id, blockers := range edges {
+		if IsTrunkFixer(id) {
+			continue
+		}
+		for _, edge := range blockers {
+			blocker := edge.Target
+			if states[blocker] != StateLanded {
+				continue
+			}
+			landing := commits[blocker]
+			if landing.sha == "" {
+				waits[id] = ReasonTrunkUnproved
+				break
+			}
+			if strings.HasPrefix(landing.ref, "refs/heads/patch/") {
+				continue
+			}
+			if unprovedSet[landing.sha] {
+				waits[id] = ReasonTrunkUnproved
+				break
+			}
+		}
+	}
+	return waits, nil
+}
+
 // blockSource is a cache of document blobs read from commits, keyed by
 // "<sha>:<path>". A missing path is cached as nil.
 type blockSource map[string]*string

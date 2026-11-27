@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -1982,4 +1983,70 @@ func testFixClosedRetryCommand(r *store.Reader, itemID string, work *pendingWork
 		return retryCommand(itemID, runID, "")
 	}
 	return cmd
+}
+
+func shadowRotation(r *store.Reader, tick *Pass) (map[string]laneRefusal, error) {
+	lanes := make([]string, 0, len(*tick.AvailableLanes))
+	refused := map[string]laneRefusal{}
+	out := make(map[string]bool, len(tick.OutLanes))
+	maps.Copy(out, tick.OutLanes)
+	tick.OutLanes = out
+	if tick.ItemWorktrees {
+		rows, err := r.Query(`SELECT e.object_id, e.kind, e.payload
+			FROM events e
+			WHERE e.object_type = 'lane' AND e.kind IN (?, ?)
+			  AND e.seq = (SELECT MAX(e2.seq) FROM events e2 WHERE e2.object_type = 'lane' AND e2.object_id = e.object_id AND e2.kind IN (?, ?))`,
+			laneRefusedKind, laneRestoredKind, laneRefusedKind, laneRestoredKind)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		refusedSet := map[string]bool{}
+		for rows.Next() {
+			var lane, kind string
+			var payload []byte
+			if err := rows.Scan(&lane, &kind, &payload); err != nil {
+				return nil, err
+			}
+			if kind == laneRefusedKind {
+				var refusal laneRefusal
+				if err := json.Unmarshal(payload, &refusal); err != nil {
+					return nil, err
+				}
+				tick.OutLanes[lane] = true
+				refused[lane] = refusal
+				refusedSet[lane] = true
+			}
+		}
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+		for _, lane := range *tick.AvailableLanes {
+			if !refusedSet[lane] {
+				lanes = append(lanes, lane)
+			}
+		}
+		tick.AvailableLanes = &lanes
+		return refused, nil
+	}
+	for _, lane := range *tick.AvailableLanes {
+		var kind string
+		var payload []byte
+		err := r.QueryRow(`SELECT kind, payload FROM events WHERE object_type='lane' AND object_id=? AND kind IN (?, ?) ORDER BY seq DESC LIMIT 1`, lane, laneRefusedKind, laneRestoredKind).Scan(&kind, &payload)
+		if err != nil && err != sql.ErrNoRows {
+			return nil, err
+		}
+		if kind == laneRefusedKind {
+			var refusal laneRefusal
+			if err := json.Unmarshal(payload, &refusal); err != nil {
+				return nil, err
+			}
+			tick.OutLanes[lane] = true
+			refused[lane] = refusal
+		} else {
+			lanes = append(lanes, lane)
+		}
+	}
+	tick.AvailableLanes = &lanes
+	return refused, nil
 }

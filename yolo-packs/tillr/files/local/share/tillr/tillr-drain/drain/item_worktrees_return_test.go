@@ -339,29 +339,6 @@ func TestItemWorktreesReleasedCandidateStartsBeforeFastStartCandidate(t *testing
 		return appendEffect(tx, examinationReleasedKind, req.RunID, struct{}{}, at.Add(-38*time.Minute))
 	})
 
-	snap := proposalFollower(t, l)(at)
-
-	// Place-1 item-a is a released candidate eligible to run at 0 or 1 gates in flight;
-	// at running-agent limit 1, fast-start must not hand the slot to place-2 item-b first.
-	if entry, ok := snap.nextFreshStart(); ok {
-		t.Fatalf("nextFreshStart() = (%s on %s), want none while higher-placed released candidate item-a starts first", entry.decision.ItemID, entry.decision.LaneID)
-	}
-	if entry, ok := snap.nextFreshStartWithGates(1); ok {
-		t.Fatalf("nextFreshStartWithGates(1) = (%s on %s), want none while higher-placed released candidate item-a starts first", entry.decision.ItemID, entry.decision.LaneID)
-	}
-	// When the gate-stall hold is still active (4 gates >= 4), item-a cannot rerun yet,
-	// so place-2 item-b may fast-start into its own directory.
-	if entry, ok := snap.nextFreshStartWithGates(4); !ok || entry.decision.ItemID != "item-b" || entry.decision.LaneID != "item-b" {
-		t.Fatalf("nextFreshStartWithGates(4) = (%+v, %v), want item-b on item-b", entry.decision, ok)
-	}
-
-	// With limit 2, place-1 item-a reserves one slot and place-2 item-b takes its own directory.
-	l.cfg.Lanes = []string{"lane-1", "lane-2"}
-	twoLanes := proposalFollower(t, l)(at)
-	if entry, ok := twoLanes.nextFreshStart(); !ok || entry.decision.ItemID != "item-b" || entry.decision.LaneID != "item-b" {
-		t.Fatalf("two-lane nextFreshStart() = (%+v, %v), want item-b on item-b", entry.decision, ok)
-	}
-
 	// Confirm the planner itself dispatches place-1 item-a onto item-a.
 	st, err := store.OpenRead(t.Context(), f.storePath)
 	if err != nil {

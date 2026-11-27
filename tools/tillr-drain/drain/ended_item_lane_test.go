@@ -3,6 +3,7 @@ package drain
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -757,4 +758,84 @@ func TestSaveEndedItemWorkRecordsKeptFilesAndBytes(t *testing.T) {
 			t.Fatalf("got kept_files=%d kept_bytes=%d, want 4 and 23 (payload=%+v)", got.KeptFiles, got.KeptBytes, got)
 		}
 	})
+}
+
+type recordedSQLQuery struct {
+	query string
+	args  []any
+}
+
+func assertNoSQLiteTempSortOrEphemeral(t *testing.T, storePath string, queries []recordedSQLQuery) {
+	t.Helper()
+	if len(queries) == 0 {
+		t.Fatal("expected at least one recorded SQL query")
+	}
+	s, err := store.OpenRead(context.Background(), storePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err := s.ReadTx(context.Background(), func(r *store.Reader) error {
+		for _, q := range queries {
+			planRows, err := r.Query("EXPLAIN QUERY PLAN "+q.query, q.args...)
+			if err != nil {
+				return err
+			}
+			var plans []string
+			for planRows.Next() {
+				var id, parent, unused int
+				var detail string
+				if err := planRows.Scan(&id, &parent, &unused, &detail); err != nil {
+					planRows.Close()
+					return err
+				}
+				plans = append(plans, detail)
+			}
+			if err := planRows.Err(); err != nil {
+				planRows.Close()
+				return err
+			}
+			planRows.Close()
+			joinedPlan := strings.Join(plans, "; ")
+			if strings.Contains(joinedPlan, "TEMP B-TREE") {
+				t.Errorf("query uses SQLite temp B-tree:\n  sql:  %s\n  plan: %s", q.query, joinedPlan)
+			}
+
+			vdbeRows, err := r.Query("EXPLAIN "+q.query, q.args...)
+			if err != nil {
+				return err
+			}
+			var forbidden []string
+			for vdbeRows.Next() {
+				var addr int
+				var opcode string
+				var p1, p2, p3 int
+				var p4 sql.NullString
+				var p5 int
+				var comment sql.NullString
+				if err := vdbeRows.Scan(&addr, &opcode, &p1, &p2, &p3, &p4, &p5, &comment); err != nil {
+					vdbeRows.Close()
+					return err
+				}
+				switch opcode {
+				case "SorterOpen", "SorterInsert", "SorterSort", "SorterNext", "OpenEphemeral", "OpenAutoindex":
+					forbidden = append(forbidden, opcode)
+				}
+				if strings.Contains(p4.String, "json_group_array") {
+					forbidden = append(forbidden, "AggStep("+p4.String+")")
+				}
+			}
+			if err := vdbeRows.Err(); err != nil {
+				vdbeRows.Close()
+				return err
+			}
+			vdbeRows.Close()
+			if len(forbidden) > 0 {
+				t.Errorf("query uses SQLite temp sorter/ephemeral opcodes %v:\n  sql: %s", forbidden, q.query)
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
 }

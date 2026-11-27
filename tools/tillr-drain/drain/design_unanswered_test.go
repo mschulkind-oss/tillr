@@ -259,14 +259,6 @@ func TestKilledDesignRunRestartsWhenItsLaneIsUnavailable(t *testing.T) {
 					return err
 				})
 			}
-			ctx := context.Background()
-			snapshot, err := readProposedStarts(ctx, f.storePath, l.cfg.Now(), l.cfg.Policy, l.startViewPass(), &VantageQuestions{Root: f.root, Context: ctx}, startSnapshot{})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if start, ok := snapshot.nextFreshStart(); !ok || start.decision.ItemID != "item-a" || start.decision.LaneID != "lane-2" {
-				t.Fatalf("start coordinator did not propose the replacement lane: %+v", start.decision)
-			}
 			p := decisionFor(t, l, "item-a")
 			if p.decision.Action != ActionDispatch || p.decision.LaneID != "lane-2" {
 				t.Fatalf("killed design run was not restarted on a free eligible lane: %+v", p.decision)

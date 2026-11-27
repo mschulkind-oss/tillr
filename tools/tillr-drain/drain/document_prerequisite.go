@@ -169,19 +169,7 @@ func triageDocument(ref string) string {
 }
 
 func (p *planner) triageDecision(r *store.Reader, row itemRow) (Decision, error) {
-	var (
-		version, ref string
-		err          error
-	)
-	if p.preRead != nil {
-		fields, ok := p.preRead.blockFields[row.ItemID]
-		if !ok {
-			return Decision{}, sql.ErrNoRows
-		}
-		version, ref, err = requestVersionFromStored(fields)
-	} else {
-		version, ref, err = requestVersion(r, row.ItemID)
-	}
+	version, ref, err := requestVersion(r, row.ItemID)
 	if err != nil {
 		return Decision{}, err
 	}
@@ -189,14 +177,7 @@ func (p *planner) triageDecision(r *store.Reader, row itemRow) (Decision, error)
 	// Look through history, not just the latest conflict: changing A to B and back
 	// to A must not spend a second run for the same request version.
 	var raw []byte
-	if p.preRead != nil {
-		var ok bool
-		if raw, ok = p.preRead.triageConflicts[triageConflictKey{itemID: row.ItemID, version: version}]; !ok {
-			err = sql.ErrNoRows
-		}
-	} else {
-		err = r.QueryRow(`SELECT payload FROM events WHERE kind='item.conflict' AND json_extract(payload,'$.item_id')=? AND json_extract(payload,'$.triage_version')=? ORDER BY seq DESC LIMIT 1`, row.ItemID, version).Scan(&raw)
-	}
+	err = r.QueryRow(`SELECT payload FROM events WHERE kind='item.conflict' AND json_extract(payload,'$.item_id')=? AND json_extract(payload,'$.triage_version')=? ORDER BY seq DESC LIMIT 1`, row.ItemID, version).Scan(&raw)
 	if err == nil {
 		if err = json.Unmarshal(raw, &c); err != nil {
 			return Decision{}, err

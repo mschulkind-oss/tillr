@@ -155,7 +155,7 @@ func blockRemoteSyncReplay(t *testing.T) (*pushFixture, string, func()) {
 
 func (p *pushFixture) pollPushHold(t *testing.T) {
 	t.Helper()
-	if _, err := p.l.passMode(context.Background(), &LoopResult{}, true); err != nil {
+	if err := p.l.runTrunkProofStep(context.Background(), &LoopResult{}, false); err != nil {
 		t.Fatal(err)
 	}
 	waitAction(t, &p.l.pushAction)

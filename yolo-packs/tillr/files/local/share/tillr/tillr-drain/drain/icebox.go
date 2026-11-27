@@ -534,14 +534,14 @@ func normalizeDesignDocRef(ref string) string {
 	return clean
 }
 
-func checkIceboxHold(r *store.Reader, pre *startRepairInputs, row itemRow, root string, defReady string, enabled bool, iceboxDocs map[string]iceboxEntry, schema versionSchema) (string, error) {
+func checkIceboxHold(r *store.Reader, row itemRow, root string, defReady string, enabled bool, iceboxDocs map[string]iceboxEntry, schema versionSchema) (string, error) {
 	if !enabled || len(iceboxDocs) == 0 || row.State != defReady {
 		return "", nil
 	}
-	return iceboxHoldReason(r, pre, row, root, iceboxDocs, schema.itemColumns["prose"], schema.hasCriteria)
+	return iceboxHoldReason(r, row, root, iceboxDocs, schema.itemColumns["prose"], schema.hasCriteria)
 }
 
-func iceboxHoldReason(r *store.Reader, pre *startRepairInputs, row itemRow, root string, iceboxDocs map[string]iceboxEntry, hasProse, hasCriteria bool) (string, error) {
+func iceboxHoldReason(r *store.Reader, row itemRow, root string, iceboxDocs map[string]iceboxEntry, hasProse, hasCriteria bool) (string, error) {
 	if len(iceboxDocs) == 0 {
 		return "", nil
 	}
@@ -550,15 +550,7 @@ func iceboxHoldReason(r *store.Reader, pre *startRepairInputs, row itemRow, root
 			return formatIceboxHold(entry), nil
 		}
 	}
-	var (
-		sources []string
-		err     error
-	)
-	if pre != nil {
-		sources, err = pre.itemWordsSources(row.ItemID, hasProse, hasCriteria)
-	} else {
-		sources, err = readItemWordsSources(r, row.ItemID, hasProse, hasCriteria)
-	}
+	sources, err := readItemWordsSources(r, row.ItemID, hasProse, hasCriteria)
 	if err != nil {
 		return "", err
 	}

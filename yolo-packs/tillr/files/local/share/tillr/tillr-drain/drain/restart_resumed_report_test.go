@@ -192,8 +192,15 @@ func TestSuccessorPassCompletedRequiresNewRestart(t *testing.T) {
 func completedPlanningTransactions(out string) int {
 	count := 0
 	for _, line := range strings.Split(out, "\n") {
-		if strings.Contains(line, "(*Loop).passPlansMode.func1") && strings.Contains(line, "phase=end") {
+		if !strings.Contains(line, "phase=end") {
+			continue
+		}
+		if strings.Contains(line, "(*Loop).passPlansMode.func1") {
 			count++
+		} else if strings.Contains(line, "RecordLoopPass") {
+			// Pure ReadTx passes (Slice 6) do not emit WriteTx traces in passPlansMode;
+			// RecordLoopPass runs after a full passMode has completed.
+			count += 2
 		}
 	}
 	return count

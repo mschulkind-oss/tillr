@@ -216,40 +216,6 @@ func TestItemDirectoryKilledRunIsPreservedAndReplacementRunsInSameDirectory(t *t
 	}
 }
 
-func TestItemDirectoryFastStartClaimUnderLiveScale(t *testing.T) {
-	ctx := context.Background()
-	f, l := passFixture(t, "item-a")
-	l.cfg.LiveScale = true
-	l.cfg.Lanes = []string{"lane-1"}
-
-	v, s, e := claimFixture(t, l)
-	// Retarget the proposed dispatch to the item's own directory, which is
-	// absent from the live pool list l.cfg.Lanes = ["lane-1"].
-	e.decision.LaneID = "item-a"
-	e.decision.RunRequest.LaneID = "item-a"
-
-	ok, work, gen, _, err := l.claimFastStart(ctx, v, s, e, l.cfg.Now())
-	if err != nil || !ok || work == nil || gen == "" {
-		t.Fatalf("claimFastStart for item directory under LiveScale = (ok=%v work=%+v gen=%q err=%v), want claimed", ok, work, gen, err)
-	}
-	if work.Decision.LaneID != "item-a" {
-		t.Fatalf("claimed lane = %q, want item-a", work.Decision.LaneID)
-	}
-
-	// A pool lane absent from l.cfg.Lanes must still be refused under LiveScale.
-	_, l2 := passFixture(t, "item-b")
-	l2.cfg.LiveScale = true
-	l2.cfg.Lanes = []string{"lane-1"}
-	v2, s2, e2 := claimFixture(t, l2)
-	e2.decision.LaneID = "lane-9"
-	e2.decision.RunRequest.LaneID = "lane-9"
-	ok2, work2, _, _, err2 := l2.claimFastStart(ctx, v2, s2, e2, l2.cfg.Now())
-	if err2 != nil || ok2 || work2 != nil {
-		t.Fatalf("claimFastStart for unoffered pool lane under LiveScale = (ok=%v work=%+v err=%v), want refused", ok2, work2, err2)
-	}
-	_ = f
-}
-
 func TestItemDirectoryStageRefusesUnsafeAndPoolShapedItemIDs(t *testing.T) {
 	f := newRefusalLoopFixtureWithLanes(t, 1, "item-a")
 	trunk := runGit(t, f.root, "rev-parse", "HEAD")

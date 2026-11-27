@@ -237,12 +237,13 @@ func TestRestartLockWaitDuringConcurrentSlowStageAndRestartCheck(t *testing.T) {
 	fixtureWrite(t, h.f, func(tx *store.Tx) error { return applyTerminal(tx, recB) })
 
 	// Claim item-a on lane-1 and start its slow stage, blocked on releaseStage.
-	v, s, e := claimFixture(t, h.l)
-	ok, workA, _, dA, err := h.l.claimFastStart(ctx, v, s, e, h.l.cfg.Now().UTC())
-	if !ok || err != nil || dA.ItemID != "item-a" {
-		t.Fatalf("claimFastStart item-a: ok=%v d=%+v err=%v", ok, dA, err)
+	baseA := runGit(t, h.f.root, "rev-parse", TrunkRef)
+	pA := decisionFor(t, h.l, "item-a")
+	ok, workA, err := h.l.applyPlan(ctx, pA, baseA, h.l.cfg.Now().UTC())
+	if !ok || err != nil || workA == nil || workA.Decision.ItemID != "item-a" {
+		t.Fatalf("applyPlan item-a: ok=%v work=%+v err=%v", ok, workA, err)
 	}
-	v.noteStartClaimed(dA, workA)
+	dA := workA.Decision
 
 	var stageResult LoopResult
 	stageDone := make(chan error, 1)

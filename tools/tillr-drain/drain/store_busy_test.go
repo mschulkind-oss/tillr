@@ -168,7 +168,7 @@ func TestPassBusyStoreRetriesInsteadOfFaulting(t *testing.T) {
 	l.cfg.Report = report
 
 	var result LoopResult
-	if err := l.runPasses(context.Background(), &result, false, nil); err != nil {
+	if err := l.runPasses(context.Background(), &result); err != nil {
 		t.Fatalf("runPasses returned error on busy store: %v", err)
 	}
 	if result.Stop != StopQueueDrained {

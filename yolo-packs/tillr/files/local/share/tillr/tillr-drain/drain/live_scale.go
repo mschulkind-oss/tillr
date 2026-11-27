@@ -121,13 +121,7 @@ func (l *Loop) storeLiveLanes(ctx context.Context, target []string, refreshSessi
 	l.laneOfferMu.Lock()
 	l.liveLanes.Store(&target)
 	l.laneOfferMu.Unlock()
-	l.noteStartRotation(l.cfg.Now().UTC())
-	if view := l.startView.Load(); view != nil {
-		select {
-		case view.laneTargetChanged <- struct{}{}:
-		default:
-		}
-	}
+	l.signalPassWake()
 	if refreshSession {
 		return l.refreshSession(ctx, l.cfg.Now().Add(PassInterval))
 	}

@@ -5,13 +5,93 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"runtime"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/store"
 )
+
+type settlingStartSteps struct {
+	recordingSteps
+	fixture           refusalLoopFixture
+	now               func() time.Time
+	settling, release chan struct{}
+	started           chan string
+}
+
+func (s *settlingStartSteps) Run(ctx context.Context, req run.Request) (run.Record, string, error) {
+	if req.ItemID == "item-a" {
+		wt := filepath.Join(s.fixture.laneRoot, req.LaneID, req.WorkingDir)
+		file := "tools/item-a/work.txt"
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(wt, file)), 0755); err != nil {
+			return run.Record{}, "", err
+		}
+		if err := os.WriteFile(filepath.Join(wt, file), []byte("work\n"), 0644); err != nil {
+			return run.Record{}, "", err
+		}
+		for _, args := range [][]string{{"add", file}, {"commit", "-m", "item-a work"}} {
+			cmd := exec.CommandContext(ctx, "git", args...)
+			cmd.Dir = wt
+			if out, err := cmd.CombinedOutput(); err != nil {
+				return run.Record{}, "", fmt.Errorf("git %v: %w: %s", args, err, out)
+			}
+		}
+	}
+	st, err := store.Open(ctx, s.fixture.storePath, true)
+	if err != nil {
+		return run.Record{}, "", err
+	}
+	defer st.Close()
+	exit := 0
+	stamp := s.now().UTC().Format(time.RFC3339Nano)
+	rec := run.Record{RunID: req.RunID, ItemID: req.ItemID, LaneID: req.LaneID, Backend: req.Backend,
+		State: run.StateExited, ExitCode: &exit, StartedAt: stamp, FinishedAt: stamp, ArtifactRefs: []run.ArtifactRef{}}
+	if err := st.WriteTx(ctx, func(tx *store.Tx) error { return applyTerminal(tx, rec) }); err != nil {
+		return rec, "", err
+	}
+	if req.ItemID == "item-b" {
+		s.started <- req.LaneID
+	}
+	return rec, "", nil
+}
+
+func (s *settlingStartSteps) Gate(ctx context.Context, candidate Candidate) (GateOutcome, error) {
+	if candidate.ItemID == "item-a" {
+		close(s.settling)
+		select {
+		case <-s.release:
+		case <-ctx.Done():
+			return GateOutcome{}, ctx.Err()
+		}
+	}
+	return GateOutcome{Outcome: GatePassed}, nil
+}
+
+type settlingStartStager struct{ root string }
+
+func (s settlingStartStager) Stage(_ context.Context, spec StageSpec) error {
+	for _, name := range []string{FenceFile, ItemFenceFile} {
+		if err := os.WriteFile(filepath.Join(s.root, spec.LaneID, name), []byte("tools/\n"), 0644); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func fileStartWhileSettling(t *testing.T, l *Loop, at time.Time) {
+	t.Helper()
+	s, err := store.Open(context.Background(), l.cfg.Store, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	seedRefusalItemAt(t, s, "item-b", at)
+}
 
 type stageFaultStager struct{ settlingStartStager }
 
@@ -124,24 +204,6 @@ type splitRefreshRecoveringStager struct {
 
 func (s *splitRefreshRecoveringStager) Stage(ctx context.Context, spec StageSpec) error {
 	s.calls++
-	if s.calls == 1 {
-		// Force startView to sync from SQLite while the claim is live, before
-		// cancelStaging retracts it. Under high load, this split refresh
-		// happens across startViewWatchBatch and leaves storeLanes holding the
-		// lane unless pending-history events trigger a lane lease refresh.
-		if v := s.loop.startView.Load(); v != nil {
-			for !v.snapshot().storeLanes[spec.LaneID] {
-				select {
-				case v.laneTargetChanged <- struct{}{}:
-				default:
-				}
-				if ctx.Err() != nil {
-					return ctx.Err()
-				}
-				runtime.Gosched()
-			}
-		}
-	}
 	if s.calls <= s.failures {
 		return fmt.Errorf("the brief could not be rendered (attempt %d)", s.calls)
 	}

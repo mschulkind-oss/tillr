@@ -226,12 +226,11 @@ func TestStartVersionAndSignatureDetectEdgeKindChange(t *testing.T) {
 		return err
 	})
 
-	readVersionAndSig := func() (string, [32]byte) {
+	readVersion := func() string {
 		t.Helper()
 		s := openFixture(t, f.storePath)
 		defer s.Close()
 		var ver string
-		var sig [32]byte
 		if err := s.ReadTx(context.Background(), func(r *store.Reader) error {
 			schema, err := readVersionSchema(r)
 			if err != nil {
@@ -241,29 +240,22 @@ func TestStartVersionAndSignatureDetectEdgeKindChange(t *testing.T) {
 				t.Fatal("expected versionSchema.hasEdgeKind to be true")
 			}
 			ver, err = readItemContentVersion(r, schema, "item-a")
-			if err != nil {
-				return err
-			}
-			sig, err = readStartItemsSignature(r, schema)
 			return err
 		}); err != nil {
 			t.Fatal(err)
 		}
-		return ver, sig
+		return ver
 	}
 
-	verBlocked, sigBlocked := readVersionAndSig()
+	verBlocked := readVersion()
 
 	fixtureWrite(t, f, func(tx *store.Tx) error {
 		_, err := tx.Exec(`UPDATE item_edges SET kind = 'after' WHERE item_id = 'item-a' AND blocked_by = 'item-b'`)
 		return err
 	})
 
-	verAfter, sigAfter := readVersionAndSig()
+	verAfter := readVersion()
 	if verBlocked == verAfter {
 		t.Fatalf("content version did not change when edge kind changed from blocked_by to after: %s", verBlocked)
-	}
-	if sigBlocked == sigAfter {
-		t.Fatalf("start signature did not change when edge kind changed from blocked_by to after: %x", sigBlocked)
 	}
 }

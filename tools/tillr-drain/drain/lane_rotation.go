@@ -152,10 +152,10 @@ func (l *Loop) takeLaneOutOfRotation(ctx context.Context, refusal *LaneRefusalEr
 		_ = l.loadLaneConditions(ctx)
 	}
 	l.laneMu.Lock()
-	at, err := l.recordLaneRefusal(ctx, refusal)
+	_, err := l.recordLaneRefusal(ctx, refusal)
 	l.laneMu.Unlock()
 	if err == nil {
-		l.noteStartRotation(at)
+		l.signalPassWake()
 	}
 	return err
 }
@@ -213,7 +213,7 @@ func (l *Loop) restoreLane(ctx context.Context, lane string) error {
 	if err != nil {
 		return err
 	}
-	l.reconcileStartLanes(ctx, l.rotationLanes(), at)
+	l.signalPassWake()
 	l.reportf("loop: lane %s is back in rotation: it is available to stage again\n", lane)
 	return nil
 }
@@ -265,7 +265,7 @@ func (l *Loop) recheckLanes(ctx context.Context) error {
 		}
 	}
 	if restored {
-		l.reconcileStartLanes(ctx, l.rotationLanes(), now)
+		l.signalPassWake()
 	}
 	return nil
 }

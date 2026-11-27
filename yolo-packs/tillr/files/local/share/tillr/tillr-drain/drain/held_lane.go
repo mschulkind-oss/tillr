@@ -529,7 +529,7 @@ func (l *Loop) releaseCandidateMode(ctx context.Context, work *pendingWork, reas
 	}
 	if err == nil {
 		if released {
-			l.notifyStartLaneReleased(c.LaneID, c.RunID, true, l.cfg.Now().UTC())
+			l.signalPassWake()
 		} else if kept != work.LaneKeepReason {
 			l.reportf("loop: lane %s kept for %s: %s\n", c.LaneID, c.ItemID, kept)
 		}
@@ -791,7 +791,7 @@ func (l *Loop) releaseRefusedAssignment(ctx context.Context, work *pendingWork) 
 		return clearCandidateRelease(tx, c, l.cfg.Now())
 	})
 	if err == nil && released {
-		l.notifyStartLaneReleased(c.LaneID, c.RunID, true, l.cfg.Now().UTC())
+		l.signalPassWake()
 	}
 	return err
 }

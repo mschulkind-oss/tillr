@@ -20,8 +20,10 @@ import (
 	"time"
 
 	"github.com/mschulkind-oss/tillr-drain/holdrules"
+	"github.com/mschulkind-oss/tillr-drain/internal/bgactors"
 	"github.com/mschulkind-oss/tillr-drain/internal/gateland"
 	"github.com/mschulkind-oss/tillr-drain/internal/stagelaunch"
+	"github.com/mschulkind-oss/tillr-drain/internal/worktreebudget"
 	"github.com/mschulkind-oss/tillr-drain/restart"
 	"github.com/mschulkind-oss/tillr-drain/spend"
 	"github.com/mschulkind-oss/tillr-drain/workflow"
@@ -594,9 +596,9 @@ type LoopResult struct {
 // are only this process's wake triggers. Each run retains its own boundary bracket.
 type Loop struct {
 	liveLanes                            atomic.Pointer[[]string]
-	laneOfferMu                          sync.RWMutex // orders target publication against fast-start claims
+	laneOfferMu                          sync.RWMutex // orders target publication against claims
 	reportedAlarms                       []string     // Previous pass's display, not an availability input.
-	startView                            atomic.Pointer[startView]
+	actors                               bgactors.State
 	endingCapabilities                   map[string]string
 	rollAction, piRollAction, pushAction landingAction
 	rollChecking                         atomic.Int32
@@ -762,7 +764,6 @@ type Loop struct {
 	// changed reason outside the summary still reports a changed queue.
 	waitingDetail            string
 	idleState                *idlePlanState
-	lastPassPendingOnly      bool
 	nextCommentPoll          time.Time
 	hasAnswers               bool
 	pollOnly                 bool // test seam: suppress accelerators, retain store polling
@@ -1205,24 +1206,29 @@ func (l *Loop) Run(ctx context.Context) (result LoopResult, err error) {
 		result.Stop, result.Detail = StopQueueDrained, "owner question migration finished"
 		return result, nil
 	}
-	view := newStartView()
-	if !l.pollOnly {
-		view.storePoll = l.cfg.StorePollInterval
-	}
-	l.startView.Store(view)
-	defer l.startView.Store(nil)
-	defer l.watchStartView(ctx, view, startViewRefreshInterval)()
-	select {
-	case <-view.seeded:
-	case <-ctx.Done():
-	}
 	defer l.startTriggerNotify(ctx)()
 	stopStage := func() {}
 	stopLaunch := func() {}
 	stopExamine := func() {}
 	stopGate := func() {}
 	stopLand := func() {}
+	stopSync := func() {}
+	stopTrunkProof := func() {}
+	stopGC := func() {}
 	if !l.pollOnly && l.ownerMigrationItem == "" {
+		if err := l.seedActorCaches(ctx, &result); err != nil {
+			if stoppedByOperator(ctx, err) {
+				result.Stop = StopOperatorStop
+				result.Detail = "the loop was asked to stop"
+				return result, nil
+			}
+			return faultResult(result, err)
+		}
+		l.actors.Active.Store(true)
+		defer l.actors.Active.Store(false)
+		stopSync = l.startSyncActor(ctx, &result)
+		stopTrunkProof = l.startTrunkProofActor(ctx, &result)
+		stopGC = l.startGCActor(ctx)
 		stopStage = l.startStageCoordinator(ctx, &result)
 		stopLaunch = l.startLaunchCoordinator(ctx, &result)
 		stopExamine = l.startExamineCoordinator(ctx, &result)
@@ -1231,13 +1237,12 @@ func (l *Loop) Run(ctx context.Context) (result LoopResult, err error) {
 			stopLand = l.startLandCoordinator(ctx, &result)
 		}
 	}
-	stopStarts := func() {}
-	if !l.pollOnly {
-		stopStarts = l.startBackgroundCoordinator(ctx, view, &result)
-	}
-	err = l.runPasses(ctx, &result, !l.pollOnly, view)
-	// Join staging, launch, examination, gate, and land coordinators before copying the result or ending operator-requested runs.
-	stopStarts()
+	err = l.runPasses(ctx, &result)
+	// Join background actors and step coordinators before copying the result or ending operator-requested runs.
+	l.actors.Active.Store(false)
+	stopSync()
+	stopTrunkProof()
+	stopGC()
 	stopStage()
 	stopLaunch()
 	stopExamine()
@@ -1249,7 +1254,7 @@ func (l *Loop) Run(ctx context.Context) (result LoopResult, err error) {
 	return result, nil
 }
 
-func (l *Loop) runPasses(ctx context.Context, result *LoopResult, pendingOnly bool, view *startView) error {
+func (l *Loop) runPasses(ctx context.Context, result *LoopResult) error {
 	for {
 		if err := ctx.Err(); err != nil {
 			result.Stop = StopOperatorStop
@@ -1263,12 +1268,10 @@ func (l *Loop) runPasses(ctx context.Context, result *LoopResult, pendingOnly bo
 		endCPU()
 		l.mu.Lock()
 		dispatched := result.Dispatched
-		if !pendingOnly {
-			l.stageLaunch.ClearFaults()
-		}
+		l.stageLaunch.ClearFaults()
 		l.mu.Unlock()
 		passStart := time.Now()
-		done, err := l.passMode(ctx, result, pendingOnly)
+		done, err := l.passMode(ctx, result)
 		l.passTimer = nil
 		if err != nil {
 			// A stop that arrived while the tick was reading the store is still the
@@ -1291,15 +1294,28 @@ func (l *Loop) runPasses(ctx context.Context, result *LoopResult, pendingOnly bo
 					result.Detail = "the loop was asked to stop"
 					return nil
 				}
-				if pendingOnly && view != nil {
-					view.notifyUpdate()
-				}
 				continue
 			}
 			return err
 		}
 		l.recordLoopPass(ctx, pt)
 		if done != "" {
+			if done == StopQueueDrained && l.actorsActive() && l.cfg.ExitWhenDrained {
+				changed, settleErr := l.settleActorsBeforeDrained(ctx, result)
+				if settleErr != nil {
+					if stoppedByOperator(ctx, settleErr) {
+						result.Stop = StopOperatorStop
+						result.Detail = "the loop was asked to stop"
+						return nil
+					}
+					if !store.IsBusy(settleErr) {
+						return settleErr
+					}
+				}
+				if changed {
+					continue
+				}
+			}
 			result.Stop = done
 			return nil
 		}
@@ -1332,9 +1348,6 @@ func (l *Loop) runPasses(ctx context.Context, result *LoopResult, pendingOnly bo
 		l.stageLaunch.Backoff = backOff
 		l.mu.Unlock()
 		if !backOff {
-			if pendingOnly {
-				view.notifyUpdate()
-			}
 			continue
 		}
 		backOffStart := time.Now()
@@ -1355,9 +1368,6 @@ func (l *Loop) runPasses(ctx context.Context, result *LoopResult, pendingOnly bo
 					result.Detail = "the loop was asked to stop"
 					return nil
 				}
-				if pendingOnly && view != nil {
-					view.notifyUpdate()
-				}
 				continue
 			}
 			return err
@@ -1366,9 +1376,6 @@ func (l *Loop) runPasses(ctx context.Context, result *LoopResult, pendingOnly bo
 			result.Stop = StopOperatorStop
 			result.Detail = "the loop was asked to stop while waiting out an infrastructure failure"
 			return nil
-		}
-		if pendingOnly {
-			view.notifyUpdate()
 		}
 	}
 }
@@ -1711,7 +1718,7 @@ func (l *Loop) planNothing(ctx context.Context, holds []Decision, leases []LaneL
 			}
 			l.waitingDetail = detail
 			result.Detail = detail
-			l.idleState = l.captureIdleState(ctx, holds, at, l.lastPassPendingOnly)
+			l.idleState = l.captureIdleState(ctx, holds, at)
 			if l.idleState == nil && l.trunkMovedSinceSync(ctx) {
 				return "", nil
 			}
@@ -1839,9 +1846,6 @@ func (l *Loop) holdLocal(ctx context.Context, itemID, reason string) {
 	l.mu.Lock()
 	l.held[itemID] = hold
 	l.mu.Unlock()
-	if v := l.startView.Load(); v != nil {
-		v.noteItemHold(itemID, hold)
-	}
 }
 
 func localHoldVersion(r *store.Reader, itemID string) (string, error) {
@@ -1868,9 +1872,6 @@ func (l *Loop) heldFor(r *store.Reader, itemID string) (string, bool) {
 			delete(l.infraLines, itemID+"\x00")
 		}
 		delete(l.held, itemID)
-		if v := l.startView.Load(); v != nil {
-			v.clearItemHold(itemID)
-		}
 		return "", false
 	}
 	if hold.contentVersion != "" {
@@ -5335,4 +5336,169 @@ func (l *Loop) countSettledSpend(result *LoopResult, rec run.Record, origin stri
 	result.spendCarried[rec.RunID] = origin == "" || origin != l.sessionID
 	l.mu.Unlock()
 	l.countSpend(result, rec)
+}
+
+func (l *Loop) actorsActive() bool {
+	return l.actors.Active.Load()
+}
+
+func (l *Loop) signalPassWake() {
+	if !l.notifyEnabled() {
+		return
+	}
+	l.actors.SignalPass()
+}
+
+func (l *Loop) signalSyncWake() {
+	l.actors.SignalSync()
+}
+
+func (l *Loop) signalTrunkProofWake() {
+	l.actors.SignalTrunkProof()
+}
+
+func (l *Loop) signalGCWake() {
+	l.actors.SignalGC()
+}
+
+func (l *Loop) cachedTrunkRefs() *startRefs {
+	c := l.actors.CachedTrunk()
+	if !c.Valid {
+		return nil
+	}
+	return &startRefs{
+		tip:         c.Tip,
+		green:       c.Green,
+		readGreen:   true,
+		purePass:    true,
+		unprovedSet: c.UnprovedSet,
+		blockBases:  c.BlockBases,
+	}
+}
+
+func (l *Loop) cachedTrunkTip() string {
+	return l.actors.CachedTrunkTip()
+}
+
+func (l *Loop) cachedTrunkAndGreen() (string, string, bool) {
+	return l.actors.CachedTrunkAndGreen()
+}
+
+func (l *Loop) cachedWorktreeSnapshot() *worktreebudget.Snapshot {
+	return l.actors.CachedWorktreeSnapshot()
+}
+
+func (l *Loop) cachedCommentReadyMap() map[string]bool {
+	return l.actors.CachedCommentReady()
+}
+
+func (l *Loop) cachedDocPrereqs() *bgactors.DocPrereqsCache {
+	return l.actors.CachedDocPrereqs()
+}
+
+func (l *Loop) cachedVantageQuestions() QuestionSource {
+	if q := l.actors.CachedVantageQuestions(); q != nil {
+		return q
+	}
+	return nil
+}
+
+// seedActorCaches runs one initial pass of trunk/worktree/quota/comment cache
+// population at Loop.Run startup before entering the pure scheduling pass loop,
+// so the very first scheduling pass can select assignments with zero subprocesses.
+func (l *Loop) seedActorCaches(ctx context.Context, result *LoopResult) error {
+	if err := l.refreshQuotas(ctx); err != nil {
+		return err
+	}
+	if err := l.runTrunkProofStep(ctx, result, true); err != nil {
+		return err
+	}
+	if err := l.runSyncStep(ctx, result, true); err != nil {
+		return err
+	}
+	if err := l.runGCStep(ctx); err != nil {
+		return err
+	}
+	return nil
+}
+
+// runInlineHousekeeping runs the three background actors' work inline when
+// background actors are disabled (the pollOnly test seam or direct passMode
+// unit tests).
+func (l *Loop) runInlineHousekeeping(ctx context.Context, result *LoopResult) error {
+	if err := l.runGCStep(ctx); err != nil {
+		return err
+	}
+	if err := l.runSyncStep(ctx, result, false); err != nil {
+		return err
+	}
+	if err := l.runTrunkProofStep(ctx, result, false); err != nil {
+		return err
+	}
+	return nil
+}
+
+// settleActorsBeforeDrained runs one barrier cycle of the three background
+// actors before an ExitWhenDrained loop exits as queue-drained, reporting
+// whether any actor changed store state or started background work (such as an
+// after-merge heavy proof) that requires another scheduling pass.
+func (l *Loop) settleActorsBeforeDrained(ctx context.Context, result *LoopResult) (bool, error) {
+	beforeSeq, err := l.readEventHeadSeq(ctx)
+	if err != nil {
+		return false, err
+	}
+	beforeRolling := l.rollingRuns(result)
+
+	if err := l.runGCStep(ctx); err != nil {
+		return false, err
+	}
+	if err := l.runTrunkProofStep(ctx, result, false); err != nil {
+		return false, err
+	}
+	if err := l.runSyncStep(ctx, result, false); err != nil {
+		return false, err
+	}
+	if !l.nonLanding {
+		mainSHA := l.cachedTrunkTip()
+		if err := l.maybeRolling(ctx, mainSHA, true, result); err != nil {
+			return false, err
+		}
+	}
+
+	afterSeq, err := l.readEventHeadSeq(ctx)
+	if err != nil {
+		return false, err
+	}
+	if afterSeq != beforeSeq || l.rollingRuns(result) != beforeRolling || l.heavyInFlight() || l.activeTriageCount() > 0 {
+		return true, nil
+	}
+	return false, nil
+}
+
+func (l *Loop) readEventHeadSeq(ctx context.Context) (int64, error) {
+	if l.cfg.Store == "" {
+		return 0, nil
+	}
+	s, err := store.OpenRead(ctx, l.cfg.Store)
+	if err != nil {
+		return 0, err
+	}
+	defer s.Close()
+	var head int64
+	err = s.ReadTx(ctx, func(r *store.Reader) error {
+		var readErr error
+		head, readErr = r.EventHeadSeq()
+		return readErr
+	})
+	return head, err
+}
+
+func (l *Loop) reportActorError(ctx context.Context, step string, err error) {
+	if err == nil || errors.Is(err, errRestartPending) || stoppedByOperator(ctx, err) {
+		return
+	}
+	if store.IsBusy(err) && ctx.Err() == nil {
+		return
+	}
+	l.reportf("loop: background actor %s: %v\n", step, err)
 }

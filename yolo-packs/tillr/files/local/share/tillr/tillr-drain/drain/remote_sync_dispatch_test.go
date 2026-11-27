@@ -100,8 +100,6 @@ func TestRemoteSyncRepairUsesSerialDeskWhenLanesAreOccupied(t *testing.T) {
 		}
 	}
 	check("queue pass", decisionFor(t, p.l, st.ItemID).decision)
-	start, _ := proposeFixture(t, p.l, p.l.cfg.Now(), startSnapshot{}).nextFreshStart()
-	check("start proposal", start.decision)
 }
 
 type remoteSyncReplayProbe struct {

@@ -13,6 +13,7 @@ import (
 
 	"github.com/mschulkind-oss/tillr-drain/holdrules"
 	"github.com/mschulkind-oss/tillr-drain/internal/drainmodel"
+	"github.com/mschulkind-oss/tillr-drain/internal/gateland"
 	"github.com/mschulkind-oss/tillr-drain/internal/worktreebudget"
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/definition"
@@ -738,4 +739,257 @@ func (l *Loop) reportOvershoot(ctx context.Context, snap worktreebudget.Snapshot
 	l.endedLanes.lastOvershoot = key
 	l.reportf("loop: worktree disk budget overshoot: %s used > %s budget; largest scratch: %s\n",
 		worktreebudget.FormatBytes(snap.TotalBytes), worktreebudget.FormatBytes(snap.DiskBudgetBytes), detail)
+}
+
+// startGCActor runs the lease, ref, and worktree collection background actor
+// outside the scheduling pass (D-SN3, Section 5.7), woken by run.exited /
+// item.ended / agent.slot-freed / resync and reconciled every StorePollInterval
+// (15s default).
+func (l *Loop) startGCActor(ctx context.Context) func() {
+	actorCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+
+	l.actors.Ensure()
+	l.mu.Lock()
+	l.actors.GC.Active = true
+	timer := l.actors.GC.Timer
+	l.mu.Unlock()
+
+	go func() {
+		defer close(done)
+		defer func() {
+			l.mu.Lock()
+			l.actors.GC.Active = false
+			l.mu.Unlock()
+		}()
+		wait := l.cfg.StorePollInterval
+		if wait <= 0 {
+			wait = DefaultFallbackPollInterval
+		}
+		gateland.RunLoop(actorCtx, wait, timer, func() <-chan struct{} {
+			if !l.notifyEnabled() {
+				return nil
+			}
+			return l.actors.GCWakeChan()
+		}, func() {
+			if actorCtx.Err() != nil || l.isRestartReplaced() {
+				return
+			}
+			if stopped, err := l.stopRequested(actorCtx); stopped || err != nil {
+				return
+			}
+			beforeSeq, _ := l.readEventHeadSeq(actorCtx)
+			if err := l.runGCStep(actorCtx); err != nil {
+				l.reportActorError(actorCtx, "gc", err)
+				return
+			}
+			afterSeq, _ := l.readEventHeadSeq(actorCtx)
+			if afterSeq != beforeSeq {
+				l.actors.GCGen.Add(1)
+				l.signalPassWake()
+			}
+		})
+	}()
+
+	return func() {
+		cancel()
+		<-done
+	}
+}
+
+func (l *Loop) runGCStep(ctx context.Context) error {
+	l.actors.GCMu.Lock()
+	defer l.actors.GCMu.Unlock()
+	l.actors.GC.Runs.Add(1)
+
+	if err := l.releaseUnlaunchedClaims(ctx); err != nil {
+		return err
+	}
+	if err := l.repairStaleRunRecords(ctx); err != nil {
+		return err
+	}
+	var gen string
+	if reaped, err := l.reapDeadAndExpired(ctx, l.cfg.Now(), &gen); err != nil {
+		return err
+	} else if reaped {
+		l.signalPassWake()
+	}
+	if err := l.releaseIdleHeldCandidates(ctx); err != nil {
+		return err
+	}
+	if l.nonLanding {
+		if err := l.recheckLaneChildren(ctx); err != nil {
+			return err
+		}
+	} else {
+		if err := l.recheckLanes(ctx); err != nil {
+			return err
+		}
+	}
+	if l.cfg.Store != "" {
+		s, err := store.Open(ctx, l.cfg.Store, true)
+		if err != nil {
+			return err
+		}
+		err = l.releaseCountedVerifyHolds(ctx, s)
+		s.Close()
+		if err != nil {
+			return err
+		}
+	}
+	if !l.nonLanding {
+		if err := l.supersedeRetriedCandidates(ctx); err != nil {
+			return err
+		}
+	}
+	if err := l.retireOrderWork(ctx); err != nil {
+		return err
+	}
+	if !l.nonLanding {
+		if err := l.reclaimEndedItemLanes(ctx); err != nil {
+			l.reportf("loop: ended-item lane cleanup failed: %v\n", err)
+		}
+		if l.cfg.ItemWorktrees {
+			if snap, err := l.collectIdleWorktrees(ctx); err == nil {
+				l.actors.SetCachedWorktreeSnapshot(snap)
+			} else {
+				l.reportf("loop: idle worktree collection failed: %v\n", err)
+			}
+		}
+		l.reportRefSweepFailure(l.pruneRunRefs(ctx))
+	}
+	l.recoverStaleTriageClaims(ctx)
+	l.dispatchAlertTriage(ctx)
+	return nil
+}
+
+// reapDeadAndExpired reaps dead loop runs and expired run leases outside the
+// scheduling pass, preserving and pinning orphaned work when needed.
+func (l *Loop) reapDeadAndExpired(ctx context.Context, at time.Time, generation *string) (bool, error) {
+	if l.cfg.Store == "" {
+		return false, nil
+	}
+	s, err := store.Open(ctx, l.cfg.Store, true)
+	if err != nil {
+		return false, err
+	}
+	defer s.Close()
+
+	nextGeneration := ""
+	if generation != nil {
+		nextGeneration = *generation
+	}
+	var reapedSingle []*pendingWork
+	reapedAny := false
+	// The process-table evidence is gathered with no transaction open. The run-start
+	// lock spans it and the write, so no run face starts between the scan and the reap.
+	if err := withRunStartLock(ctx, l.cfg.Store, func() error {
+		ev, err := l.gatherReapEvidence(ctx, s)
+		if err != nil {
+			return err
+		}
+		defer func() {
+			for _, line := range *ev.Reclaimed {
+				l.reportf("%s", line)
+			}
+		}()
+		pendingBusy := l.takeBusyWrites()
+		err = s.WriteTx(ctx, func(tx *store.Tx) error {
+			var before, after int64
+			if err := tx.QueryRow("SELECT COALESCE(MAX(seq), 0) FROM events").Scan(&before); err != nil {
+				return err
+			}
+			if err := l.reapDeadLoopRuns(ctx, tx, at, ev); err != nil {
+				return err
+			}
+			released, err := run.ReapExpiredLeases(ctx, tx, at)
+			if err != nil {
+				return err
+			}
+			if err := tx.QueryRow("SELECT COALESCE(MAX(seq), 0) FROM events").Scan(&after); err != nil {
+				return err
+			}
+			reapedAny = len(released) > 0 || after != before
+			if reapedAny && nextGeneration == "" {
+				nextGeneration, err = allocateGeneration(tx)
+			}
+			if err != nil {
+				return err
+			}
+			return l.appendBusyWrites(tx, pendingBusy)
+		})
+		if err != nil && len(pendingBusy) > 0 {
+			l.restoreBusyWrites(pendingBusy)
+		}
+		if err == nil && ev.ReapedSingle != nil {
+			reapedSingle = *ev.ReapedSingle
+		}
+		return err
+	}); err != nil {
+		return false, err
+	}
+	if generation != nil {
+		*generation = nextGeneration
+	}
+	for _, work := range reapedSingle {
+		d := work.Decision
+		id := d.RunRequest.RunID
+		_ = pipelineCloseGraph(l.cfg.Root, id)
+		if err := RecordBackendOutcomes(ctx, l.cfg.Store); err != nil {
+			return reapedAny, err
+		}
+		var rec *run.Record
+		if err := s.ReadTx(ctx, func(r *store.Reader) error {
+			var readErr error
+			rec, readErr = terminalRecord(r, id)
+			return readErr
+		}); err != nil {
+			return reapedAny, err
+		}
+		if rec != nil {
+			if err := l.recordSettlementSpend(ctx, nextGeneration, work.LoopID, *rec); err != nil {
+				return reapedAny, err
+			}
+		}
+		if !l.nonLanding {
+			base := work.BaseSHA
+			if base == "" {
+				base = l.laneBase(d.LaneID)
+			}
+			if err := l.preserveWorkFromBase(ctx, d.LaneID, id, base, "orphaned by a loop stop"); err != nil {
+				l.retainUnpreserved(ctx, d.LaneID, id, l.headOf(ctx, d.LaneID), err)
+				continue
+			}
+			if err := l.pinLane(ctx, d.LaneID, d.ItemID, id, l.headOf(ctx, d.LaneID)); err != nil {
+				if holdErr := l.holdItemFault(ctx, Candidate{ItemID: d.ItemID, RunID: id, LaneID: d.LaneID}, ReasonSettleFailed, err.Error()); holdErr != nil && asItemTerminal(holdErr) == nil {
+					return reapedAny, holdErr
+				}
+				continue
+			}
+			if err := l.resetLane(ctx, d.LaneID); err != nil {
+				return reapedAny, err
+			}
+		}
+		if d.Reason == ReasonConflictFix && work.ParentRunID != "" {
+			if restored, err := l.restoreConflictCandidate(ctx, work); err != nil {
+				return reapedAny, err
+			} else if restored {
+				continue
+			}
+		}
+		if err := l.markExamined(ctx, d); err != nil {
+			return reapedAny, err
+		}
+		if d.BlockConflict != nil {
+			if rec != nil {
+				if err := l.recordDesigner(ctx, d, *rec); err != nil {
+					return reapedAny, err
+				}
+			}
+			if err := l.settleUnansweredDesignRuns(ctx); err != nil {
+				return reapedAny, err
+			}
+		}
+	}
+	return reapedAny, nil
 }

@@ -242,3 +242,86 @@ func clonePendingHistoryForDelta(prev *pendingHistoryState, delta []event.Event)
 	}
 	return next
 }
+
+func clonePendingHistoryState(s *pendingHistoryState) *pendingHistoryState {
+	return s.clone()
+}
+
+func (s *pendingHistoryState) clone() *pendingHistoryState {
+	if s == nil {
+		return newPendingHistoryState()
+	}
+	out := &pendingHistoryState{
+		works: make(map[string]*pendingWork, len(s.works)), byRun: make(map[string]*pendingWork, len(s.byRun)),
+		byParent: map[string][]*pendingWork{},
+		judged:   maps.Clone(s.judged), segments: maps.Clone(s.segments), discarded: maps.Clone(s.discarded),
+	}
+	seen := make(map[*pendingWork]*pendingWork, len(s.byRun))
+	clone := func(w *pendingWork) *pendingWork {
+		if w == nil {
+			return nil
+		}
+		if cp := seen[w]; cp != nil {
+			return cp
+		}
+		cp := cloneWorkValue(reflect.ValueOf(w)).Interface().(*pendingWork)
+		seen[w] = cp
+		return cp
+	}
+	for id, w := range s.works {
+		cw := clone(w)
+		out.works[id] = cw
+		if cw != nil && cw.Ready && cw.ParentRunID != "" {
+			out.byParent[cw.ParentRunID] = append(out.byParent[cw.ParentRunID], cw)
+		}
+	}
+	for id, w := range s.byRun {
+		out.byRun[id] = clone(w)
+	}
+	return out
+}
+
+// cloneWorkValue copies exported fields of acyclic pending work value trees
+// without a JSON round trip, preserving replay-only fields tagged json:"-".
+func cloneWorkValue(v reflect.Value) reflect.Value {
+	switch v.Kind() {
+	case reflect.Interface:
+		if !v.IsNil() {
+			out := reflect.New(v.Type()).Elem()
+			out.Set(cloneWorkValue(v.Elem()))
+			return out
+		}
+	case reflect.Pointer:
+		if !v.IsNil() {
+			out := reflect.New(v.Type().Elem())
+			out.Elem().Set(cloneWorkValue(v.Elem()))
+			return out
+		}
+	case reflect.Struct:
+		out := reflect.New(v.Type()).Elem()
+		out.Set(v)
+		for i := 0; i < out.NumField(); i++ {
+			if out.Field(i).CanSet() {
+				out.Field(i).Set(cloneWorkValue(v.Field(i)))
+			}
+		}
+		return out
+	case reflect.Slice:
+		if !v.IsNil() {
+			out := reflect.MakeSlice(v.Type(), v.Len(), v.Len())
+			for i := 0; i < v.Len(); i++ {
+				out.Index(i).Set(cloneWorkValue(v.Index(i)))
+			}
+			return out
+		}
+	case reflect.Map:
+		if !v.IsNil() {
+			out := reflect.MakeMapWithSize(v.Type(), v.Len())
+			for it := v.MapRange(); it.Next(); {
+				out.SetMapIndex(it.Key(), cloneWorkValue(it.Value()))
+			}
+			return out
+		}
+	}
+	return v
+}

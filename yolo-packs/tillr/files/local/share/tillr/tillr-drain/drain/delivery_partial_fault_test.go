@@ -9,9 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
-	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -191,67 +189,6 @@ func TestPartialDeliveryAfterClearedLanderFaultDispatchesRepoPart(t *testing.T) 
 	}
 }
 
-func TestStartItemSyncPreservesPartialDelivery(t *testing.T) {
-	f, l, _ := setupMixedForkFixture(t)
-	at := time.Date(2026, 11, 15, 0, 2, 0, 0, time.UTC)
-	runID := "run-item-a-a1-n2"
-	fixtureWrite(t, f, func(tx *store.Tx) error {
-		rec := run.Record{
-			RunID: runID, ItemID: "item-a", LaneID: "lane-1", Backend: "fixture",
-			State: run.StateExited, ExitCode: countPtr(0),
-			StartedAt: "2026-11-15T00:00:00Z", FinishedAt: "2026-11-15T00:01:00Z",
-		}
-		if err := applyTerminal(tx, rec); err != nil {
-			return err
-		}
-		if err := appendEffect(tx, GateVerdictKind, runID, map[string]any{
-			"verdict_id": "v-" + runID, "run_id": runID, "result": "pass",
-		}, at); err != nil {
-			return err
-		}
-		return appendEffectOn(tx, deliveryPartialKind, "item", "item-a", deliveryDecision{
-			Kind: "both", Fork: "pi", ForkLanded: "abc123", ForkRun: runID,
-		}, at)
-	})
-
-	// Seed startStoreSync, then emit an item.update event so refreshItems runs
-	// incrementally instead of reseeding.
-	var syncState startStoreSync
-	defer syncState.close()
-	tick := l.startViewPass()
-	questions := &VantageQuestions{Root: f.root}
-	rebuild := func(r *store.Reader, next *startSnapshot, touched map[string]bool) (func() error, error) {
-		return next.prepareRepair(context.Background(), r, at, l.currentPolicy(), tick, questions, startSnapshot{}, touched)
-	}
-	snap1, err := syncState.syncStore(context.Background(), f.storePath, at, l.currentPolicy(), startSnapshot{}, rebuild)
-	if err != nil {
-		t.Fatalf("seed syncStore: %v", err)
-	}
-	if got := snap1.entries["item-a"].decision; got.Action != ActionDispatch || got.Reason != ReasonReady {
-		t.Fatalf("after seed: decision = %s/%s, want dispatch/ready", got.Action, got.Reason)
-	}
-
-	// Emit an item.update event for item-a so refreshItems runs incrementally.
-	fixtureWrite(t, f, func(tx *store.Tx) error {
-		id := "item-a"
-		_, err := tx.Append(event.Event{
-			Kind: item.UpdateKind, ObjectType: "item", ObjectID: &id,
-			Payload: []byte(`{"item_id":"item-a","state":"in-queue"}`), At: at.Add(time.Second),
-		})
-		return err
-	})
-	snap2, err := syncState.syncStore(context.Background(), f.storePath, at.Add(2*time.Second), l.currentPolicy(), snap1, rebuild)
-	if err != nil {
-		t.Fatalf("incremental syncStore: %v", err)
-	}
-	if d := snap2.itemsByID["item-a"].Delivery; d.Kind != "both" || d.ForkRun != runID {
-		t.Fatalf("incremental sync dropped Delivery: %+v", d)
-	}
-	if got := snap2.entries["item-a"].decision; got.Action != ActionDispatch || got.Reason != ReasonReady {
-		t.Fatalf("after item.update: decision = %s/%s, want dispatch/ready", got.Action, got.Reason)
-	}
-}
-
 func TestRetryOnPassedGateNeedsNoGateFailedAckAndDispatches(t *testing.T) {
 	f, l, s := setupMixedForkFixture(t)
 	at := time.Date(2026, 11, 15, 0, 2, 0, 0, time.UTC)
@@ -320,97 +257,5 @@ func TestRetryOnPassedGateNeedsNoGateFailedAckAndDispatches(t *testing.T) {
 	}
 	if len(s.landings) != 1 || s.landings[0] != "" {
 		t.Fatalf("want 1 repo landing after accepted operator retry, got %v (runs=%v)", s.landings, s.runIDs)
-	}
-}
-
-func TestStartViewLocalHoldClearedByOperatorRetry(t *testing.T) {
-	f, l, s := setupMixedForkFixture(t)
-	at := time.Date(2026, 11, 15, 0, 2, 0, 0, time.UTC)
-	runID := "run-item-a-a1-n2"
-	fixtureWrite(t, f, func(tx *store.Tx) error {
-		rec := run.Record{
-			RunID: runID, ItemID: "item-a", LaneID: "lane-1", Backend: "fixture",
-			State: run.StateExited, ExitCode: countPtr(0),
-			StartedAt: "2026-11-15T00:00:00Z", FinishedAt: "2026-11-15T00:01:00Z",
-		}
-		if err := applyTerminal(tx, rec); err != nil {
-			return err
-		}
-		if err := appendEffect(tx, GateVerdictKind, runID, map[string]any{
-			"verdict_id": "v-" + runID, "run_id": runID, "result": "pass",
-		}, at); err != nil {
-			return err
-		}
-		return appendEffectOn(tx, deliveryPartialKind, "item", "item-a", deliveryDecision{
-			Kind: "both", Fork: "pi", ForkLanded: "abc123", ForkRun: runID,
-		}, at)
-	})
-
-	// Put item-a into startView's local holds directly (simulating a staging failure
-	// during a running loop), then verify a subsequent operator retry clears it.
-	view := newStartView()
-	tick := l.startViewPass()
-	questions := &VantageQuestions{Root: f.root}
-	var syncState startStoreSync
-	defer syncState.close()
-	rebuild := func(r *store.Reader, next *startSnapshot, touched map[string]bool) (func() error, error) {
-		return next.prepareRepair(context.Background(), r, at, l.currentPolicy(), tick, questions, startSnapshot{}, touched)
-	}
-	var snap startSnapshot
-	stop := view.watch(context.Background(), time.Hour, nil, func(ctx context.Context, _ startWatchChange) (startSnapshot, error) {
-		var err error
-		snap, err = syncState.syncStore(ctx, f.storePath, at.Add(2*time.Minute), l.currentPolicy(), snap, rebuild)
-		return snap, err
-	})
-	defer stop()
-	<-view.updated
-	hold := heldItem{reason: ReasonStagingFailed + ": lane-1", at: at, contentVersion: view.snapshot().contentVersions["item-a"]}
-	view.noteItemHold("item-a", hold)
-	// Drain the buffered notification published by noteItemHold itself.
-	select {
-	case <-view.updated:
-	default:
-	}
-	if got := view.snapshot().entries["item-a"].decision; got.Action != ActionHold {
-		t.Fatalf("expected local hold in startView, got %s/%s", got.Action, got.Reason)
-	}
-
-	// Authorize an operator retry after the hold timestamp.
-	fixtureWrite(t, f, func(tx *store.Tx) error {
-		_, err := AuthorizeRetry(context.Background(), tx, RetryRequest{
-			StorePath: f.storePath,
-			ItemID:    "item-a",
-			RunID:     runID,
-			By:        "operator",
-			Why:       "retry after staging hold",
-			At:        at.Add(time.Minute),
-		})
-		return err
-	})
-
-	// Trigger a refresh on startView and verify the retry cleared v.holds["item-a"].
-	select {
-	case view.laneTargetChanged <- struct{}{}:
-	default:
-	}
-	select {
-	case <-view.updated:
-	case <-time.After(hangGuard):
-		t.Fatal("timed out waiting for startView refresh after retry")
-	}
-	if got := view.snapshot().entries["item-a"].decision; got.Action != ActionRetry {
-		t.Fatalf("after operator retry: startView decision = %s/%s, want retry", got.Action, got.Reason)
-	}
-	stop()
-
-	// Run with startView active (pollOnly = false): the accepted retry must dispatch and land.
-	l.cfg.Now = func() time.Time { return at.Add(2 * time.Minute) }
-	l.cfg.ExitWhenDrained = true
-	res, err := l.Run(context.Background())
-	if err != nil {
-		t.Fatalf("Loop.Run after retry clearing local hold: %v (res=%+v)", err, res)
-	}
-	if len(s.landings) != 1 || s.landings[0] != "" {
-		t.Fatalf("want 1 repo landing after retry clears local hold, got %v (runs=%v)", s.landings, s.runIDs)
 	}
 }

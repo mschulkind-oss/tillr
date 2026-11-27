@@ -122,7 +122,7 @@ func startConfiguredRoll(t *testing.T, lanes int, pauseKind string, configure fu
 	}
 	t.Cleanup(func() { outFile.Close() })
 	backends := filepath.Join(adapterDir, "brief-template.md")
-	s.cmd = exec.Command(s.exe, "loop", "--root", s.f.root, "--store", s.f.store, "--lane-root", s.f.laneRoot, "--lanes", strconv.Itoa(lanes), "--policy", policy, "--run-bin", sibling(t, "run"), "--item-bin", sibling(t, "item"), "--brief-template", backends, "--gate", always(t, "gate", 0), "--land", always(t, "land", 0), "--verdict", always(t, "verdict", 0))
+	s.cmd = exec.Command(s.exe, "loop", "--root", s.f.root, "--store", s.f.store, "--lane-root", s.f.laneRoot, "--lanes", strconv.Itoa(lanes), "--policy", policy, "--run-bin", sibling(t, "run"), "--item-bin", sibling(t, "item"), "--brief-template", backends, "--gate", always(t, "gate", 0), "--land", always(t, "land", 0), "--verdict", always(t, "verdict", 0), "--fallback-poll", "100ms")
 	s.cmd.Stdout, s.cmd.Stderr = outFile, outFile
 	if err := s.cmd.Start(); err != nil {
 		t.Fatal(err)

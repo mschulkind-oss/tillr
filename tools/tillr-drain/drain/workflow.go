@@ -418,7 +418,7 @@ func (l *Loop) advanceNode(ctx context.Context, d Decision, base, report string)
 		return appendEffect(tx, nodeAdvancedKind, next.RunRequest.RunID, pendingWork{Decision: next, BaseSHA: nextBase, Ready: true, LaneReleased: released, ParentRunID: d.RunRequest.RunID, Owner: owner, Examining: true}, at)
 	})
 	if err == nil && released {
-		l.notifyStartLaneReleased(d.LaneID, d.RunRequest.RunID, true, at)
+		l.signalPassWake()
 	}
 	return err
 }

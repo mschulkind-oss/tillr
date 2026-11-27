@@ -56,7 +56,7 @@ func TestLoopPassThrottlesToOneMinute(t *testing.T) {
 
 	// First pass writes drain.loop-pass.
 	var result LoopResult
-	if err := l.runPasses(context.Background(), &result, false, nil); err != nil {
+	if err := l.runPasses(context.Background(), &result); err != nil {
 		t.Fatalf("first runPasses: %v", err)
 	}
 	if result.Stop != StopQueueDrained {
@@ -88,7 +88,7 @@ func TestLoopPassThrottlesToOneMinute(t *testing.T) {
 	// Pass 30 seconds later writes no second drain.loop-pass.
 	now = now.Add(30 * time.Second)
 	result = LoopResult{}
-	if err := l.runPasses(context.Background(), &result, false, nil); err != nil {
+	if err := l.runPasses(context.Background(), &result); err != nil {
 		t.Fatalf("second runPasses: %v", err)
 	}
 	if events = readLoopPassEvents(t, f.storePath); len(events) != 1 {
@@ -98,7 +98,7 @@ func TestLoopPassThrottlesToOneMinute(t *testing.T) {
 	// Pass at 1 minute elapsed writes a second drain.loop-pass.
 	now = now.Add(30 * time.Second)
 	result = LoopResult{}
-	if err := l.runPasses(context.Background(), &result, false, nil); err != nil {
+	if err := l.runPasses(context.Background(), &result); err != nil {
 		t.Fatalf("third runPasses: %v", err)
 	}
 	if events = readLoopPassEvents(t, f.storePath); len(events) != 2 {
@@ -161,7 +161,7 @@ func TestLoopPassLogsWriteFailureWithoutStoppingLoop(t *testing.T) {
 	}
 
 	var result LoopResult
-	if err := l.runPasses(context.Background(), &result, false, nil); err != nil {
+	if err := l.runPasses(context.Background(), &result); err != nil {
 		t.Fatalf("runPasses during busy store: %v", err)
 	}
 	if result.Stop != StopQueueDrained {
@@ -181,7 +181,7 @@ func TestLoopPassLogsWriteFailureWithoutStoppingLoop(t *testing.T) {
 
 	// Because lastLoopPassAt was not updated on failure, the next pass records without waiting 1m.
 	result = LoopResult{}
-	if err := l.runPasses(context.Background(), &result, false, nil); err != nil {
+	if err := l.runPasses(context.Background(), &result); err != nil {
 		t.Fatalf("runPasses after lock release: %v", err)
 	}
 	if events := readLoopPassEvents(t, f.storePath); len(events) != 1 {
@@ -291,7 +291,7 @@ func TestLoopPassPayloadCarriesWallAndPhaseTimes(t *testing.T) {
 	}
 
 	var result LoopResult
-	if err := l.runPasses(context.Background(), &result, false, nil); err != nil {
+	if err := l.runPasses(context.Background(), &result); err != nil {
 		t.Fatalf("runPasses: %v", err)
 	}
 	if result.Stop != StopQueueDrained {
@@ -370,7 +370,7 @@ func TestLoopPassRealWallTimeAndWaitForTrigger(t *testing.T) {
 	}
 
 	var result LoopResult
-	if err := l.runPasses(ctx, &result, false, nil); err != nil {
+	if err := l.runPasses(ctx, &result); err != nil {
 		t.Fatalf("runPasses: %v", err)
 	}
 

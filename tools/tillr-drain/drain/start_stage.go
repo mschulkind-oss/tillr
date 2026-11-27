@@ -234,7 +234,7 @@ func (l *Loop) runCoordinatedStage(ctx context.Context, itemID, runID string, wo
 	}
 	finishStartHandoff(stageCtx)
 	if err != nil {
-		l.reportStartError(ctx, work.Decision, err)
+		l.reportStageLaunchError(ctx, work.Decision, err)
 		return
 	}
 	if ready != nil && l.notifyEnabled() {

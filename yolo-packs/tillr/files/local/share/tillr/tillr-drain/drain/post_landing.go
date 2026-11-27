@@ -141,9 +141,7 @@ func (l *Loop) landWithActions(ctx context.Context, candidate Candidate) (LandOu
 		l.rollChecking.Add(1)
 		defer func() {
 			if l.rollChecking.Add(-1) == 0 && !l.rollAction.busy() {
-				if v := l.startView.Load(); v != nil {
-					v.notifyUpdate()
-				}
+				l.signalPassWake()
 			}
 		}()
 	}
@@ -211,9 +209,7 @@ func (l *Loop) afterLandingCandidate(ctx context.Context, candidate Candidate, t
 	l.rollChecking.Add(1)
 	defer func() {
 		if l.rollChecking.Add(-1) == 0 && !l.rollAction.busy() {
-			if v := l.startView.Load(); v != nil {
-				v.notifyUpdate()
-			}
+			l.signalPassWake()
 		}
 	}()
 	changed, err := actionCommand(ctx, l.cfg.Root, "git", "diff-tree", "--no-commit-id", "--name-only", "--no-renames", "-r", "-z", tip+"^", tip, "--")

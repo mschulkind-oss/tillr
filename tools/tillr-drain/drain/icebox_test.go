@@ -143,21 +143,6 @@ func TestPlanHoldsInQueueItemWhoseWordsNameIceboxDesignDoc(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-
-	// Verify startView shadow proposals also hold the Icebox item and offer the next ready item.
-	snap, err := readProposedStarts(context.Background(), f.storePath, l.cfg.Now(), l.cfg.Policy, l.startViewPass(), questions, startSnapshot{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if hold, ok := snap.holds[iceboxItemID]; !ok || hold != wantReason {
-		t.Fatalf("startView hold for %s = %q (ok=%v), want %q", iceboxItemID, hold, ok, wantReason)
-	}
-	if entry := snap.entries[iceboxItemID]; entry.decision.Action != ActionHold || entry.decision.Reason != wantReason || entry.decision.RunRequest != nil {
-		t.Fatalf("startView entry for icebox item %s = %+v, want ActionHold %q", iceboxItemID, entry, wantReason)
-	}
-	if entry := snap.entries["item-ready"]; entry.decision.Action != ActionDispatch {
-		t.Fatalf("startView entry for item-ready = %+v, want ActionDispatch", entry)
-	}
 }
 
 func TestPlanHoldsInQueueItemWhoseDesignDocSitsInRoadmapIcebox(t *testing.T) {

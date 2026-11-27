@@ -59,14 +59,12 @@ func TestAnsweredObstacleRepeat(t *testing.T) {
 				t.Fatalf("repeat not held with both reports: %+v", next)
 			}
 			d := decisionFor(t, l, "item-a").decision
-			shadow := proposeFixture(t, l, l.cfg.Now(), startSnapshot{})
-			proposal, ok := shadow.nextStart()
 			if tc.waiter == "design" {
-				if d.Action != ActionDispatch || d.Seat != "design" || !ok || proposal.decision.Seat != d.Seat || proposal.decision.ItemID != d.ItemID || proposal.decision.LaneID != d.LaneID {
-					t.Fatalf("different obstacle should dispatch design: legacy %+v, proposal %+v (%v)", d, proposal, ok)
+				if d.Action != ActionDispatch || d.Seat != "design" {
+					t.Fatalf("different obstacle should dispatch design: %+v", d)
 				}
-			} else if d.Action != ActionHold || d.Seat != tc.waiter || ok || shadow.holds[d.ItemID] != d.Reason || shadow.entries[d.ItemID].decision.Seat != tc.waiter {
-				t.Fatalf("repeat must hold for %s: legacy %+v, shadow %+v, proposed %v", tc.waiter, d, shadow.entries[d.ItemID], ok)
+			} else if d.Action != ActionHold || d.Seat != tc.waiter {
+				t.Fatalf("repeat must hold for %s: %+v", tc.waiter, d)
 			}
 			s := openFixture(t, f.storePath)
 			defer s.Close()

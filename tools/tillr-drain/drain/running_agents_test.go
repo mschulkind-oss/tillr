@@ -386,69 +386,6 @@ func TestContinuingWorkflowKeepsSlotAcrossSettleAndReadyPasses(t *testing.T) {
 	}
 }
 
-func TestStartSnapshotUpdatesActiveOrdinaryAgentsOnLeaseChangeWithNoItemChange(t *testing.T) {
-	f, l := passFixture(t, "item-a")
-	ctx, at := context.Background(), l.cfg.Now().UTC()
-
-	lanes := []string{"lane-1"}
-	tick := Pass{AvailableLanes: &lanes, StorePath: f.storePath, Build: &l.build}
-	questions := &VantageQuestions{Root: f.root}
-
-	var syncer startStoreSync
-	t.Cleanup(syncer.close)
-	rebuild := func(at time.Time, prev startSnapshot) func(*store.Reader, *startSnapshot, map[string]bool) (func() error, error) {
-		return func(r *store.Reader, next *startSnapshot, touched map[string]bool) (func() error, error) {
-			tCopy := tick
-			tCopy.Now = at.Format(time.RFC3339Nano)
-			return next.prepareRepair(ctx, r, at, l.currentPolicy(), tCopy, questions, prev, touched)
-		}
-	}
-
-	// Initial seed: 0 active ordinary agents, limit 1 -> item-a proposes lane-1.
-	snap, err := syncer.syncStore(ctx, f.storePath, at, l.currentPolicy(), startSnapshot{}, rebuild(at, startSnapshot{}))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(snap.activeOrdinaryAgents) != 0 {
-		t.Fatalf("initial activeOrdinaryAgents = %+v, want empty", snap.activeOrdinaryAgents)
-	}
-	if e, ok := snap.nextFreshStart(); !ok || e.decision.ItemID != "item-a" || e.decision.LaneID != "lane-1" {
-		t.Fatalf("initial nextFreshStart = (%+v, %v), want item-a on lane-1", e.decision, ok)
-	}
-
-	// Take a timed lease on draining lane-2 with NO item change.
-	// Limit is 1 (lane-1), lane-1 is still free, but active ordinary agents becomes 1.
-	leaseReq := run.Request{RunID: "run-draining-a1", ItemID: "other", LaneID: "lane-2", Backend: "fixture", TimeoutMS: 5000}
-	fixtureWrite(t, f, func(tx *store.Tx) error {
-		_, err := run.ClaimLease(ctx, tx, leaseReq, "lane-2", at)
-		return err
-	})
-
-	snap2, err := syncer.syncStore(ctx, f.storePath, at.Add(time.Second), l.currentPolicy(), snap, rebuild(at.Add(time.Second), snap))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(snap2.activeOrdinaryAgents) != 1 {
-		t.Fatalf("after lease taken with no item change: activeOrdinaryAgents = %+v, want 1", snap2.activeOrdinaryAgents)
-	}
-	if e, ok := snap2.nextFreshStart(); ok {
-		t.Fatalf("after lease taken: nextFreshStart = %+v, want none while limit 1 is full", e.decision)
-	}
-
-	// Advance clock past lease expiry (timeout 5s + grace) with NO store write and NO item change.
-	afterExpiry := at.Add(time.Duration(5000+run.LeaseGraceMS+1000) * time.Millisecond)
-	snap3, err := syncer.syncStore(ctx, f.storePath, afterExpiry, l.currentPolicy(), snap2, rebuild(afterExpiry, snap2))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(snap3.activeOrdinaryAgents) != 0 {
-		t.Fatalf("after lease expiry with no item change: activeOrdinaryAgents = %+v, want 0", snap3.activeOrdinaryAgents)
-	}
-	if e, ok := snap3.nextFreshStart(); !ok || e.decision.ItemID != "item-a" || e.decision.LaneID != "lane-1" {
-		t.Fatalf("after lease expiry: nextFreshStart = (%+v, %v), want item-a on lane-1", e.decision, ok)
-	}
-}
-
 func TestAgentJudgeHeldByRunningAgentLimitNamesRunningRuns(t *testing.T) {
 	f, l := passFixture(t, "item-cand", "item-active")
 	at := l.cfg.Now().UTC()

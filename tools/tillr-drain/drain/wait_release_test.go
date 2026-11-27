@@ -92,16 +92,16 @@ func TestPassReleasesWaitForLandedItem(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
 			f, l, id, runID := landedWaitFixture(t, tc.earlierRun)
-			if _, err := l.passMode(ctx, &LoopResult{}, true); err != nil {
+			if err := l.runTrunkProofStep(ctx, &LoopResult{}, false); err != nil {
 				t.Fatal(err)
 			}
 			if d := decisionFor(t, l, id).decision; d.Action != ActionHold || d.Reason != ReasonBlocked {
 				t.Fatalf("item did not wait for the unlanded blocker: %+v", d)
 			}
 			landWaitBlocker(t, f)
-			// Reconciliation-only passes run maintenance but leave dispatch to the plan.
+			// Trunk-proof actor steps release waits without dispatching the item.
 			for range 2 {
-				if _, err := l.passMode(ctx, &LoopResult{}, true); err != nil {
+				if err := l.runTrunkProofStep(ctx, &LoopResult{}, false); err != nil {
 					t.Fatal(err)
 				}
 				assertLandedWaitReleased(t, f, l, id, runID)

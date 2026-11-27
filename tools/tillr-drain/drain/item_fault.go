@@ -252,7 +252,7 @@ func (l *Loop) cancelStaging(ctx context.Context, d Decision) error {
 		return retractClaim(tx, d, at, true)
 	})
 	if err == nil {
-		l.notifyStartLaneReleased(d.LaneID, d.RunRequest.RunID, true, at)
+		l.signalPassWake()
 	}
 	return err
 }

@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"maps"
-	"reflect"
 	"slices"
 	"strings"
 	"time"
@@ -32,12 +31,11 @@ type idlePlanState struct {
 	maxFinishedAt int64
 	trunkSHA      string
 	greenSHA      string
-	startSnap     *startSnapshot
+	docsGen       int64
 	lanes         []string
 	policy        *Policy
 	held          map[string]string
 	nextExpiry    time.Time
-	pendingOnly   bool
 }
 
 func isIdleTelemetryEvent(kind, objectType string) bool {
@@ -175,6 +173,10 @@ func (l *Loop) readIdleRefs(ctx context.Context) (trunkSHA, greenSHA string, ok 
 	if l.nonLanding || l.cfg.Root == "" {
 		return "", "", true
 	}
+	if l.actorsActive() {
+		tip, green, valid := l.cachedTrunkAndGreen()
+		return tip, green, valid && tip != ""
+	}
 	trunkFull := "refs/heads/" + TrunkRef
 	out, err := l.git(ctx, l.cfg.Root, "for-each-ref", "--format=%(refname) %(objectname)", trunkFull, GreenRef)
 	if err != nil {
@@ -203,7 +205,7 @@ func (l *Loop) trunkMovedSinceSync(ctx context.Context) bool {
 	return ok && trunkSHA != l.syncedSHA
 }
 
-func (l *Loop) captureIdleState(ctx context.Context, holds []Decision, at time.Time, pendingOnly bool) *idlePlanState {
+func (l *Loop) captureIdleState(ctx context.Context, holds []Decision, at time.Time) *idlePlanState {
 	if l.cfg.Store == "" || l.cfg.ExitWhenDrained || l.commentsSettings() != nil ||
 		l.activeCount() > 0 || l.activeTriageCount() > 0 || l.heavyInFlight() || l.infrastructureStreak() > 0 || l.hasStageFaults() {
 		return nil
@@ -212,13 +214,9 @@ func (l *Loop) captureIdleState(ctx context.Context, holds []Decision, at time.T
 	if err != nil {
 		return nil
 	}
-	view := l.startView.Load()
-	var snap *startSnapshot
-	if view != nil {
-		snap = view.current.Load()
-	} else if hasDesignDocs {
-		// Without startView's filesystem watcher, a test or caller may edit a
-		// design document on disk between passes without moving trunk or store.
+	if !l.actorsActive() && hasDesignDocs {
+		// Without the sync actor's filesystem watcher, a test or caller may edit
+		// a design document on disk between passes without moving trunk or store.
 		return nil
 	}
 
@@ -265,30 +263,17 @@ func (l *Loop) captureIdleState(ctx context.Context, holds []Decision, at time.T
 		maxFinishedAt: maxFinishedAt,
 		trunkSHA:      trunkSHA,
 		greenSHA:      greenSHA,
-		startSnap:     snap,
+		docsGen:       l.actors.DocsGen.Load(),
 		lanes:         slices.Clone(l.lanes()),
 		policy:        l.currentPolicy(),
 		held:          l.heldReasonsSnapshot(),
 		nextExpiry:    nextExpiry,
-		pendingOnly:   pendingOnly,
 	}
 }
 
-func idleStartSnapUnchanged(cur, prev *startSnapshot) bool {
-	if cur == prev {
-		return true
-	}
-	if cur == nil || prev == nil {
-		return false
-	}
-	cmp := *cur
-	cmp.lastEventSeq = prev.lastEventSeq
-	return reflect.DeepEqual(&cmp, prev)
-}
-
-func (l *Loop) idleUnchanged(ctx context.Context, at time.Time, pendingOnly bool) bool {
+func (l *Loop) idleUnchanged(ctx context.Context, at time.Time) bool {
 	idle := l.idleState
-	if idle == nil || idle.pendingOnly != pendingOnly {
+	if idle == nil {
 		return false
 	}
 	if l.cfg.ExitWhenDrained || l.commentsSettings() != nil ||
@@ -308,13 +293,8 @@ func (l *Loop) idleUnchanged(ctx context.Context, at time.Time, pendingOnly bool
 	if !maps.Equal(l.heldReasonsSnapshot(), idle.held) {
 		return false
 	}
-	var nextStartSnap *startSnapshot
-	if view := l.startView.Load(); view != nil {
-		cur := view.current.Load()
-		if !idleStartSnapUnchanged(cur, idle.startSnap) {
-			return false
-		}
-		nextStartSnap = cur
+	if l.actors.DocsGen.Load() != idle.docsGen {
+		return false
 	}
 	if trunkSHA, greenSHA, ok := l.readIdleRefs(ctx); !ok || trunkSHA != idle.trunkSHA || greenSHA != idle.greenSHA {
 		return false
@@ -328,9 +308,6 @@ func (l *Loop) idleUnchanged(ctx context.Context, at time.Time, pendingOnly bool
 	}
 	if !slices.Equal(states, idle.itemStates) {
 		return false
-	}
-	if nextStartSnap != nil {
-		idle.startSnap = nextStartSnap
 	}
 	idle.eventSeq = latestSeq
 	return true

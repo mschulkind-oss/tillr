@@ -121,6 +121,9 @@ func (l *Loop) runTriggerNotifyLoop(ctx context.Context, initialSub *notify.Subs
 				l.signalExamineWake()
 				l.signalGateWake()
 				l.signalLandWake()
+				l.signalSyncWake()
+				l.signalTrunkProofWake()
+				l.signalGCWake()
 			}
 			connectedOnce = true
 		}
@@ -135,7 +138,6 @@ func (l *Loop) runTriggerNotifyLoop(ctx context.Context, initialSub *notify.Subs
 			if l.notifyFrameObs != nil {
 				l.notifyFrameObs(frame)
 			}
-			signalWake(tn.wake)
 			switch frame.Topic {
 			case notify.TopicRunAssigned:
 				l.signalStageWake()
@@ -143,16 +145,39 @@ func (l *Loop) runTriggerNotifyLoop(ctx context.Context, initialSub *notify.Subs
 				l.signalLaunchWake()
 			case notify.TopicRunExited:
 				l.signalExamineWake()
+				l.signalGCWake()
+				signalWake(tn.wake)
 			case notify.TopicCandidateReady, notify.TopicGateFinished:
 				l.signalGateWake()
-			case notify.TopicGatePassed, notify.TopicTrunkMoved, notify.TopicProofGreen:
+				signalWake(tn.wake)
+			case notify.TopicGatePassed:
 				l.signalLandWake()
+				signalWake(tn.wake)
+			case notify.TopicTrunkMoved:
+				l.signalLandWake()
+				l.signalTrunkProofWake()
+				signalWake(tn.wake)
+			case notify.TopicProofGreen:
+				l.signalLandWake()
+				l.signalTrunkProofWake()
+				signalWake(tn.wake)
+			case notify.TopicDocsChanged:
+				l.signalSyncWake()
+			case notify.TopicItemEnded, notify.TopicAgentSlotFreed:
+				l.signalGCWake()
+				signalWake(tn.wake)
 			case notify.TopicResync:
+				signalWake(tn.wake)
 				l.signalStageWake()
 				l.signalLaunchWake()
 				l.signalExamineWake()
 				l.signalGateWake()
 				l.signalLandWake()
+				l.signalSyncWake()
+				l.signalTrunkProofWake()
+				l.signalGCWake()
+			default:
+				signalWake(tn.wake)
 			}
 		}
 	}
@@ -307,10 +332,12 @@ func (l *Loop) waitForTrigger(ctx context.Context, leases []LaneLease, at time.T
 	defer stopTimer()
 
 	var notifyWake <-chan struct{}
+	var passWake <-chan struct{}
 	if l.notifyEnabled() {
 		l.mu.Lock()
 		tn := l.triggerNotify
 		l.mu.Unlock()
+		passWake = l.actors.PassWakeChan()
 		if tn == nil {
 			stopLocal := l.startTriggerNotify(ctx)
 			defer stopLocal()
@@ -389,6 +416,15 @@ func (l *Loop) waitForTrigger(ctx context.Context, leases []LaneLease, at time.T
 			}
 			return "", nil
 		case <-notifyWake:
+			if err := l.checkStopRequested(ctx); err != nil {
+				if stoppedByOperator(ctx, err) {
+					result.Detail = "the loop was asked to stop while waiting for a trigger"
+					return StopOperatorStop, nil
+				}
+				return "", err
+			}
+			return "", nil
+		case <-passWake:
 			if err := l.checkStopRequested(ctx); err != nil {
 				if stoppedByOperator(ctx, err) {
 					result.Detail = "the loop was asked to stop while waiting for a trigger"

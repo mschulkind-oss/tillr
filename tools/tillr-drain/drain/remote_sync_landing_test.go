@@ -385,7 +385,7 @@ func testRemoteSyncLandingEvidence(t *testing.T, phase string) {
 			}
 		}
 		restarted := &Loop{cfg: p.l.cfg}
-		if _, err := restarted.passMode(ctx, &result, true); err != nil {
+		if _, err := restarted.passMode(ctx, &result); err != nil {
 			t.Fatal(err)
 		}
 		if got := runGit(t, p.f.root, "rev-parse", TrunkRef); got != tip {

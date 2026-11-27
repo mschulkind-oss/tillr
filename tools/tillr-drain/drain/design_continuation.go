@@ -81,15 +81,22 @@ func (l *Loop) prepareDesignContinuation(ctx context.Context, r *store.Reader, d
 		repairBase, expectedHead = refusal.DesignBaseSHA, refusal.DesignHeadSHA
 	}
 	if repairBase != "" {
-		pinRef := "refs/tillr/runs/" + origin + "^{commit}"
-		pin, pinErr := l.git(ctx, l.cfg.Root, "rev-parse", "--verify", "--quiet", pinRef)
-		pin = strings.TrimSpace(pin)
-		if expectedHead != "" && (pinErr != nil || pin != expectedHead) {
-			return Externalf("cannot stage design continuation of %s: %s does not name the recorded candidate %s", origin, pinRef, expectedHead)
-		}
-		if pinErr == nil {
-			d.DesignContinuationHead = pin
-			*base = repairBase
+		if l.actorsActive() {
+			if expectedHead != "" {
+				d.DesignContinuationHead = expectedHead
+				*base = repairBase
+			}
+		} else {
+			pinRef := "refs/tillr/runs/" + origin + "^{commit}"
+			pin, pinErr := l.git(ctx, l.cfg.Root, "rev-parse", "--verify", "--quiet", pinRef)
+			pin = strings.TrimSpace(pin)
+			if expectedHead != "" && (pinErr != nil || pin != expectedHead) {
+				return Externalf("cannot stage design continuation of %s: %s does not name the recorded candidate %s", origin, pinRef, expectedHead)
+			}
+			if pinErr == nil {
+				d.DesignContinuationHead = pin
+				*base = repairBase
+			}
 		}
 	}
 	d.BlockConflict = &next

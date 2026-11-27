@@ -1414,11 +1414,18 @@ type plannedApplication struct {
 }
 
 // A fresh lane's base belongs to the decision, not the transaction that claims it.
-type plannedStart struct{ tip, green, base string }
+type plannedStart struct {
+	tip, green, base string
+	purePass         bool
+	unprovedSet      map[string]bool
+}
 
 type startRefs struct {
-	tip, green string
-	readGreen  bool
+	tip, green  string
+	readGreen   bool
+	purePass    bool
+	unprovedSet map[string]bool
+	blockBases  map[string]string
 }
 
 func (s *startRefs) proved(ctx context.Context, root, mode string) (string, error) {
@@ -1491,10 +1498,33 @@ func (l *Loop) passPlans(ctx context.Context, at time.Time) ([]plannedApplicatio
 }
 
 func (l *Loop) passPlansGeneration(ctx context.Context, at time.Time, generation *string) ([]plannedApplication, []LaneLease, error) {
-	return l.passPlansMode(ctx, at, generation, false, nil)
+	return l.passPlansMode(ctx, at, generation)
 }
 
-func (l *Loop) passPlansMode(ctx context.Context, at time.Time, generation *string, pendingOnly bool, commentChecks *[]plannedApplication) ([]plannedApplication, []LaneLease, error) {
+func (l *Loop) passPlansMode(ctx context.Context, at time.Time, generation *string) ([]plannedApplication, []LaneLease, error) {
+	if l.actorsActive() {
+		// Pure scheduling pass (D-SN1): read one consistent SQLite snapshot
+		// using cached trunk/green/worktree state — zero subprocesses, zero
+		// git/Vantage calls, and no write lock.
+		at = l.cfg.Now()
+		s, err := store.OpenRead(ctx, l.cfg.Store)
+		if err != nil {
+			return nil, nil, err
+		}
+		defer s.Close()
+		refs := l.cachedTrunkRefs()
+		var wtSnap *worktreebudget.Snapshot
+		if l.cfg.ItemWorktrees && !l.nonLanding {
+			wtSnap = l.cachedWorktreeSnapshot()
+		}
+		var plans []plannedApplication
+		var leases []LaneLease
+		err = s.ReadTx(ctx, func(r *store.Reader) error {
+			return l.readPassPlans(ctx, r, at, "", refs, &plans, &leases, wtSnap)
+		})
+		return plans, leases, err
+	}
+
 	if !l.nonLanding {
 		l.sweepDisabledMarkers(ctx)
 	}
@@ -1507,119 +1537,8 @@ func (l *Loop) passPlansMode(ctx context.Context, at time.Time, generation *stri
 		return nil, nil, err
 	}
 	defer s.Close()
-	nextGeneration := *generation
-	var reapedSingle []*pendingWork
-	reapedAny := false
-	// The process-table evidence is gathered with no transaction open. The run-start
-	// lock spans it and the write, so no run face starts between the scan and the reap.
-	if err := withRunStartLock(ctx, l.cfg.Store, func() error {
-		ev, err := l.gatherReapEvidence(ctx, s)
-		if err != nil {
-			return err
-		}
-		defer func() {
-			for _, line := range *ev.Reclaimed {
-				l.reportf("%s", line)
-			}
-		}()
-		pendingBusy := l.takeBusyWrites()
-		err = s.WriteTx(ctx, func(tx *store.Tx) error {
-			var before, after int64
-			if err := tx.QueryRow("SELECT COALESCE(MAX(seq), 0) FROM events").Scan(&before); err != nil {
-				return err
-			}
-			if err := l.reapDeadLoopRuns(ctx, tx, at, ev); err != nil {
-				return err
-			}
-			released, err := run.ReapExpiredLeases(ctx, tx, at)
-			if err != nil {
-				return err
-			}
-			if err := tx.QueryRow("SELECT COALESCE(MAX(seq), 0) FROM events").Scan(&after); err != nil {
-				return err
-			}
-			reapedAny = len(released) > 0 || after != before
-			if reapedAny && nextGeneration == "" {
-				nextGeneration, err = allocateGeneration(tx)
-			}
-			if err != nil {
-				return err
-			}
-			return l.appendBusyWrites(tx, pendingBusy)
-		})
-		if err != nil && len(pendingBusy) > 0 {
-			l.restoreBusyWrites(pendingBusy)
-		}
-		if err == nil && ev.ReapedSingle != nil {
-			reapedSingle = *ev.ReapedSingle
-		}
-		return err
-	}); err != nil {
+	if _, err := l.reapDeadAndExpired(ctx, at, generation); err != nil {
 		return nil, nil, err
-	}
-	*generation = nextGeneration
-	for _, work := range reapedSingle {
-		d := work.Decision
-		id := d.RunRequest.RunID
-		_ = pipelineCloseGraph(l.cfg.Root, id)
-		if err := RecordBackendOutcomes(ctx, l.cfg.Store); err != nil {
-			return nil, nil, err
-		}
-		var rec *run.Record
-		if err := s.ReadTx(ctx, func(r *store.Reader) error {
-			var readErr error
-			rec, readErr = terminalRecord(r, id)
-			return readErr
-		}); err != nil {
-			return nil, nil, err
-		}
-		if rec != nil {
-			if err := l.recordSettlementSpend(ctx, nextGeneration, work.LoopID, *rec); err != nil {
-				return nil, nil, err
-			}
-		}
-		if !l.nonLanding {
-			base := work.BaseSHA
-			if base == "" {
-				base = l.laneBase(d.LaneID)
-			}
-			if err := l.preserveWorkFromBase(ctx, d.LaneID, id, base, "orphaned by a loop stop"); err != nil {
-				l.retainUnpreserved(ctx, d.LaneID, id, l.headOf(ctx, d.LaneID), err)
-				continue
-			}
-			if err := l.pinLane(ctx, d.LaneID, d.ItemID, id, l.headOf(ctx, d.LaneID)); err != nil {
-				if holdErr := l.holdItemFault(ctx, Candidate{ItemID: d.ItemID, RunID: id, LaneID: d.LaneID}, ReasonSettleFailed, err.Error()); holdErr != nil && asItemTerminal(holdErr) == nil {
-					return nil, nil, holdErr
-				}
-				continue
-			}
-			if err := l.resetLane(ctx, d.LaneID); err != nil {
-				return nil, nil, err
-			}
-		}
-		if d.Reason == ReasonConflictFix && work.ParentRunID != "" {
-			if restored, err := l.restoreConflictCandidate(ctx, work); err != nil {
-				return nil, nil, err
-			} else if restored {
-				continue
-			}
-		}
-		if err := l.markExamined(ctx, d); err != nil {
-			return nil, nil, err
-		}
-		if d.BlockConflict != nil {
-			if rec != nil {
-				if err := l.recordDesigner(ctx, d, *rec); err != nil {
-					return nil, nil, err
-				}
-			}
-			if err := l.settleUnansweredDesignRuns(ctx); err != nil {
-				return nil, nil, err
-			}
-		}
-	}
-	if reapedAny {
-		l.reconcileStartLanes(ctx, nil, at)
 	}
 	if err := l.releaseIdleHeldCandidates(ctx); err != nil {
 		return nil, nil, err
@@ -1650,7 +1569,7 @@ func (l *Loop) passPlansMode(ctx context.Context, at time.Time, generation *stri
 			refs = &startRefs{tip: tip}
 		}
 		var wtSnap *worktreebudget.Snapshot
-		if l.cfg.ItemWorktrees && !l.nonLanding && !pendingOnly {
+		if l.cfg.ItemWorktrees && !l.nonLanding {
 			if snap, colErr := l.collectIdleWorktrees(ctx); colErr == nil {
 				wtSnap = &snap
 			} else {
@@ -1658,7 +1577,7 @@ func (l *Loop) passPlansMode(ctx context.Context, at time.Time, generation *stri
 			}
 		}
 		err := s.ReadTx(ctx, func(r *store.Reader) error {
-			return l.readPassPlans(ctx, r, at, "", refs, &plans, &leases, pendingOnly, commentChecks, wtSnap)
+			return l.readPassPlans(ctx, r, at, "", refs, &plans, &leases, wtSnap)
 		})
 		if err != nil || !slices.ContainsFunc(plans, func(p plannedApplication) bool { return p.start != nil }) {
 			return plans, leases, err
@@ -1675,7 +1594,7 @@ func (l *Loop) passPlansMode(ctx context.Context, at time.Time, generation *stri
 
 // readPassPlans binds the planner's decisions to a read snapshot. A completion
 // only plans an existing reservation, never a fresh attempt or another lane.
-func (l *Loop) readPassPlans(ctx context.Context, r *store.Reader, at time.Time, onlyItem string, refs *startRefs, plans *[]plannedApplication, leases *[]LaneLease, pendingOnly bool, commentChecks *[]plannedApplication, wtSnap *worktreebudget.Snapshot) error {
+func (l *Loop) readPassPlans(ctx context.Context, r *store.Reader, at time.Time, onlyItem string, refs *startRefs, plans *[]plannedApplication, leases *[]LaneLease, wtSnap *worktreebudget.Snapshot) error {
 	var err error
 	observed := append([]string(nil), l.lanes()...)
 	held, err := readLanes(r, at)
@@ -1727,7 +1646,10 @@ func (l *Loop) readPassPlans(ctx context.Context, r *store.Reader, at time.Time,
 	}
 	syncRoadmaps := l.syncRoadmapsSettings()
 	proseRewrite := l.proseRewriteSettings()
-	tick := Pass{examineItem: onlyItem, pendingOnly: pendingOnly, ownerMigration: l.ownerMigrationItem != "", loopHolds: loopHolds, startRefs: refs, Comments: l.commentsSettings(), WorkflowDefaults: l.workflowDefaultsSettings(), SyncRoadmaps: &syncRoadmaps, ProseRewrite: &proseRewrite, GatesInFlight: l.gateCount(), Build: &l.build, Now: at.Format(time.RFC3339Nano), AvailableLanes: &available, ItemWorktrees: l.cfg.ItemWorktrees, WorktreeSnapshot: wtSnap, OutLanes: l.outLanes()}
+	tick := Pass{examineItem: onlyItem, ownerMigration: l.ownerMigrationItem != "", loopHolds: loopHolds, startRefs: refs, Comments: l.commentsSettings(), WorkflowDefaults: l.workflowDefaultsSettings(), SyncRoadmaps: &syncRoadmaps, ProseRewrite: &proseRewrite, GatesInFlight: l.gateCount(), Build: &l.build, Now: at.Format(time.RFC3339Nano), AvailableLanes: &available, ItemWorktrees: l.cfg.ItemWorktrees, WorktreeSnapshot: wtSnap, OutLanes: l.outLanes()}
+	if refs != nil && refs.purePass {
+		tick.docPrereqs = l.cachedDocPrereqs()
+	}
 	if l.ownerMigrationItem != "" {
 		tick.examineItem = l.ownerMigrationItem
 	}
@@ -1740,6 +1662,11 @@ func (l *Loop) readPassPlans(ctx context.Context, r *store.Reader, at time.Time,
 	l.mu.Lock()
 	questions := l.questions
 	l.mu.Unlock()
+	if refs != nil && refs.purePass {
+		if cachedQ := l.cachedVantageQuestions(); cachedQ != nil {
+			questions = cachedQ
+		}
+	}
 	if questions == nil {
 		// Standalone planner callers do not own a document refresh lifecycle.
 		questions = &VantageQuestions{Root: l.cfg.Root, Command: l.cfg.QuestionsCmd, Context: ctx}
@@ -1762,26 +1689,9 @@ func (l *Loop) readPassPlans(ctx context.Context, r *store.Reader, at time.Time,
 	}
 	expressByID := make(map[string]bool, len(planItems))
 	finishedByID := make(map[string]bool, len(planItems))
-	if commentChecks != nil {
-		*commentChecks = (*commentChecks)[:0]
-	}
 	for _, row := range planItems {
 		expressByID[row.ItemID] = row.Express
 		finishedByID[row.ItemID] = finishedState(declared.Parsed, row.State)
-		// Pending-only planning omits unseen batches, but those batches may
-		// disappear without ever becoming eligible for a start proposal. Keep
-		// closure checks separate from dispatch and durable hold decisions.
-		if commentChecks == nil || !pendingOnly || !holdEnabled(declared.Parsed, ReasonVantageUnavailable) ||
-			!item.IsCommentItem(row.ItemID) || (row.State != StateInQueue && row.State != StateBlocked) ||
-			tick.plansItem(row.ItemID, folds.works[row.ItemID]) {
-			continue
-		}
-		d := Decision{ItemID: row.ItemID, Action: ActionHold}
-		version, err := inputVersionFrom(r, d, folds)
-		if err != nil {
-			return err
-		}
-		*commentChecks = append(*commentChecks, plannedApplication{decision: d, version: version, definition: &declared.Parsed})
 	}
 	heldExpressSoFar := map[string]heldExpressItem{}
 	for _, env := range envs {
@@ -1844,11 +1754,19 @@ func (l *Loop) readPassPlans(ctx context.Context, r *store.Reader, at time.Time,
 		var start *plannedStart
 		work := folds.works[d.ItemID]
 		if refs != nil && isDispatch(d) && !d.WorkflowRestart && (work == nil || !work.Ready) {
-			start = &plannedStart{tip: refs.tip, base: refs.tip}
+			start = &plannedStart{tip: refs.tip, base: refs.tip, purePass: refs.purePass, unprovedSet: refs.unprovedSet}
 			if !IsTrunkFixer(d.ItemID) && !IsRemoteSyncItem(d.ItemID) {
 				start.green, err = refs.proved(ctx, l.cfg.Root, l.gatePolicy.LaneBase)
 				if err == nil && start.green != "" {
-					start.base, err = blockBaseAt(ctx, r, l.cfg.Root, start.green, refs.tip, d.ItemID)
+					if refs.purePass {
+						if cachedBase := refs.blockBases[d.ItemID]; cachedBase != "" {
+							start.base = cachedBase
+						} else {
+							start.base = start.green
+						}
+					} else {
+						start.base, err = blockBaseAt(ctx, r, l.cfg.Root, start.green, refs.tip, d.ItemID)
+					}
 				}
 				if err != nil {
 					return err
@@ -2050,12 +1968,15 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 		}
 		return false, nil, nil
 	}
+	purePass := l.actorsActive() || (p.start != nil && p.start.purePass)
 	// Refresh before claiming; a claimed dispatch is never checked after staging.
-	if (p.decision.Action == ActionDispatch || p.decision.Action == ActionRetry) && p.decision.RunRequest != nil {
+	if !purePass && (p.decision.Action == ActionDispatch || p.decision.Action == ActionRetry) && p.decision.RunRequest != nil {
 		if err := l.refreshQuotas(ctx); err != nil {
 			return false, nil, err
 		}
 	}
+	l.actors.PassMu.Lock()
+	defer l.actors.PassMu.Unlock()
 	nextGeneration := *generation
 	correlate := func(tx *store.Tx, d *Decision) error {
 		if nextGeneration == "" {
@@ -2207,7 +2128,7 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 				break
 			}
 		}
-		if !l.nonLanding && isDispatch(d) && p.start == nil {
+		if !purePass && !l.nonLanding && isDispatch(d) && p.start == nil {
 			// Work already in flight retains the existing trunk and input checks.
 			head, err := l.revParse(ctx, l.cfg.Root, l.trunkRef())
 			if err != nil {
@@ -2238,7 +2159,7 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 				return err
 			}
 			if *now != *d.Inputs {
-				if p.start == nil {
+				if p.start == nil || purePass {
 					return decline("run inputs changed since planning", "replan with the current run inputs")
 				}
 				// Check the ref after reading the files. An edit at the same tip
@@ -2388,8 +2309,15 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 				base = syncBase
 			} else if !l.nonLanding && !IsTrunkFixer(d.ItemID) && !(d.Returned != nil && d.Returned.Cause == RefusalConflict) {
 				var green string
+				var unprovedSet map[string]bool
 				if p.start != nil {
 					green = p.start.green
+					unprovedSet = p.start.unprovedSet
+				} else if purePass {
+					if refs := l.cachedTrunkRefs(); refs != nil {
+						green = refs.green
+						unprovedSet = refs.unprovedSet
+					}
 				} else {
 					green, err = provedLaneBase(ctx, l.cfg.Root, l.gatePolicy.LaneBase)
 					if err != nil {
@@ -2406,7 +2334,12 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 						for _, row := range items {
 							states[row.ItemID] = row.State
 						}
-						waits, err := unprovedBlockers(ctx, tx.Reader(), l.cfg.Root, green, "", states, map[string][]itemEdge{d.ItemID: itemEdges})
+						var waits map[string]string
+						if purePass {
+							waits, err = unprovedBlockersPure(tx.Reader(), green, unprovedSet, states, map[string][]itemEdge{d.ItemID: itemEdges})
+						} else {
+							waits, err = unprovedBlockers(ctx, tx.Reader(), l.cfg.Root, green, "", states, map[string][]itemEdge{d.ItemID: itemEdges})
+						}
 						if err != nil {
 							return err
 						}
@@ -2416,7 +2349,7 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 					}
 					if p.start == nil {
 						base = green
-						if work == nil || !(work.Ready || d.WorkflowRestart) {
+						if !purePass && (work == nil || !(work.Ready || d.WorkflowRestart)) {
 							base, err = blockBase(ctx, tx.Reader(), l.cfg.Root, green, d.ItemID)
 							if err != nil {
 								return err
@@ -2723,7 +2656,7 @@ func (l *Loop) releaseExamination(ctx context.Context, d Decision) error {
 		return appendEffect(tx, laneReleasedKind, d.RunRequest.RunID, laneReleased{LaneID: d.LaneID, Cause: laneReleaseEnded}, l.cfg.Now().UTC())
 	})
 	if err == nil && releasedLane {
-		l.notifyStartLaneReleased(d.LaneID, d.RunRequest.RunID, false, l.cfg.Now().UTC())
+		l.signalPassWake()
 	}
 	if err == nil && len(strays) > 0 {
 		l.reportf("loop: run %s ended, but process(es) %s still carry its markers; lane %s's lease was released. Before offering it again, the next pass holds it out of rotation if any of these processes are still inside it\n", d.RunRequest.RunID, strings.Join(strays, ", "), d.LaneID)
@@ -2775,7 +2708,6 @@ func (l *Loop) markExamined(ctx context.Context, d Decision) error {
 			}
 		}
 	}
-	releasedLane := false
 	var at time.Time
 	err = s.WriteTx(ctx, func(tx *store.Tx) error {
 		at = l.cfg.Now().UTC()
@@ -2792,7 +2724,6 @@ func (l *Loop) markExamined(ctx context.Context, d Decision) error {
 		if n, err := res.RowsAffected(); err != nil {
 			return err
 		} else if n > 0 {
-			releasedLane = true
 			if err := appendEffect(tx, laneReleasedKind, d.RunRequest.RunID, laneReleased{LaneID: d.LaneID, Cause: laneReleaseExamined}, at); err != nil {
 				return err
 			}
@@ -2800,13 +2731,7 @@ func (l *Loop) markExamined(ctx context.Context, d Decision) error {
 		return recordSecondFailure(tx, routed, at)
 	})
 	if err == nil {
-		if releasedLane {
-			l.notifyStartLaneReleased(d.LaneID, d.RunRequest.RunID, true, at)
-		} else if v := l.startView.Load(); v != nil {
-			// The lane may have been released before replay; wake startView so the
-			// item's completed examination and refusal are observed without waiting.
-			v.notifyUpdate()
-		}
+		l.signalPassWake()
 	}
 	if err == nil && routed != nil && IsRemoteSyncItem(routed.itemID) {
 		l.escalateRemoteSyncPushState(ctx, routed.itemID, "operator", "repeated ending")
@@ -3027,10 +2952,10 @@ func (l *Loop) holdSettleFailure(c runCompletion) bool {
 // pass advances each item's one planned transition without waiting for a sibling.
 // A fixed point waits on completion, expiry, polling, or operator cancellation.
 func (l *Loop) pass(ctx context.Context, result *LoopResult) (string, error) {
-	return l.passMode(ctx, result, false)
+	return l.passMode(ctx, result)
 }
 
-func (l *Loop) passMode(ctx context.Context, result *LoopResult, pendingOnly bool) (stop string, err error) {
+func (l *Loop) passMode(ctx context.Context, result *LoopResult) (stop string, err error) {
 	defer func() {
 		if errors.Is(err, errRestartPending) {
 			end := l.startPassPhase("gate_restart")
@@ -3047,7 +2972,7 @@ func (l *Loop) passMode(ctx context.Context, result *LoopResult, pendingOnly boo
 	if err := l.timePassPhase("check_stop_requested", func() error { return l.checkStopRequested(ctx) }); err != nil {
 		return "", err
 	}
-	l.lastPassPendingOnly = pendingOnly
+	purePass := l.actorsActive()
 	if l.idleState != nil {
 		if err := l.timePassPhase("refresh_lane_count", func() error { return l.refreshLaneCount(ctx, false) }); err != nil {
 			return "", err
@@ -3058,171 +2983,47 @@ func (l *Loop) passMode(ctx context.Context, result *LoopResult, pendingOnly boo
 		if stop != "" || err != nil {
 			return stop, err
 		}
-		if err := l.timePassPhase("refresh_policy", func() error { return l.refreshPolicy() }); err != nil {
-			return "", err
+		if !purePass {
+			if err := l.timePassPhase("refresh_policy", func() error { return l.refreshPolicy() }); err != nil {
+				return "", err
+			}
 		}
-		if drained == 0 && l.idleUnchanged(ctx, l.cfg.Now().UTC(), pendingOnly) {
+		if drained == 0 && l.idleUnchanged(ctx, l.cfg.Now().UTC()) {
 			return l.waitForTrigger(ctx, nil, l.cfg.Now().UTC(), result)
 		}
 		l.idleState = nil
 	}
-	if !l.nonLanding {
-		end := l.startPassPhase("sweep_disabled_markers")
-		l.sweepDisabledMarkers(ctx)
-		end()
-	}
-	if err := l.timePassPhase("observe_trunk_core_worktree", func() error { return l.observeTrunkCoreWorktree(ctx) }); err != nil {
-		l.reportf("loop: could not record trunk core.worktree observation: %v\n", err)
-	}
-	if err := l.timePassPhase("refresh_lane_count", func() error { return l.refreshLaneCount(ctx, false) }); err != nil {
-		return "", err
-	}
-	endDrain := l.startPassPhase("drain_completions")
-	stop, err = l.drainCompletions(ctx, result)
-	endDrain()
-	if stop != "" || err != nil {
-		return stop, err
-	}
-	if err := l.timePassPhase("alert_triage", func() error {
-		l.recoverStaleTriageClaims(ctx)
-		l.dispatchAlertTriage(ctx)
-		return nil
-	}); err != nil {
-		return "", err
-	}
-	if !l.nonLanding {
-		if err := l.timePassPhase("reclaim_ended_item_lanes", func() error { return l.reclaimEndedItemLanes(ctx) }); err != nil {
-			l.reportf("loop: ended-item lane cleanup failed: %v\n", err)
-		}
-		if l.cfg.ItemWorktrees {
-			if err := l.timePassPhase("collect_idle_worktrees", func() error {
-				_, err := l.collectIdleWorktrees(ctx)
-				return err
-			}); err != nil {
-				l.reportf("loop: idle worktree collection failed: %v\n", err)
-			}
-		}
-		endPrune := l.startPassPhase("prune_run_refs")
-		l.reportRefSweepFailure(l.pruneRunRefs(ctx))
-		endPrune()
-	}
-	if err := l.timePassPhase("intake_comments", func() error { return l.intakeComments(ctx) }); err != nil {
-		return "", err
-	}
-	if err := l.timePassPhase("confirm_comment_replies", func() error { return l.confirmCommentReplies(ctx) }); err != nil {
-		return "", err
-	}
-	if err := l.timePassPhase("flush_comment_deliveries", func() error { return l.flushCommentDeliveries(ctx) }); err != nil {
-		return "", err
-	}
-	if err := l.timePassPhase("refresh_policy", func() error { return l.refreshPolicy() }); err != nil {
-		return "", err
-	}
-	// Settle an interrupted repair before trunk observation or the stale-stage sweep
-	// can mistake its replay for a manual reconciliation.
-	endReplay := l.startPassPhase("recover_remote_sync_replay")
-	replay, err := l.recoverPendingRemoteSyncReplay(ctx)
-	if err == nil && replay != nil {
-		l.afterRemoteSyncReplay(ctx, replay, result)
-	}
-	endReplay()
-	if err != nil {
-		return "", err
-	}
-	endObserveTrunk := l.startPassPhase("observe_trunk")
-	_, err = l.observeTrunk(ctx, "")
-	endObserveTrunk()
-	if err != nil {
-		return "", err
-	}
-	if err := l.timePassPhase("reconcile_rewritten_landings", func() error { return l.reconcileRewrittenLandings(ctx) }); err != nil {
-		return "", err
-	}
-	// After-merge proof starts before document sync and landing reconciliation, so a fault
-	// in either on every start cannot keep a restarting loop from ever proving the tip.
-	if !l.nonLanding && l.gatePolicy.LandingStrategy == "after-merge" {
-		if err := l.timePassPhase("maybe_rolling", func() error {
-			early, err := l.revParse(ctx, l.cfg.Root, l.trunkRef())
-			if err != nil {
-				return err
-			}
-			// Offer an already proved commit after restart and replay recovery, without
-			// waiting for the next proof to finish (or for it to advance green again).
-			l.offerStartupGreen(ctx)
-			return l.maybeRolling(ctx, early, false, result)
-		}); err != nil {
+	var mainSHA string
+	var splitClosingWorked bool
+	var maintenanceDrained int
+	if purePass {
+		// Pure scheduling pass (D-SN1): housekeeping, document sync, trunk proof,
+		// and GC run in their own background actors without holding the pass lock.
+		if err := l.timePassPhase("refresh_lane_count", func() error { return l.refreshLaneCount(ctx, false) }); err != nil {
 			return "", err
 		}
-	}
-	endRefreshDocs := l.startPassPhase("refresh_documents")
-	mainSHA, err := l.refreshDocuments(ctx, result)
-	endRefreshDocs()
-	if err != nil {
-		return "", err
-	}
-	if !l.nonLanding {
-		if err := l.timePassPhase("reconcile_landing_calls", func() error { return l.reconcileLandingCalls(ctx) }); err != nil {
+		endDrain := l.startPassPhase("drain_completions")
+		stop, err = l.drainCompletions(ctx, result)
+		endDrain()
+		if stop != "" || err != nil {
+			return stop, err
+		}
+		mainSHA = l.cachedTrunkTip()
+	} else {
+		if err := l.timePassPhase("refresh_lane_count", func() error { return l.refreshLaneCount(ctx, false) }); err != nil {
 			return "", err
 		}
-	}
-	if err := l.timePassPhase("retire_designers", func() error { return l.retireDesigners(ctx) }); err != nil {
-		return "", err
-	}
-	if err := l.timePassPhase("check_stop_requested", func() error { return l.checkStopRequested(ctx) }); err != nil {
-		return "", err
-	}
-	if !l.nonLanding {
-		if err := l.timePassPhase("close_stale_remote_sync_items", func() error {
-			if err := l.closeStaleRemoteSyncItems(ctx); err != nil {
-				return err
-			}
-			l.maybeRecoverClearedPushHold(ctx)
-			return nil
-		}); err != nil {
+		endDrain := l.startPassPhase("drain_completions")
+		stop, err = l.drainCompletions(ctx, result)
+		endDrain()
+		if stop != "" || err != nil {
+			return stop, err
+		}
+		if err := l.runInlineHousekeeping(ctx, result); err != nil {
 			return "", err
 		}
-	}
-	if err := l.timePassPhase("maybe_rolling", func() error { return l.maybeRolling(ctx, mainSHA, false, result) }); err != nil {
-		return "", err
-	}
-	if err := l.timePassPhase("check_stop_requested", func() error { return l.checkStopRequested(ctx) }); err != nil {
-		return "", err
-	}
-	if err := l.timePassPhase("release_unlaunched_claims", func() error { return l.releaseUnlaunchedClaims(ctx) }); err != nil {
-		return "", err
-	}
-	if err := l.timePassPhase("repair_stale_run_records", func() error { return l.repairStaleRunRecords(ctx) }); err != nil {
-		return "", err
-	}
-	if !l.nonLanding {
-		if err := l.timePassPhase("release_generated_triage", func() error { return l.releaseGeneratedTriage(ctx) }); err != nil {
-			return "", err
-		}
-		if err := l.timePassPhase("resolve_proved_fixers", func() error { return l.resolveProvedFixers(ctx) }); err != nil {
-			return "", err
-		}
-		if err := l.timePassPhase("settle_resolved_fixer_runs", func() error { return l.settleResolvedFixerRuns(ctx) }); err != nil {
-			return "", err
-		}
-		if err := l.timePassPhase("release_trunk_acquittals", func() error { return l.releaseTrunkAcquittals(ctx) }); err != nil {
-			return "", err
-		}
-		if err := l.timePassPhase("supersede_retried_candidates", func() error { return l.supersedeRetriedCandidates(ctx) }); err != nil {
-			return "", err
-		}
-		if err := l.timePassPhase("release_changed_candidate_gate_faults", func() error { return l.releaseChangedCandidateGateFaults(ctx) }); err != nil {
-			return "", err
-		}
-		if err := l.timePassPhase("release_advanced_gate_digest_faults", func() error { return l.releaseAdvancedGateDigestFaults(ctx) }); err != nil {
-			return "", err
-		}
-		if err := l.timePassPhase("release_stale_base_conflicts", func() error { return l.releaseStaleBaseConflicts(ctx) }); err != nil {
-			return "", err
-		}
-		if err := l.timePassPhase("settle_unanswered_design_runs", func() error { return l.settleUnansweredDesignRuns(ctx) }); err != nil {
-			return "", err
-		}
-		if err := l.timePassPhase("settle_misread_design_answers", func() error { return l.settleMisreadDesignAnswers(ctx) }); err != nil {
+		mainSHA = l.cachedTrunkTip()
+		if err := l.timePassPhase("check_stop_requested", func() error { return l.checkStopRequested(ctx) }); err != nil {
 			return "", err
 		}
 	}
@@ -3234,34 +3035,32 @@ func (l *Loop) passMode(ctx context.Context, result *LoopResult, pendingOnly boo
 		endAlarms()
 		l.countGeneration(result, timing.TickID)
 	}()
-	epochs := l.idleLaneEpochs()
-	if err := l.timePassPhase("retire_order_work", func() error { return l.retireOrderWork(ctx) }); err != nil {
-		return "", err
-	}
-	// Maintenance may have overlapped a worker or examination finishing.
-	// Any completion drained here missed this pass's top-of-pass ref sweep and
-	// trunk/document sync, so the pass cannot stop as queue-drained without
-	// another pass to run that maintenance.
-	endDrainMaint := l.startPassPhase("drain_completions")
-	maintenanceDrained, stop, err := l.drainCompletionsCount(ctx, result)
-	endDrainMaint()
-	if stop != "" || err != nil {
-		return stop, err
-	}
-	var splitClosingWorked bool
-	if !l.nonLanding {
-		if err := l.timePassPhase("advance_split_closing_checks", func() error {
-			worked, err := l.advanceSplitClosingChecks(ctx, mainSHA, result)
-			splitClosingWorked = worked
-			return err
-		}); err != nil {
-			return "", err
+	var epochs map[string]int
+	if !purePass {
+		epochs = l.idleLaneEpochs()
+		// Maintenance may have overlapped a worker or examination finishing.
+		// Any completion drained here missed this pass's top-of-pass ref sweep and
+		// trunk/document sync, so the pass cannot stop as queue-drained without
+		// another pass to run that maintenance.
+		endDrainMaint := l.startPassPhase("drain_completions")
+		maintenanceDrained, stop, err = l.drainCompletionsCount(ctx, result)
+		endDrainMaint()
+		if stop != "" || err != nil {
+			return stop, err
+		}
+		if !l.nonLanding {
+			if err := l.timePassPhase("advance_split_closing_checks", func() error {
+				worked, err := l.advanceSplitClosingChecks(ctx, mainSHA, result)
+				splitClosingWorked = worked
+				return err
+			}); err != nil {
+				return "", err
+			}
 		}
 	}
-	var commentChecks []plannedApplication
 	plan := func(ctx context.Context, at time.Time, generation *string) ([]plannedApplication, []LaneLease, error) {
 		endPlan := l.startPassPhase("plan")
-		plans, leases, err := l.passPlansMode(ctx, at, generation, pendingOnly, &commentChecks)
+		plans, leases, err := l.passPlansMode(ctx, at, generation)
 		endPlan()
 		return plans, leases, err
 	}
@@ -3291,33 +3090,38 @@ func (l *Loop) passMode(ctx context.Context, result *LoopResult, pendingOnly boo
 			l.reportf("loop: end terminal item run: %s\n", line)
 		}
 	}
-	// Resolve batches that disappeared before applying this snapshot. Closing a
-	// comment item changes dispatch eligibility for its document's build items,
-	// so take a fresh snapshot in this same pass, not at the next wake.
-	commentReady := map[string]bool{}
-	for {
-		closedBatch := false
-		for _, p := range slices.Concat(plans, commentChecks) {
-			d := p.decision
-			if !p.checksComments() || !item.IsCommentItem(d.ItemID) || l.planStillActive(p) ||
-				(d.Action != ActionDispatch && d.Action != ActionRetry && d.Action != ActionHold) {
-				continue
+	var commentReady map[string]bool
+	if purePass {
+		commentReady = l.cachedCommentReadyMap()
+	} else {
+		// Resolve batches that disappeared before applying this snapshot. Closing a
+		// comment item changes dispatch eligibility for its document's build items,
+		// so take a fresh snapshot in this same pass, not at the next wake.
+		commentReady = map[string]bool{}
+		for {
+			closedBatch := false
+			for _, p := range plans {
+				d := p.decision
+				if !p.checksComments() || !item.IsCommentItem(d.ItemID) || l.planStillActive(p) ||
+					(d.Action != ActionDispatch && d.Action != ActionRetry && d.Action != ActionHold) {
+					continue
+				}
+				endCheckComment := l.startPassPhase("check_comment_dispatch")
+				ready, closed, checkErr := l.checkCommentDispatch(ctx, p, at)
+				endCheckComment()
+				if checkErr != nil {
+					return "", checkErr
+				}
+				commentReady[d.ItemID] = ready
+				closedBatch = closedBatch || closed
 			}
-			endCheckComment := l.startPassPhase("check_comment_dispatch")
-			ready, closed, checkErr := l.checkCommentDispatch(ctx, p, at)
-			endCheckComment()
-			if checkErr != nil {
-				return "", checkErr
+			if !closedBatch {
+				break
 			}
-			commentReady[d.ItemID] = ready
-			closedBatch = closedBatch || closed
-		}
-		if !closedBatch {
-			break
-		}
-		plans, leases, err = plan(ctx, at, &timing.TickID)
-		if err != nil {
-			return "", err
+			plans, leases, err = plan(ctx, at, &timing.TickID)
+			if err != nil {
+				return "", err
+			}
 		}
 	}
 	answers, counts, err := passAnswers(plans)
@@ -3341,34 +3145,27 @@ func (l *Loop) passMode(ctx context.Context, result *LoopResult, pendingOnly boo
 	}()
 	var holds []Decision
 	var holdWrites []func(*store.Tx) error
-	if pendingOnly {
-		endHoldWrites := l.startPassPhase("write_holds")
-		holdWrites, err = startHoldWrites(l.startView.Load(), at)
-		endHoldWrites()
-		if err != nil {
-			return "", err
-		}
-	}
-	// Watch currently idle offered lanes. A sibling legitimately started later
-	// is removed from both status comparisons when this run's bracket closes.
+	// Watch currently idle offered lanes when staging/launching inline.
 	watched := []string{}
-	busy := map[string]bool{}
-	for _, p := range plans {
-		if p.decision.RunRequest != nil {
-			busy[p.decision.LaneID] = true
-		}
-	}
-	for _, lane := range l.lanes() {
-		// A refused lane may have no worktree here to snapshot, even after a
-		// re-check offers it again or changes the reason before recreating it.
-		// A holding worktree elsewhere is not a sibling this bracket watches.
-		if l.hasLaneCondition(lane, "") {
-			if _, err := os.Stat(l.lanePath(lane)); os.IsNotExist(err) {
-				continue
+	if !purePass {
+		busy := map[string]bool{}
+		for _, p := range plans {
+			if p.decision.RunRequest != nil {
+				busy[p.decision.LaneID] = true
 			}
 		}
-		if !busy[lane] {
-			watched = append(watched, lane)
+		for _, lane := range l.lanes() {
+			// A refused lane may have no worktree here to snapshot, even after a
+			// re-check offers it again or changes the reason before recreating it.
+			// A holding worktree elsewhere is not a sibling this bracket watches.
+			if l.hasLaneCondition(lane, "") {
+				if _, err := os.Stat(l.lanePath(lane)); os.IsNotExist(err) {
+					continue
+				}
+			}
+			if !busy[lane] {
+				watched = append(watched, lane)
+			}
 		}
 	}
 	stale := maintenanceDrained > 0 || splitClosingWorked
@@ -3531,7 +3328,10 @@ plans:
 		l.waitingDetail = ""
 		return "", nil
 	}
-	if l.activeCount() > 0 || l.activeTriageCount() > 0 || coordinatorPending {
+	l.mu.Lock()
+	stageLaunchBusy := len(l.stageLaunch.Stage.Runs) > 0 || len(l.stageLaunch.Launch.Runs) > 0
+	l.mu.Unlock()
+	if l.activeCount() > 0 || l.activeTriageCount() > 0 || coordinatorPending || stageLaunchBusy {
 		l.waitingDetail = ""
 		return l.waitForTrigger(ctx, leases, at, result)
 	}
@@ -3557,27 +3357,17 @@ plans:
 	if err := l.timePassPhase("check_stop_requested", func() error { return l.checkStopRequested(ctx) }); err != nil {
 		return "", err
 	}
-	before := l.rollingRuns(result)
-	if err := l.timePassPhase("maybe_rolling", func() error { return l.maybeRolling(ctx, mainSHA, true, result) }); err != nil {
-		return "", err
-	}
-	if l.rollingRuns(result) != before {
-		return "", nil
+	if !purePass {
+		before := l.rollingRuns(result)
+		if err := l.timePassPhase("maybe_rolling", func() error { return l.maybeRolling(ctx, mainSHA, true, result) }); err != nil {
+			return "", err
+		}
+		if l.rollingRuns(result) != before {
+			return "", nil
+		}
 	}
 	if l.heavyInFlight() {
 		return l.waitForTrigger(ctx, leases, at, result)
-	}
-	if pendingOnly {
-		endStartIdle := l.startPassPhase("start_idle")
-		idle, allHolds, err := l.startIdle(ctx, l.startView.Load(), holds)
-		endStartIdle()
-		if err != nil {
-			return "", err
-		}
-		if !idle {
-			return l.waitForTrigger(ctx, leases, at, result)
-		}
-		holds = allHolds
 	}
 	return l.planNothing(ctx, holds, leases, at, result)
 }
@@ -3707,9 +3497,6 @@ func (l *Loop) applyReadyPlan(ctx context.Context, p plannedApplication, mainSHA
 		if work != nil {
 			base = work.BaseSHA
 			d = work.Decision
-		}
-		if v := l.startView.Load(); v != nil {
-			v.noteStartClaimed(d, work)
 		}
 		if l.isStageCoordinatorActive() {
 			if l.notifyEnabled() {

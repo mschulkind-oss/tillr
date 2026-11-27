@@ -1,0 +1,252 @@
+{
+  "retired": [
+    {
+      "test": "TestAsyncBracketStillChecksUntouchedSibling",
+      "reason": "retired fresh-start shadow planner (start_view_repair_test.go) in scheduling slice 6 (D-SN1, D-SN10)"
+    },
+    {
+      "test": "TestClaimFastStartOnlyOneWinner",
+      "reason": "retired fresh-start shadow planner (start_claim_test.go) in scheduling slice 6 (D-SN1, D-SN10)"
+    },
+    {
+      "test": "TestClaimFastStartParallelReadersReuseAvailability",
+      "reason": "retired fresh-start shadow planner (start_claim_test.go) in scheduling slice 6 (D-SN1, D-SN10)"
+    },
+    {
+      "test": "TestClaimFastStartReadsNoWholeLogAndFoldsNothingUnderTheWriteLock",
+      "reason": "retired fresh-start shadow planner (start_claim_test.go) in scheduling slice 6 (D-SN1, D-SN10)"
+    },
+    {
+      "test": "TestClonePendingHistoryStateKeepsDiscardedRuns",
+      "reason": "retired fresh-start shadow planner (start_view_state_test.go) in scheduling slice 6 (D-SN1, D-SN10)"
+    },
+    {
+      "test": "TestFastStartHoldBeforeClaimCancelsStart",
+      "reason": "retired fresh-start shadow planner (start_claim_test.go) in scheduling slice 6 (D-SN1, D-SN10)"
+    },
+    {
+      "test": "TestFastStartOrdinaryLaneReleasedCandidateDoesNotBlockExpressLane",
+      "reason": "retired fresh-start shadow planner (start_lane_released_order_test.go) in scheduling slice 6 (D-SN1, D-SN10)"
+    },
+    {
+      "test": "TestFastStartRespectsHigherPlacedLaneReleasedCandidate",
+      "reason": "retired fresh-start shadow planner (start_lane_released_order_test.go) in scheduling slice 6 (D-SN1, D-SN10)"
+    },
+    {
+      "test": "TestIdleUnchangedIgnoresStartSnapshotLastEventSeqOnly",
+      "reason": "retired fresh-start shadow planner (idle_test.go) in scheduling slice 6 (D-SN1, D-SN10)"
+    },
+    {
+      "test": "TestItemDirectoryFastStartClaimUnderLiveScale",
+      "reason": "retired fresh-start shadow planner (item_dir_run_test.go) in scheduling slice 6 (D-SN1, D-SN10)"
+    },
+    {
+      "test": "TestItemWorktreesFastStartMatchesPlanner",
+      "reason": "retired fresh-start shadow planner (item_worktrees_plan_test.go) in scheduling slice 6 (D-SN1, D-SN10)"
+    },
+    {
+      "test": "TestLaneChangeOwesRebuildUntilSafetyInterval",
+      "reason": "retired fresh-start shadow planner (start_view_repair_test.go) in scheduling slice 6 (D-SN1, D-SN10)"
+    },
+    {
+      "test": "TestLaneSnapshotOverlapsStaging",
+      "reason": "retired fresh-start shadow planner (start_view_repair_test.go) in scheduling slice 6 (D-SN1, D-SN10)"
+    },
+    {
+      "test": "TestNextStartDoesNotWaitOnASyncInItsRead",
+      "reason": "retired fresh-start shadow planner (start_view_repair_test.go) in scheduling slice 6 (D-SN1, D-SN10)"
+    },
+    {
+      "test": "TestNoteLaneWriteCountsTheLane",
+      "reason": "retired fresh-start shadow planner (start_view_repair_test.go) in scheduling slice 6 (D-SN1, D-SN10)"
+    },
+    {
+      "test": "TestNotesDuringASyncSurviveItsInstall",
+      "reason": "retired fresh-start shadow planner (start_view_notes_test.go) in scheduling slice 6 (D-SN1, D-SN10)"
+    },
+    {
+      "test": "TestPendingOnlyPlansCompletionButNotFreshStart",
+      "reason": "retired fresh-start shadow planner (start_view_repair_test.go) in scheduling slice 6 (D-SN1, D-SN10)"
+    },
+    {
+      "test": "TestReadStartItemsSignatureDetectsRawEditsAndIgnoresRowOrder",
+      "reason": "retired fresh-start shadow planner (start_item_sync_test.go) in scheduling slice 6 (D-SN1, D-SN10)"
+    },
+    {
+      "test": "TestReadStartItemsSignatureUsesNoTempSortOrJSONGroupArray",
+      "reason": "retired fresh-start shadow planner (start_item_sync_test.go) in scheduling slice 6 (D-SN1, D-SN10)"
+    },
+    {
+      "test": "TestReleaseByNameLeavesAFoldedUnsettledRunHoldingItsLane",
+      "reason": "retired fresh-start shadow planner (start_view_notes_test.go) in scheduling slice 6 (D-SN1, D-SN10)"
+    },
+    {
+      "test": "TestReleaseOfAClaimedLaneFreesItAndWakesTheStart",
+      "reason": "retired fresh-start shadow planner (start_view_notes_test.go) in scheduling slice 6 (D-SN1, D-SN10)"
+    },
+    {
+      "test": "TestReleaseOfAnEarlierRunDoesNotFreeALaterOne",
+      "reason": "retired fresh-start shadow planner (start_view_notes_test.go) in scheduling slice 6 (D-SN1, D-SN10)"
+    },
+    {
+      "test": "TestReleaseWithNoLaneNameFreesRestoredAndUnleasedLanes",
+      "reason": "retired fresh-start shadow planner (start_view_notes_test.go) in scheduling slice 6 (D-SN1, D-SN10)"
+    },
+    {
+      "test": "TestRetractClaimRefreshesLaneAvailability",
+      "reason": "retired fresh-start shadow planner (start_view_repair_test.go) in scheduling slice 6 (D-SN1, D-SN10)"
+    },
+    {
+      "test": "TestStartCoordinatorPollsWithoutFilesystemWatcher",
+      "reason": "retired fresh-start shadow planner (start_while_settling_test.go) in scheduling slice 6 (D-SN1, D-SN10)"
+    },
+    {
+      "test": "TestStartIdleWaitsForQuotaRefreshPublication",
+      "reason": "retired fresh-start shadow planner (quota_admission_test.go) in scheduling slice 6 (D-SN1, D-SN10)"
+    },
+    {
+      "test": "TestStartIndexCheckpointHelper",
+      "reason": "retired fresh-start shadow planner (start_view_checkpoint_test.go) in scheduling slice 6 (D-SN1, D-SN10)"
+    },
+    {
+      "test": "TestStartItemFiledWhileSettlingWithoutWaiting",
+      "reason": "retired fresh-start shadow planner (start_while_settling_test.go) in scheduling slice 6 (D-SN1, D-SN10)"
+    },
+    {
+      "test": "TestStartItemSyncPreservesPartialDelivery",
+      "reason": "retired fresh-start shadow planner (delivery_partial_fault_test.go) in scheduling slice 6 (D-SN1, D-SN10)"
+    },
+    {
+      "test": "TestStartOneLaneHoldsUntilSettleReleasesLane",
+      "reason": "retired fresh-start shadow planner (start_while_settling_test.go) in scheduling slice 6 (D-SN1, D-SN10)"
+    },
+    {
+      "test": "TestStartPendingPassKeepsFreshOwnerHold",
+      "reason": "retired fresh-start shadow planner (start_while_settling_test.go) in scheduling slice 6 (D-SN1, D-SN10)"
+    },
+    {
+      "test": "TestStartRerankPreservesReadyAtAndClaimMS",
+      "reason": "retired fresh-start shadow planner (start_while_settling_test.go) in scheduling slice 6 (D-SN1, D-SN10)"
+    },
+    {
+      "test": "TestStartShutdownJoinsStaging",
+      "reason": "retired fresh-start shadow planner (start_while_settling_test.go) in scheduling slice 6 (D-SN1, D-SN10)"
+    },
+    {
+      "test": "TestStartSnapshotUpdatesActiveOrdinaryAgentsOnLeaseChangeWithNoItemChange",
+      "reason": "retired fresh-start shadow planner (running_agents_test.go) in scheduling slice 6 (D-SN1, D-SN10)"
+    },
+    {
+      "test": "TestStartStoreSyncPreservesPendingPointerUntilPausedJudgeUnreadableChanges",
+      "reason": "retired fresh-start shadow planner (paused_judge_unreadable_test.go) in scheduling slice 6 (D-SN1, D-SN10)"
+    },
+    {
+      "test": "TestStartStoreSyncRefreshesLaneAndWindowExpiry",
+      "reason": "retired fresh-start shadow planner (start_view_state_test.go) in scheduling slice 6 (D-SN1, D-SN10)"
+    },
+    {
+      "test": "TestStartStoreSyncReleasesLaneOnCancelStaging",
+      "reason": "retired fresh-start shadow planner (start_view_state_test.go) in scheduling slice 6 (D-SN1, D-SN10)"
+    },
+    {
+      "test": "TestStartStoreSyncSkipsObservationEventsWithoutReseed",
+      "reason": "retired fresh-start shadow planner (start_view_state_test.go) in scheduling slice 6 (D-SN1, D-SN10)"
+    },
+    {
+      "test": "TestStartSyncGitShimHelper",
+      "reason": "retired fresh-start shadow planner (start_view_checkpoint_test.go) in scheduling slice 6 (D-SN1, D-SN10)"
+    },
+    {
+      "test": "TestStartSyncReleasesStoreBeforeSubprocesses",
+      "reason": "retired fresh-start shadow planner (start_view_checkpoint_test.go) in scheduling slice 6 (D-SN1, D-SN10)"
+    },
+    {
+      "test": "TestStartViewBlockedAndPinnedParity",
+      "reason": "retired fresh-start shadow planner (start_view_repair_test.go) in scheduling slice 6 (D-SN1, D-SN10)"
+    },
+    {
+      "test": "TestStartViewCutsOrdinaryItemsFromProvedGreen",
+      "reason": "retired fresh-start shadow planner (start_view_repair_test.go) in scheduling slice 6 (D-SN1, D-SN10)"
+    },
+    {
+      "test": "TestStartViewIncrementalUpdatesAndZeroChurn",
+      "reason": "retired fresh-start shadow planner (start_view_watcher_test.go) in scheduling slice 6 (D-SN1, D-SN10)"
+    },
+    {
+      "test": "TestStartViewLocalHoldClearedByOperatorRetry",
+      "reason": "retired fresh-start shadow planner (delivery_partial_fault_test.go) in scheduling slice 6 (D-SN1, D-SN10)"
+    },
+    {
+      "test": "TestStartViewPausedRefreshDoesNotBlockLegacyDispatch",
+      "reason": "retired fresh-start shadow planner (start_view_watcher_test.go) in scheduling slice 6 (D-SN1, D-SN10)"
+    },
+    {
+      "test": "TestStartViewPublishesLoopRotation",
+      "reason": "retired fresh-start shadow planner (start_view_notes_test.go) in scheduling slice 6 (D-SN1, D-SN10)"
+    },
+    {
+      "test": "TestStartViewRefreshBackendsAvoidsRescanningHistoricalFinishes",
+      "reason": "retired fresh-start shadow planner (backend_recorded_test.go) in scheduling slice 6 (D-SN1, D-SN10)"
+    },
+    {
+      "test": "TestStartViewReleasesStoreBeforeIndexingNewDesignDocument",
+      "reason": "retired fresh-start shadow planner (start_view_checkpoint_test.go) in scheduling slice 6 (D-SN1, D-SN10)"
+    },
+    {
+      "test": "TestStartViewSeedMatchesStore",
+      "reason": "retired fresh-start shadow planner (start_view_state_test.go) in scheduling slice 6 (D-SN1, D-SN10)"
+    },
+    {
+      "test": "TestStartViewWatchClosesSeededAfterInitialRefresh",
+      "reason": "retired fresh-start shadow planner (idle_test.go) in scheduling slice 6 (D-SN1, D-SN10)"
+    },
+    {
+      "test": "TestStartViewWatcherBatchesAndFallsBackOnClosure",
+      "reason": "retired fresh-start shadow planner (start_watcher_test.go) in scheduling slice 6 (D-SN1, D-SN10)"
+    },
+    {
+      "test": "TestStartViewWatcherCancellation",
+      "reason": "retired fresh-start shadow planner (start_watcher_test.go) in scheduling slice 6 (D-SN1, D-SN10)"
+    },
+    {
+      "test": "TestStartViewWatcherDocumentAndIndexUpdates",
+      "reason": "retired fresh-start shadow planner (start_watcher_test.go) in scheduling slice 6 (D-SN1, D-SN10)"
+    },
+    {
+      "test": "TestStartViewWatcherDocumentAndIndexUpdatesRepairProposals",
+      "reason": "retired fresh-start shadow planner (start_view_watcher_test.go) in scheduling slice 6 (D-SN1, D-SN10)"
+    },
+    {
+      "test": "TestStartViewWatcherFilesAndReordersRows",
+      "reason": "retired fresh-start shadow planner (start_view_watcher_test.go) in scheduling slice 6 (D-SN1, D-SN10)"
+    },
+    {
+      "test": "TestStartViewWatcherRefreshesBasesWithoutStoreChanges",
+      "reason": "retired fresh-start shadow planner (start_view_watcher_test.go) in scheduling slice 6 (D-SN1, D-SN10)"
+    },
+    {
+      "test": "TestStartViewWatcherTimerOnly",
+      "reason": "retired fresh-start shadow planner (start_watcher_test.go) in scheduling slice 6 (D-SN1, D-SN10)"
+    },
+    {
+      "test": "TestSyncReadsOnlyWhatItsInputsChanged",
+      "reason": "retired fresh-start shadow planner (start_view_repair_test.go) in scheduling slice 6 (D-SN1, D-SN10)"
+    },
+    {
+      "test": "TestSyncRefreshesInputDecisionsOnARecordedInput",
+      "reason": "retired fresh-start shadow planner (start_view_state_test.go) in scheduling slice 6 (D-SN1, D-SN10)"
+    },
+    {
+      "test": "TestUnmovedLanesDropsLanesThatMoved",
+      "reason": "retired fresh-start shadow planner (start_view_repair_test.go) in scheduling slice 6 (D-SN1, D-SN10)"
+    },
+    {
+      "test": "TestWaitingCandidateGatesBeforeLaterReservedWorkerStart",
+      "reason": "retired fresh-start shadow planner (start_lane_released_order_test.go) in scheduling slice 6 (D-SN1, D-SN10)"
+    },
+    {
+      "test": "TestWriteHoldsIsOneTransaction",
+      "reason": "retired fresh-start shadow planner (start_view_repair_test.go) in scheduling slice 6 (D-SN1, D-SN10)"
+    }
+  ]
+}

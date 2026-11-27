@@ -45,13 +45,12 @@ func TestStageClaimedFailureReleasesLaneAndPreservesSiblingBoundary(t *testing.T
 			var result LoopResult
 			claim := func(want string) (*pendingWork, Decision) {
 				t.Helper()
-				v, s, e := claimFixture(t, l)
-				ok, work, _, d, err := l.claimFastStart(ctx, v, s, e, l.cfg.Now())
-				if err != nil || !ok || work == nil || d.ItemID != want || work.BaseSHA != base {
-					t.Fatalf("claim %s: ok=%v work=%+v decision=%+v err=%v", want, ok, work, d, err)
+				p := decisionFor(t, l, want)
+				ok, work, err := l.applyPlan(ctx, p, base, l.cfg.Now())
+				if err != nil || !ok || work == nil || p.decision.ItemID != want || work.BaseSHA != base {
+					t.Fatalf("claim %s: ok=%v work=%+v decision=%+v err=%v", want, ok, work, p.decision, err)
 				}
-				v.noteStartClaimed(d, work)
-				return work, d
+				return work, work.Decision
 			}
 			watched := []string{"lane-1", "lane-3"}
 			epochs := l.idleLaneEpochs()
@@ -67,9 +66,6 @@ func TestStageClaimedFailureReleasesLaneAndPreservesSiblingBoundary(t *testing.T
 			}
 			if result.Dispatched != 0 || steps.ran(first.ItemID) {
 				t.Fatal("failed stage launched a run")
-			}
-			if l.startView.Load().snapshot().occupied[first.LaneID] {
-				t.Fatal("view still marks the failed claim's lane occupied")
 			}
 			fixtureRead(t, f, func(r *store.Reader) error {
 				faults, err := ReadItemFaults(r)
@@ -145,12 +141,13 @@ func TestPendingRestartAnsweredDuringSlowStagePreservesStagedRun(t *testing.T) {
 			})
 			holdWALKeeper(t, h.f.storePath)
 
-			v, s, e := claimFixture(t, h.l)
-			ok, work, _, d, err := h.l.claimFastStart(ctx, v, s, e, h.l.cfg.Now())
+			base := runGit(t, h.f.root, "rev-parse", TrunkRef)
+			p := decisionFor(t, h.l, "item-a")
+			ok, work, err := h.l.applyPlan(ctx, p, base, h.l.cfg.Now())
 			if err != nil || !ok || work == nil {
-				t.Fatalf("claimFastStart: ok=%v work=%+v err=%v", ok, work, err)
+				t.Fatalf("applyPlan: ok=%v work=%+v err=%v", ok, work, err)
 			}
-			v.noteStartClaimed(d, work)
+			d := work.Decision
 
 			var result LoopResult
 			stageDone := make(chan error, 1)

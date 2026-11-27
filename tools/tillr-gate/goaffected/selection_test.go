@@ -2051,6 +2051,83 @@ func TestCheckDrainTestParity(t *testing.T) {
 			t.Fatalf("expected TestBeta parity failure for lowercased Testbeta, got %v", err)
 		}
 	})
+
+	t.Run("declared retired test passes on disk and explicit revision", func(t *testing.T) {
+		dir, base := initRepo(t)
+		oldPath := filepath.Join(dir, "tools", "tillr-drain", "drain", "a_test.go")
+		if err := os.Remove(oldPath); err != nil {
+			t.Fatal(err)
+		}
+		manifestPath := filepath.Join(dir, "tools", "tillr-drain", "retired-tests.json")
+		manifest := `{"retired":[{"test":"TestAlpha","reason":"retired subsystem"},{"test":"TestBeta","reason":"retired subsystem"}]}`
+		if err := os.WriteFile(manifestPath, []byte(manifest), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := goaffected.CheckDrainTestParity(dir, base, "HEAD", []string{"tools/tillr-drain/drain/a_test.go", "tools/tillr-drain/retired-tests.json"}); err != nil {
+			t.Fatalf("expected retired tests to pass from disk: %v", err)
+		}
+		runGit(t, dir, "add", "-A")
+		runGit(t, dir, "commit", "-m", "retire")
+		headSHA := runGit(t, dir, "rev-parse", "HEAD")
+		if err := goaffected.CheckDrainTestParity(dir, base, headSHA, []string{"tools/tillr-drain/drain/a_test.go", "tools/tillr-drain/retired-tests.json"}); err != nil {
+			t.Fatalf("expected retired tests to pass at explicit revision: %v", err)
+		}
+	})
+
+	t.Run("undeclared dropped test still fails with manifest", func(t *testing.T) {
+		dir, base := initRepo(t)
+		oldPath := filepath.Join(dir, "tools", "tillr-drain", "drain", "a_test.go")
+		if err := os.Remove(oldPath); err != nil {
+			t.Fatal(err)
+		}
+		manifestPath := filepath.Join(dir, "tools", "tillr-drain", "retired-tests.json")
+		manifest := `{"retired":[{"test":"TestAlpha","reason":"retired subsystem"}]}`
+		if err := os.WriteFile(manifestPath, []byte(manifest), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		err := goaffected.CheckDrainTestParity(dir, base, "HEAD", []string{"tools/tillr-drain/drain/a_test.go", "tools/tillr-drain/retired-tests.json"})
+		if err == nil || !strings.Contains(err.Error(), "TestBeta") {
+			t.Fatalf("expected TestBeta parity failure, got %v", err)
+		}
+	})
+
+	t.Run("stale retired entry still present at head fails", func(t *testing.T) {
+		dir, base := initRepo(t)
+		manifestPath := filepath.Join(dir, "tools", "tillr-drain", "retired-tests.json")
+		manifest := `{"retired":[{"test":"TestAlpha","reason":"still exists"}]}`
+		if err := os.WriteFile(manifestPath, []byte(manifest), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		err := goaffected.CheckDrainTestParity(dir, base, "HEAD", []string{"tools/tillr-drain/retired-tests.json"})
+		if err == nil || !strings.Contains(err.Error(), "stale") || !strings.Contains(err.Error(), "TestAlpha") {
+			t.Fatalf("expected stale TestAlpha failure, got %v", err)
+		}
+	})
+
+	t.Run("invalid manifest entries fail", func(t *testing.T) {
+		cases := []struct {
+			name     string
+			manifest string
+			want     string
+		}{
+			{"invalid name", `{"retired":[{"test":"helperFunc","reason":"bad"}]}`, "invalid test name"},
+			{"missing reason", `{"retired":[{"test":"TestAlpha","reason":"   "}]}`, "non-empty reason"},
+			{"duplicate", `{"retired":[{"test":"TestAlpha","reason":"a"},{"test":"TestAlpha","reason":"b"}]}`, "duplicate"},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				dir, base := initRepo(t)
+				manifestPath := filepath.Join(dir, "tools", "tillr-drain", "retired-tests.json")
+				if err := os.WriteFile(manifestPath, []byte(tc.manifest), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				err := goaffected.CheckDrainTestParity(dir, base, "HEAD", []string{"tools/tillr-drain/retired-tests.json"})
+				if err == nil || !strings.Contains(err.Error(), tc.want) {
+					t.Fatalf("expected error containing %q, got %v", tc.want, err)
+				}
+			})
+		}
+	})
 }
 
 func TestMaxShardsScalesWithCPUCount(t *testing.T) {

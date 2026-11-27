@@ -4,225 +4,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
+	"os"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/mschulkind-oss/tillr-drain/internal/gateland"
 	"github.com/mschulkind-oss/tillr-drain/internal/stagelaunch"
-	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr/store"
 )
-
-func (l *Loop) startBackgroundCoordinator(ctx context.Context, view *startView, result *LoopResult) func() {
-	ctx, cancel := context.WithCancel(ctx)
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		l.runFastStart(ctx, view, result)
-	}()
-	return func() {
-		cancel()
-		<-done
-	}
-}
-
-func (l *Loop) runFastStart(ctx context.Context, view *startView, result *LoopResult) {
-	// Retry a rejected proposal only after a new publication or a safety wake.
-	var rejected *startSnapshot
-	timer := time.NewTicker(startViewRefreshInterval)
-	defer timer.Stop()
-	for ctx.Err() == nil {
-		snapshot := view.current.Load()
-		l.mu.Lock()
-		waitingForPass := l.stageLaunch.HasFaults() || l.stageLaunch.Backoff
-		l.mu.Unlock()
-		if snapshot == nil || snapshot == rejected || waitingForPass || l.rollBlocksDispatch() {
-			rollIdle := l.rollAction.idle()
-			select {
-			case <-ctx.Done():
-			case <-view.updated:
-			case <-rollIdle:
-				rejected = nil
-			case <-timer.C:
-				rejected = nil
-			}
-			continue
-		}
-		e, ok := snapshot.nextFreshStartWithGates(l.gateCount())
-		if !ok {
-			rejected = snapshot
-			continue
-		}
-		at := l.cfg.Now().UTC()
-		d := e.decision
-		if d.DeskDocument != "" && item.IsCommentItem(d.ItemID) {
-			p := plannedApplication{decision: d, version: e.version, definition: &snapshot.def, definitionSHA: snapshot.definitionSHA}
-			if p.checksComments() {
-				ready, closed, err := l.checkCommentDispatch(ctx, p, at)
-				if err != nil {
-					l.reportStartError(ctx, d, err)
-					return
-				}
-				if closed || !ready {
-					if !closed {
-						view.noteVantageUnavailable(snapshot, d.ItemID)
-					}
-					rejected = snapshot
-					continue
-				}
-			}
-		}
-		mechCtx, unlock, err := l.lockRestartMechanical(ctx)
-		if errors.Is(err, errRestartPending) {
-			// A pending request may be refused or become deferred. Do not
-			// shut down starts until the loop itself ends.
-			rejected = snapshot
-			continue
-		}
-		if err != nil {
-			l.reportStartError(ctx, d, err)
-			return
-		}
-		if err := l.checkStopRequested(mechCtx); err != nil {
-			unlock()
-			l.reportStartError(ctx, d, err)
-			return
-		}
-		applied, work, generation, d, err := l.claimFastStart(mechCtx, view, *snapshot, e, at)
-		unlock()
-		if err != nil {
-			l.reportStartError(ctx, e.decision, err)
-			return
-		}
-		if !applied {
-			rejected = snapshot
-			continue
-		}
-		startCtx, _ := l.beginStartHandoff(ctx, d)
-		endNote := timeHandoffPhase(startCtx, "note_start_claimed")
-		claimedAt := l.cfg.Now().UTC()
-		ready := snapshot.readyAt[d.ItemID]
-		if free := snapshot.laneFreeAt[d.LaneID]; free.After(ready) {
-			ready = free
-		}
-		if ready.IsZero() {
-			ready = at
-		}
-		view.noteStartClaimed(d, work)
-		l.countGeneration(result, generation)
-		endNote()
-		timing := PassTiming{TickID: generation, AtMS: at.UnixMilli(), EndMS: claimedAt.UnixMilli(),
-			ClaimMS: max(0, claimedAt.Sub(ready).Milliseconds()), Claims: 1, Applied: 1,
-			GateBudgetMS: l.gateBudget.Milliseconds(), DecisionCounts: map[string]int{d.Action: 1}}
-		endPassTiming := timeHandoffPhase(startCtx, "record_pass_timing")
-		passErr := recordPassTiming(context.WithoutCancel(startCtx), l.cfg.Store, timing)
-		endPassTiming()
-		finishStartHandoff(startCtx)
-		if passErr != nil {
-			retractErr := l.cancelStaging(context.WithoutCancel(ctx), d)
-			l.reportStartError(ctx, d, errors.Join(passErr, retractErr))
-			return
-		}
-		if l.notifyEnabled() {
-			l.signalStageWake()
-		}
-	}
-}
-
-func (l *Loop) reportStartError(ctx context.Context, d Decision, err error) {
-	if errors.Is(err, errRestartPending) || stoppedByOperator(ctx, err) {
-		return
-	}
-	// The pass owns loop failure reporting, including when it is waiting idle.
-	select {
-	case l.completions <- runCompletion{itemID: d.ItemID, step: "start", outcome: laneOutcome{err: fmt.Errorf("start %s: %w", d.ItemID, err)}}:
-	case <-ctx.Done():
-	}
-}
-
-// Pending-only planning leaves fresh holds in the view. Keep the existing
-// durable actions (in particular, parking a request for an owner decision).
-func startHoldWrites(view *startView, at time.Time) ([]func(*store.Tx) error, error) {
-	if view == nil {
-		return nil, nil
-	}
-	s := view.snapshot()
-	var writes []func(*store.Tx) error
-	for _, q := range s.items {
-		id, e := q.id, s.entries[q.id]
-		if work := s.pending.works[id]; work != nil && !work.Done {
-			continue
-		}
-		d := e.decision
-		if d.Reason == ReasonNoPolicy {
-			return nil, Usagef("the loop's policy cannot build a request for item %s (seat %s)", id, d.Seat)
-		}
-		if d.Action == ActionHold && e.version != "" {
-			p := plannedApplication{decision: d, version: e.version, definitionSHA: s.definitionSHA}
-			if write := holdWriter(p, at); write != nil {
-				writes = append(writes, write)
-			}
-		}
-	}
-	return writes, nil
-}
-
-// The idle pass checks for a publication that covers the store's event cursor.
-// An unseeded or stale picture cannot establish a queue-drained fixed point.
-func (l *Loop) startIdle(ctx context.Context, view *startView, holds []Decision) (bool, []Decision, error) {
-	if view == nil {
-		return true, holds, nil // Standalone pending-only pass, without a coordinator.
-	}
-	s := view.current.Load()
-	if s == nil {
-		return false, holds, nil
-	}
-	if _, proposed := s.nextFreshStartWithGates(l.gateCount()); proposed {
-		return false, holds, nil
-	}
-	r, err := store.OpenRead(ctx, l.cfg.Store)
-	if err != nil {
-		return false, holds, err
-	}
-	defer r.Close()
-	var head int64
-	if err := r.ReadTx(ctx, func(r *store.Reader) error {
-		var err error
-		head, err = r.EventHeadSeq()
-		return err
-	}); err != nil {
-		return false, holds, err
-	}
-	if head != s.lastEventSeq || view.current.Load() != s || l.activeCount() > 0 {
-		return false, holds, nil
-	}
-	for _, q := range s.items {
-		if work := s.pending.works[q.id]; work != nil && !work.Done {
-			continue // The pass has the current holds for unfinished attempts.
-		}
-		d := s.entries[q.id].decision
-		if isDispatch(d) {
-			// A ready entry without an eligible lane is deferred, not absent.
-			runKey := ""
-			if d.RunRequest != nil {
-				runKey = d.RunRequest.RunID
-			}
-			limit := ordinaryLaneCount(s.rotation)
-			if !s.entries[q.id].express && !isCommandDecision(d) && d.DeskDocument == "" && !strings.HasPrefix(d.LaneID, "desk-") &&
-				limit > 0 && (runKey == "" || s.activeOrdinaryAgents[runKey] == "") && len(s.activeOrdinaryAgents) >= limit {
-				d.Action, d.Reason = ActionHold, ReasonAgentLimit
-				d.DeferredBy = activeOrdinaryAgentSummary(s.activeOrdinaryAgents)
-			} else {
-				d.Action, d.Reason = ActionHold, ReasonNoLane
-			}
-		}
-		if d.Action == ActionHold && !(finishedState(s.def, s.states[q.id]) && d.Reason == ReasonNotReady) {
-			holds = append(holds, d)
-		}
-	}
-	return true, holds, nil
-}
 
 type launchableRun struct {
 	itemID string
@@ -430,7 +221,7 @@ func (l *Loop) runCoordinatedLaunch(ctx context.Context, itemID, runID string, w
 	launchCtx, startHandoff := l.beginStartHandoff(ctx, work.Decision)
 	if err := l.launchStagedRun(launchCtx, work.Decision, l.cfg.Now().UTC(), nil, result); err != nil {
 		finishStartHandoff(launchCtx)
-		l.reportStartError(ctx, work.Decision, err)
+		l.reportStageLaunchError(ctx, work.Decision, err)
 		return
 	}
 	startHandoff.setDecision(work.Decision)
@@ -478,4 +269,89 @@ func (l *Loop) launchStagedRun(ctx context.Context, d Decision, at time.Time, wa
 	startHandoffFrom(ctx).setDecision(d)
 	l.launchRun(ctx, d, at, watch, result)
 	return nil
+}
+
+func (l *Loop) reportStageLaunchError(ctx context.Context, d Decision, err error) {
+	if errors.Is(err, errRestartPending) || stoppedByOperator(ctx, err) {
+		return
+	}
+	// The pass owns loop failure reporting, including when it is waiting idle.
+	select {
+	case l.completions <- runCompletion{itemID: d.ItemID, step: "start", outcome: laneOutcome{err: fmt.Errorf("start %s: %w", d.ItemID, err)}}:
+	case <-ctx.Done():
+	}
+}
+
+// noteLaneWrite invalidates sibling observations of an authorized lane writer.
+func (l *Loop) noteLaneWrite(lane string) {
+	if lane == "" {
+		return
+	}
+	l.mu.Lock()
+	l.bumpLaneEpoch(lane)
+	l.mu.Unlock()
+}
+
+// bumpLaneEpoch requires mu.
+func (l *Loop) bumpLaneEpoch(lane string) {
+	if l.laneChanges == nil {
+		l.laneChanges = map[string]int{}
+	}
+	l.laneChanges[lane]++
+}
+
+// idleLaneEpochs excludes local staging writers; callers additionally exclude
+// lanes that their store snapshot reports as busy.
+func (l *Loop) idleLaneEpochs() map[string]int {
+	l.mu.Lock()
+	lanes := append([]string(nil), l.lanes()...)
+	staging := maps.Clone(l.stagingLanes)
+	changes := maps.Clone(l.laneChanges)
+	l.mu.Unlock()
+
+	seen := make(map[string]bool, len(lanes))
+	epochs := make(map[string]int, len(lanes))
+	add := func(lane string, requireWorktree bool) {
+		if seen[lane] || staging[lane] != 0 {
+			return
+		}
+		seen[lane] = true
+		if requireWorktree {
+			if _, err := os.Stat(l.lanePath(lane)); err != nil {
+				return
+			}
+		}
+		epochs[lane] = changes[lane]
+	}
+	for _, lane := range lanes {
+		add(lane, l.cfg.LaneRoot != "" && (l.cfg.ItemWorktrees || !isPoolLaneName(lane)))
+	}
+	if l.cfg.LaneRoot != "" {
+		if entries, err := os.ReadDir(l.cfg.LaneRoot); err == nil {
+			for _, entry := range entries {
+				if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
+					continue
+				}
+				add(entry.Name(), true)
+			}
+		}
+	}
+	return epochs
+}
+
+type laneWatch struct {
+	lanes  []string
+	epochs map[string]int
+}
+
+func unmovedLanes(watched []string, seen, now map[string]int) []string {
+	kept := make([]string, 0, len(watched))
+	for _, lane := range watched {
+		epoch, seenIdle := seen[lane]
+		current, stillIdle := now[lane]
+		if seenIdle && stillIdle && epoch == current {
+			kept = append(kept, lane)
+		}
+	}
+	return kept
 }

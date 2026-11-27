@@ -137,58 +137,6 @@ func TestItemWorktreesPlanExpressAndDesk(t *testing.T) {
 	}
 }
 
-func TestItemWorktreesFastStartMatchesPlanner(t *testing.T) {
-	f, l := passFixture(t, "item-a", "item-b", "item-c", "item-exp", "item-desk")
-	at := l.cfg.Now().UTC()
-	l.cfg.ItemWorktrees = true
-	l.cfg.Lanes = []string{"lane-1", "lane-2"}
-	l.cfg.Policy.Seats = map[string]string{"design": "fixture"}
-	l.cfg.Comments = &settings.Comments{Paths: []string{"docs/design/"}, MaxRunning: 3}
-	setItemExpress(t, f, "item-exp", true)
-	setDesignFence(t, f, "item-desk", "docs/design/example.md")
-
-	tick := l.startViewPass()
-	snap, err := readProposedStarts(context.Background(), f.storePath, at, l.cfg.Policy, tick, &VantageQuestions{Root: f.root}, startSnapshot{})
-	if err != nil {
-		t.Fatalf("readProposedStarts: %v", err)
-	}
-
-	// Ordinary items item-a and item-b fill the running-agent limit of 2, each in its own item directory.
-	var view startView
-	view.current.Store(&snap)
-
-	e1, ok := view.snapshot().nextFreshStart()
-	if !ok || e1.decision.ItemID != "item-a" || e1.decision.LaneID != "item-a" {
-		t.Fatalf("first fast-start = (%+v, %v), want item-a on item-a", e1.decision, ok)
-	}
-	view.noteStartClaimed(e1.decision, nil)
-
-	e2, ok := view.snapshot().nextFreshStart()
-	if !ok || e2.decision.ItemID != "item-b" || e2.decision.LaneID != "item-b" {
-		t.Fatalf("second fast-start = (%+v, %v), want item-b on item-b", e2.decision, ok)
-	}
-	view.noteStartClaimed(e2.decision, nil)
-
-	// With the ordinary limit of 2 full, item-c is skipped; item-desk keeps its desk lane
-	// and item-exp gets its own item directory (in queue order: item-desk before item-exp).
-	e3, ok := view.snapshot().nextFreshStart()
-	if !ok || e3.decision.ItemID != "item-desk" || e3.decision.LaneID != "desk-example" {
-		t.Fatalf("third fast-start = (%+v, %v), want item-desk on desk-example while limit is full", e3.decision, ok)
-	}
-	view.noteStartClaimed(e3.decision, nil)
-
-	e4, ok := view.snapshot().nextFreshStart()
-	if !ok || e4.decision.ItemID != "item-exp" || e4.decision.LaneID != "item-exp" {
-		t.Fatalf("fourth fast-start = (%+v, %v), want item-exp on item-exp while limit is full", e4.decision, ok)
-	}
-	view.noteStartClaimed(e4.decision, nil)
-
-	// No further start is proposed because item-c is over the ordinary limit.
-	if e5, ok := view.snapshot().nextFreshStart(); ok {
-		t.Fatalf("fifth fast-start = %+v, want none while ordinary limit is full", e5.decision)
-	}
-}
-
 func TestItemWorktreesPlanKeepsExistingDirectory(t *testing.T) {
 	f, l := passFixture(t, "item-a", "item-b")
 	at := l.cfg.Now().UTC()

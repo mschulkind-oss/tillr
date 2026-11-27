@@ -84,39 +84,6 @@ func TestClaimedDispatchStartsAfterQuotaClosesDuringStaging(t *testing.T) {
 	}
 }
 
-func TestStartIdleWaitsForQuotaRefreshPublication(t *testing.T) {
-	f, l := passFixture(t, "item-a")
-	enableFixtureQuota(l, "fixture")
-	ctx := context.Background()
-	at, policy, tick := l.cfg.Now(), l.currentPolicy(), l.startViewPass()
-	var refresh startRefresh
-	defer refresh.store.close()
-	read := func(prev startSnapshot) startSnapshot {
-		t.Helper()
-		next, err := refresh.read(ctx, at, policy, tick, f.root, nil, "", prev, 0)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return next
-	}
-	stale := read(startSnapshot{})
-	if !stale.quotaShut["fixture"] {
-		t.Fatal("missing quota reading should initially hold the backend")
-	}
-	view := newStartView()
-	view.current.Store(&stale)
-	if err := l.refreshQuotas(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if idle, _, err := l.startIdle(ctx, view, nil); err != nil || idle {
-		t.Fatalf("idle=%v err=%v with a fresh admitting reading and a stale start view", idle, err)
-	}
-	fresh := read(stale)
-	if _, ok := fresh.nextFreshStart(); !ok {
-		t.Fatal("published quota reading did not make the queued item dispatchable")
-	}
-}
-
 type quotaDesignerSteps struct{ *commentSteps }
 
 func (s *quotaDesignerSteps) Run(ctx context.Context, req run.Request) (run.Record, string, error) {

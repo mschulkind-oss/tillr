@@ -17,6 +17,8 @@ import (
 	"github.com/mschulkind-oss/tillr-drain/fixer"
 	"github.com/mschulkind-oss/tillr-drain/heavy"
 	"github.com/mschulkind-oss/tillr-drain/heavyrun"
+	"github.com/mschulkind-oss/tillr-drain/internal/bgactors"
+	"github.com/mschulkind-oss/tillr-drain/internal/gateland"
 	"github.com/mschulkind-oss/tillr/checkresult"
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/notify"
@@ -898,4 +900,213 @@ func (l *Loop) reclaimDetachedHeavyProof(ctx context.Context) {
 	if face, ok := heavyrun.ReadHeavyProofFace(dir); ok && heavyrun.HeavyProofRunning(face) {
 		_ = l.startHeavy(ctx, face.TipSHA)
 	}
+}
+
+// startTrunkProofActor runs the trunk observation, landing reconciliation, and
+// heavy-proof background actor outside the scheduling pass (D-SN3, Section 5.7),
+// woken by trunk.moved / proof.green / resync and reconciled every
+// StorePollInterval (15s default).
+func (l *Loop) startTrunkProofActor(ctx context.Context, result *LoopResult) func() {
+	actorCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+
+	l.actors.Ensure()
+	l.mu.Lock()
+	l.actors.TrunkProof.Active = true
+	timer := l.actors.TrunkProof.Timer
+	l.mu.Unlock()
+
+	go func() {
+		defer close(done)
+		defer func() {
+			l.mu.Lock()
+			l.actors.TrunkProof.Active = false
+			l.mu.Unlock()
+		}()
+		wait := l.cfg.StorePollInterval
+		if wait <= 0 {
+			wait = DefaultFallbackPollInterval
+		}
+		gateland.RunLoop(actorCtx, wait, timer, func() <-chan struct{} {
+			if !l.notifyEnabled() {
+				return nil
+			}
+			return l.actors.TrunkProofWakeChan()
+		}, func() {
+			if actorCtx.Err() != nil || l.isRestartReplaced() {
+				return
+			}
+			if stopped, err := l.stopRequested(actorCtx); stopped || err != nil {
+				return
+			}
+			beforeSeq, _ := l.readEventHeadSeq(actorCtx)
+			if err := l.runTrunkProofStep(actorCtx, result, false); err != nil {
+				l.reportActorError(actorCtx, "trunk-proof", err)
+				return
+			}
+			afterSeq, _ := l.readEventHeadSeq(actorCtx)
+			if afterSeq != beforeSeq {
+				l.signalPassWake()
+			}
+		})
+	}()
+
+	return func() {
+		cancel()
+		<-done
+	}
+}
+
+func (l *Loop) runTrunkProofStep(ctx context.Context, result *LoopResult, startup bool) error {
+	l.actors.TrunkMu.Lock()
+	defer l.actors.TrunkMu.Unlock()
+	l.actors.TrunkProof.Runs.Add(1)
+
+	if !l.nonLanding {
+		l.sweepDisabledMarkers(ctx)
+	}
+	if err := l.observeTrunkCoreWorktree(ctx); err != nil {
+		l.reportf("loop: could not record trunk core.worktree observation: %v\n", err)
+	}
+	replay, err := l.recoverPendingRemoteSyncReplay(ctx)
+	if err == nil && replay != nil {
+		l.afterRemoteSyncReplay(ctx, replay, result)
+	}
+	if err != nil {
+		return err
+	}
+	var endObserve func()
+	if !l.actorsActive() {
+		endObserve = l.startPassPhase("observe_trunk")
+	}
+	_, observeErr := l.observeTrunk(ctx, "")
+	if endObserve != nil {
+		endObserve()
+	}
+	if observeErr != nil {
+		return observeErr
+	}
+	if err := l.reconcileRewrittenLandings(ctx); err != nil {
+		return err
+	}
+	var mainSHA string
+	if !l.nonLanding {
+		tip, err := l.revParse(ctx, l.cfg.Root, l.trunkRef())
+		if err != nil {
+			return err
+		}
+		mainSHA = tip
+		if l.gatePolicy.LandingStrategy == "after-merge" {
+			l.offerStartupGreen(ctx)
+			if err := l.maybeRolling(ctx, mainSHA, false, result); err != nil {
+				return err
+			}
+		}
+		if err := l.reconcileLandingCalls(ctx); err != nil {
+			return err
+		}
+		if err := l.closeStaleRemoteSyncItems(ctx); err != nil {
+			return err
+		}
+		l.maybeRecoverClearedPushHold(ctx)
+		if !startup && l.gatePolicy.LandingStrategy != "after-merge" {
+			if err := l.maybeRolling(ctx, mainSHA, false, result); err != nil {
+				return err
+			}
+		}
+		if err := l.resolveProvedFixers(ctx); err != nil {
+			return err
+		}
+		if err := l.settleResolvedFixerRuns(ctx); err != nil {
+			return err
+		}
+		if err := l.releaseTrunkAcquittals(ctx); err != nil {
+			return err
+		}
+		if err := l.releaseChangedCandidateGateFaults(ctx); err != nil {
+			return err
+		}
+		if err := l.releaseAdvancedGateDigestFaults(ctx); err != nil {
+			return err
+		}
+		if err := l.releaseStaleBaseConflicts(ctx); err != nil {
+			return err
+		}
+		if _, err := l.advanceSplitClosingChecks(ctx, mainSHA, result); err != nil {
+			return err
+		}
+	}
+
+	if changed, err := l.refreshTrunkCache(ctx, mainSHA); err != nil {
+		return err
+	} else if changed {
+		l.signalPassWake()
+	}
+	return nil
+}
+
+func (l *Loop) refreshTrunkCache(ctx context.Context, tip string) (bool, error) {
+	if l.nonLanding {
+		return l.actors.SetCachedTrunk(bgactors.TrunkCache{Valid: true}), nil
+	}
+	if tip == "" {
+		var err error
+		tip, err = l.revParse(ctx, l.cfg.Root, l.trunkRef())
+		if err != nil {
+			return false, err
+		}
+	}
+	green, err := provedLaneBaseAt(ctx, l.cfg.Root, l.gatePolicy.LaneBase, tip)
+	if err != nil {
+		// Record tip even if green is temporarily rewritten; observeTrunk /
+		// trunk reconciliation handles the rewrite without failing the actor.
+		return l.actors.SetCachedTrunk(bgactors.TrunkCache{Tip: tip, Valid: true}), nil
+	}
+	var unprovedSet map[string]bool
+	var blockBases map[string]string
+	if green != "" && green != tip {
+		if list, err := heavyGitOutput(ctx, l.cfg.Root, "rev-list", green+".."+tip); err == nil {
+			fields := strings.Fields(list)
+			if len(fields) > 0 {
+				unprovedSet = make(map[string]bool, len(fields))
+				for _, sha := range fields {
+					unprovedSet[sha] = true
+				}
+			}
+		}
+		if l.cfg.Store != "" {
+			if s, err := store.OpenRead(ctx, l.cfg.Store); err == nil {
+				_ = s.ReadTx(ctx, func(r *store.Reader) error {
+					rows, err := readItems(r)
+					if err != nil {
+						return err
+					}
+					for _, row := range rows {
+						if row.State != StateInQueue && row.State != StateBlocked {
+							continue
+						}
+						if IsTrunkFixer(row.ItemID) || IsRemoteSyncItem(row.ItemID) {
+							continue
+						}
+						base, err := blockBaseAt(ctx, r, l.cfg.Root, green, tip, row.ItemID)
+						if err == nil && base != "" && base != green {
+							if blockBases == nil {
+								blockBases = map[string]string{}
+							}
+							blockBases[row.ItemID] = base
+						}
+					}
+					return nil
+				})
+				s.Close()
+			}
+		}
+	}
+	return l.actors.SetCachedTrunk(bgactors.TrunkCache{
+		Tip:         tip,
+		Green:       green,
+		UnprovedSet: unprovedSet,
+		BlockBases:  blockBases,
+		Valid:       true,
+	}), nil
 }

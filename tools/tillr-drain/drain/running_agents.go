@@ -332,3 +332,10 @@ func expressByIDFromMap(items map[string]itemRow) map[string]bool {
 	}
 	return out
 }
+
+func workRunID(w *pendingWork) string {
+	if w == nil || w.Decision.RunRequest == nil {
+		return ""
+	}
+	return w.Decision.RunRequest.RunID
+}

@@ -140,7 +140,7 @@ func TestProcessCPUEventShapeAndMinuteCadenceFromFakeProc(t *testing.T) {
 
 	// Pass at t0 primes the baseline and appends no event yet.
 	var result LoopResult
-	if err := l.runPasses(context.Background(), &result, false, nil); err != nil {
+	if err := l.runPasses(context.Background(), &result); err != nil {
 		t.Fatalf("first runPasses: %v", err)
 	}
 	if events := readProcessCPUEvents(t, f.storePath); len(events) != 0 {
@@ -150,7 +150,7 @@ func TestProcessCPUEventShapeAndMinuteCadenceFromFakeProc(t *testing.T) {
 	// Pass at t0 + 30s still appends nothing (< 1 minute).
 	now = now.Add(30 * time.Second)
 	writeFakeProcEntry(t, fakeProc, 2001, "tillr-watch", "R", 4000, 100, 6000, "/usr/local/bin/tillr-watch", "wait", "--owner", "whale", "--follow")
-	if err := l.runPasses(context.Background(), &result, false, nil); err != nil {
+	if err := l.runPasses(context.Background(), &result); err != nil {
 		t.Fatalf("30s runPasses: %v", err)
 	}
 	if events := readProcessCPUEvents(t, f.storePath); len(events) != 0 {
@@ -168,7 +168,7 @@ func TestProcessCPUEventShapeAndMinuteCadenceFromFakeProc(t *testing.T) {
 	writeFakeProcEntry(t, fakeProc, 3001, "tillr-view", "R", 7500, 900, 7000, "/home/user/.cache/tillr/bin/tillr-view-deadbeef01234567", "serve", "--store", ".tillr/state.db")
 	writeFakeProcEntry(t, fakeProc, 4001, "tillr-watch", "S", 18000, 0, 8000, "/usr/local/bin/tillr-watch", "daemon")
 
-	if err := l.runPasses(context.Background(), &result, false, nil); err != nil {
+	if err := l.runPasses(context.Background(), &result); err != nil {
 		t.Fatalf("60s runPasses: %v", err)
 	}
 	events := readProcessCPUEvents(t, f.storePath)
@@ -224,7 +224,7 @@ func TestProcessCPUEventShapeAndMinuteCadenceFromFakeProc(t *testing.T) {
 	writeFakeProcEntry(t, fakeProc, 3002, "tillr", "R", 1200, 300, 9500, "tillr", "view", "serve", "--store", ".tillr/state.db")
 
 	now = now.Add(time.Minute)
-	if err := l.runPasses(context.Background(), &result, false, nil); err != nil {
+	if err := l.runPasses(context.Background(), &result); err != nil {
 		t.Fatalf("120s runPasses: %v", err)
 	}
 	events = readProcessCPUEvents(t, f.storePath)
@@ -258,7 +258,7 @@ func TestProcessCPUEventShapeAndMinuteCadenceFromFakeProc(t *testing.T) {
 	// Its process_key must be distinct so a restarted watcher never inherits the exited process's identity.
 	writeFakeProcEntry(t, fakeProc, 2001, "tillr-watch", "R", 3600, 0, 9900, "/usr/local/bin/tillr-watch", "wait", "--owner", "whale")
 	now = now.Add(time.Minute)
-	if err := l.runPasses(context.Background(), &result, false, nil); err != nil {
+	if err := l.runPasses(context.Background(), &result); err != nil {
 		t.Fatalf("180s runPasses: %v", err)
 	}
 	events = readProcessCPUEvents(t, f.storePath)
@@ -396,7 +396,7 @@ func TestProcessCPULogsWriteFailureWithoutStoppingLoop(t *testing.T) {
 	<-holding
 
 	var result LoopResult
-	if err := l.runPasses(context.Background(), &result, false, nil); err != nil {
+	if err := l.runPasses(context.Background(), &result); err != nil {
 		t.Fatalf("runPasses during busy store: %v", err)
 	}
 	if err := <-held; err != nil {
@@ -409,7 +409,7 @@ func TestProcessCPULogsWriteFailureWithoutStoppingLoop(t *testing.T) {
 	// Next pass retries because baseline was preserved on write failure.
 	now = now.Add(time.Second)
 	writeFakeProcEntry(t, fakeProc, 700, "tillr-drain", "R", 3050, 0, 1000, "tillr-drain", "loop")
-	if err := l.runPasses(context.Background(), &result, false, nil); err != nil {
+	if err := l.runPasses(context.Background(), &result); err != nil {
 		t.Fatalf("retry runPasses: %v", err)
 	}
 	got := readProcessCPUEvents(t, f.storePath)

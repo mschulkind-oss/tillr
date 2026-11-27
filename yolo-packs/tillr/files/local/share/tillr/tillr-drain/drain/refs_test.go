@@ -497,7 +497,7 @@ exec %q "$@"
 				t.Fatal(err)
 			}
 			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-			if stop, err := l.passMode(ctx, &LoopResult{}, true); stop != StopQueueDrained || err != nil {
+			if stop, err := l.passMode(ctx, &LoopResult{}); stop != StopQueueDrained || err != nil {
 				t.Fatalf("pass stopped: %q, %v", stop, err)
 			}
 			if _, err := os.Stat(flag); err != nil {
@@ -507,7 +507,7 @@ exec %q "$@"
 				if !strings.Contains(report.String(), "injected sweep failure") || !refExists(t, f, ref) || !refExists(t, f, pin) {
 					t.Fatalf("failed sweep was not reported or deleted refs: %s", &report)
 				}
-				if stop, err := l.passMode(ctx, &LoopResult{}, true); stop != StopQueueDrained || err != nil {
+				if stop, err := l.passMode(ctx, &LoopResult{}); stop != StopQueueDrained || err != nil {
 					t.Fatalf("next pass stopped: %q, %v", stop, err)
 				}
 			}
