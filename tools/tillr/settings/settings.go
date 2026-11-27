@@ -22,6 +22,46 @@ const DefaultTrunkBranch = "main"
 // DefaultChecksDir is the default check-declarations directory when [gate] checks_dir is unset.
 const DefaultChecksDir = "tools/gate/checks"
 
+// DefaultWorktreeDiskBudgetPerAgentBytes is the default worktree+scratch disk budget per
+// running agent (4 GiB, D-VO10).
+const DefaultWorktreeDiskBudgetPerAgentBytes int64 = 4 * 1024 * 1024 * 1024
+
+// DefaultWorktreeCountMultiplier is the default worktree count bound multiplier against
+// the running-agent limit (2x, D-VO10).
+const DefaultWorktreeCountMultiplier = 2
+
+// Worktrees configures worktree count and disk bounds (D-VO10).
+type Worktrees struct {
+	DiskBudgetBytes int64
+	DiskBudgetSet   bool
+	MaxCount        int64
+	MaxCountSet     bool
+}
+
+// EffectiveDiskBudgetBytes returns the configured disk budget or
+// runningAgentLimit * DefaultWorktreeDiskBudgetPerAgentBytes.
+func (w Worktrees) EffectiveDiskBudgetBytes(runningAgentLimit int) int64 {
+	if w.DiskBudgetSet {
+		return w.DiskBudgetBytes
+	}
+	if runningAgentLimit <= 0 {
+		return 0
+	}
+	return int64(runningAgentLimit) * DefaultWorktreeDiskBudgetPerAgentBytes
+}
+
+// EffectiveMaxCount returns the configured worktree count bound or
+// runningAgentLimit * DefaultWorktreeCountMultiplier.
+func (w Worktrees) EffectiveMaxCount(runningAgentLimit int) int {
+	if w.MaxCountSet {
+		return int(w.MaxCount)
+	}
+	if runningAgentLimit <= 0 {
+		return 0
+	}
+	return runningAgentLimit * DefaultWorktreeCountMultiplier
+}
+
 // Gate names the repository's check-declarations directory.
 type Gate struct {
 	ChecksDir string
@@ -54,17 +94,18 @@ type Drain struct {
 // and push.what "none" disable actions; empty remote/ref mean the trunk's
 // configured upstream. A nil Comments disables automatic review intake.
 type Settings struct {
-	Trunk    Trunk
-	Brief    Brief
-	Gate     Gate
-	Drain    Drain
-	Sync     Sync
-	Intake   Intake
-	Lanes    Lanes
-	Roll     Roll
-	Push     Push
-	Comments *Comments
-	Prose    Prose
+	Trunk     Trunk
+	Brief     Brief
+	Gate      Gate
+	Drain     Drain
+	Sync      Sync
+	Intake    Intake
+	Lanes     Lanes
+	Worktrees Worktrees
+	Roll      Roll
+	Push      Push
+	Comments  *Comments
+	Prose     Prose
 	// WorkflowDefaults maps seats to workflow references; the drain validates files.
 	WorkflowDefaults map[string]string
 	CandidateSize    CandidateSizeLimits
@@ -197,8 +238,8 @@ func read(root, nonLandingDefinition string) (Settings, error) {
 	var legacyPush *bool
 	whatSet := false
 	for _, table := range keys(tables) {
-		if table != "trunk" && table != "brief" && table != "gate" && table != "drain" && table != "roll" && table != "push" && table != "comments" && table != "workflows" && table != "prose" && table != "intake" && table != "lanes" && table != "sync" && table != "candidate_size" {
-			return Settings{}, refuse(table, "a known table (trunk, brief, gate, drain, roll, push, comments, workflows, prose, intake, lanes, sync or candidate_size)")
+		if table != "trunk" && table != "brief" && table != "gate" && table != "drain" && table != "roll" && table != "push" && table != "comments" && table != "workflows" && table != "prose" && table != "intake" && table != "lanes" && table != "worktrees" && table != "sync" && table != "candidate_size" {
+			return Settings{}, refuse(table, "a known table (trunk, brief, gate, drain, roll, push, comments, workflows, prose, intake, lanes, worktrees, sync or candidate_size)")
 		}
 		values, ok := tables[table].(map[string]any)
 		if !ok {
@@ -217,6 +258,20 @@ func read(root, nonLandingDefinition string) (Settings, error) {
 					return Settings{}, refuse(full, "a nonnegative integer")
 				}
 				s.Lanes.Express = n
+			case "worktrees.disk_budget_bytes":
+				n, ok := value.(int64)
+				if !ok || n <= 0 {
+					return Settings{}, refuse(full, "a positive integer")
+				}
+				s.Worktrees.DiskBudgetBytes = n
+				s.Worktrees.DiskBudgetSet = true
+			case "worktrees.max_count":
+				n, ok := value.(int64)
+				if !ok || n <= 0 {
+					return Settings{}, refuse(full, "a positive integer")
+				}
+				s.Worktrees.MaxCount = n
+				s.Worktrees.MaxCountSet = true
 			case "candidate_size.file_limit", "candidate_size.added_line_limit":
 				n, ok := value.(int64)
 				if !ok || n < 0 {
@@ -386,6 +441,9 @@ func read(root, nonLandingDefinition string) (Settings, error) {
 				if table == "lanes" {
 					expected = "a known lanes key (express)"
 				}
+				if table == "worktrees" {
+					expected = "a known worktrees key (disk_budget_bytes or max_count)"
+				}
 				if table == "workflows" {
 					expected = "a known workflows key (default)"
 				}
@@ -553,6 +611,12 @@ func (s Settings) StartupLine() string {
 	scope, _ := json.Marshal(roadmaps)
 	line += " sync.roadmaps=" + string(scope)
 	line += fmt.Sprintf(" prose.rewrite=%t lanes.express=%d", s.Prose.Rewrite, s.Lanes.Express)
+	if s.Worktrees.DiskBudgetSet {
+		line += fmt.Sprintf(" worktrees.disk_budget_bytes=%d", s.Worktrees.DiskBudgetBytes)
+	}
+	if s.Worktrees.MaxCountSet {
+		line += fmt.Sprintf(" worktrees.max_count=%d", s.Worktrees.MaxCount)
+	}
 	if c := s.Comments; c != nil {
 		paths, _ := json.Marshal(c.Paths)
 		line += fmt.Sprintf(" comments.vantage_url=%s comments.repo=%s comments.paths=%s comments.quiet_seconds=%d comments.poll_seconds=%d comments.max_running=%d comments.compact_over_tokens=%d comments.refresh_hours=%d", strconv.Quote(c.VantageURL), strconv.Quote(c.Repo), paths, c.QuietSeconds, c.PollSeconds, c.MaxRunning, c.CompactOverTokens, c.RefreshHours)

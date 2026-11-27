@@ -56,6 +56,11 @@ func (l *Loop) drainCompletionsCount(ctx context.Context, result *LoopResult) (i
 				return drained, stop, err
 			}
 		default:
+			if drained > 0 && l.cfg.ItemWorktrees && !l.nonLanding && !l.pollOnly {
+				if _, colErr := l.collectIdleWorktrees(ctx); colErr != nil {
+					l.reportf("loop: idle worktree collection after node end failed: %v\n", colErr)
+				}
+			}
 			return drained, "", nil
 		}
 	}
@@ -94,7 +99,7 @@ func (l *Loop) finishRunStep(ctx context.Context, c runCompletion, result *LoopR
 	var watched []string
 	epochs := l.idleLaneEpochs()
 	err = s.ReadTx(ctx, func(r *store.Reader) error {
-		if err := l.readPassPlans(ctx, r, at, c.itemID, nil, &plans, nil, false, nil); err != nil || len(plans) == 0 {
+		if err := l.readPassPlans(ctx, r, at, c.itemID, nil, &plans, nil, false, nil, nil); err != nil || len(plans) == 0 {
 			return err
 		}
 		busy, err := readLanes(r, at)

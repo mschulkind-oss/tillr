@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-drain/internal/worktreebudget"
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/checkresult"
@@ -1623,8 +1624,16 @@ func (l *Loop) passPlansMode(ctx context.Context, at time.Time, generation *stri
 			}
 			refs = &startRefs{tip: tip}
 		}
+		var wtSnap *worktreebudget.Snapshot
+		if l.cfg.ItemWorktrees && !l.nonLanding && !pendingOnly {
+			if snap, colErr := l.collectIdleWorktrees(ctx); colErr == nil {
+				wtSnap = &snap
+			} else {
+				l.reportf("loop: idle worktree collection before claim failed: %v\n", colErr)
+			}
+		}
 		err := s.ReadTx(ctx, func(r *store.Reader) error {
-			return l.readPassPlans(ctx, r, at, "", refs, &plans, &leases, pendingOnly, commentChecks)
+			return l.readPassPlans(ctx, r, at, "", refs, &plans, &leases, pendingOnly, commentChecks, wtSnap)
 		})
 		if err != nil || !slices.ContainsFunc(plans, func(p plannedApplication) bool { return p.start != nil }) {
 			return plans, leases, err
@@ -1641,7 +1650,7 @@ func (l *Loop) passPlansMode(ctx context.Context, at time.Time, generation *stri
 
 // readPassPlans binds the planner's decisions to a read snapshot. A completion
 // only plans an existing reservation, never a fresh attempt or another lane.
-func (l *Loop) readPassPlans(ctx context.Context, r *store.Reader, at time.Time, onlyItem string, refs *startRefs, plans *[]plannedApplication, leases *[]LaneLease, pendingOnly bool, commentChecks *[]plannedApplication) error {
+func (l *Loop) readPassPlans(ctx context.Context, r *store.Reader, at time.Time, onlyItem string, refs *startRefs, plans *[]plannedApplication, leases *[]LaneLease, pendingOnly bool, commentChecks *[]plannedApplication, wtSnap *worktreebudget.Snapshot) error {
 	var err error
 	observed := append([]string(nil), l.lanes()...)
 	held, err := readLanes(r, at)
@@ -1693,7 +1702,7 @@ func (l *Loop) readPassPlans(ctx context.Context, r *store.Reader, at time.Time,
 	}
 	syncRoadmaps := l.syncRoadmapsSettings()
 	proseRewrite := l.proseRewriteSettings()
-	tick := Pass{examineItem: onlyItem, pendingOnly: pendingOnly, ownerMigration: l.ownerMigrationItem != "", loopHolds: loopHolds, startRefs: refs, Comments: l.commentsSettings(), WorkflowDefaults: l.workflowDefaultsSettings(), SyncRoadmaps: &syncRoadmaps, ProseRewrite: &proseRewrite, GatesInFlight: l.gateCount(), Build: &l.build, Now: at.Format(time.RFC3339Nano), AvailableLanes: &available, ItemWorktrees: l.cfg.ItemWorktrees, OutLanes: l.outLanes()}
+	tick := Pass{examineItem: onlyItem, pendingOnly: pendingOnly, ownerMigration: l.ownerMigrationItem != "", loopHolds: loopHolds, startRefs: refs, Comments: l.commentsSettings(), WorkflowDefaults: l.workflowDefaultsSettings(), SyncRoadmaps: &syncRoadmaps, ProseRewrite: &proseRewrite, GatesInFlight: l.gateCount(), Build: &l.build, Now: at.Format(time.RFC3339Nano), AvailableLanes: &available, ItemWorktrees: l.cfg.ItemWorktrees, WorktreeSnapshot: wtSnap, OutLanes: l.outLanes()}
 	if l.ownerMigrationItem != "" {
 		tick.examineItem = l.ownerMigrationItem
 	}
@@ -3059,6 +3068,14 @@ func (l *Loop) passMode(ctx context.Context, result *LoopResult, pendingOnly boo
 	if !l.nonLanding {
 		if err := l.timePassPhase("reclaim_ended_item_lanes", func() error { return l.reclaimEndedItemLanes(ctx) }); err != nil {
 			l.reportf("loop: ended-item lane cleanup failed: %v\n", err)
+		}
+		if l.cfg.ItemWorktrees {
+			if err := l.timePassPhase("collect_idle_worktrees", func() error {
+				_, err := l.collectIdleWorktrees(ctx)
+				return err
+			}); err != nil {
+				l.reportf("loop: idle worktree collection failed: %v\n", err)
+			}
 		}
 		endPrune := l.startPassPhase("prune_run_refs")
 		l.reportRefSweepFailure(l.pruneRunRefs(ctx))

@@ -395,3 +395,31 @@ func TestLoopSurvivesLandingWithUnknownSettingsTable(t *testing.T) {
 		t.Fatalf("expected settings-drift alarm to clear after roll, got:\n%s", cleared)
 	}
 }
+
+func TestLandedWorktreesBoundsReloadWithoutRestart(t *testing.T) {
+	ctx := context.Background()
+	l, git, _ := actionFixture(t)
+
+	initial, err := settings.Read(l.cfg.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l.cfg.PostLanding = initial
+
+	tip := commitSettingsFile(t, l.cfg.Root, git,
+		"[worktrees]\ndisk_budget_bytes = 21474836480\nmax_count = 16\n",
+		"configure worktrees bounds")
+
+	l.afterLanding(ctx, tip)
+
+	got := l.postLandingSettings().Worktrees
+	if !got.DiskBudgetSet || got.DiskBudgetBytes != 21474836480 {
+		t.Fatalf("expected reloaded disk_budget_bytes = 21474836480, got %+v", got)
+	}
+	if !got.MaxCountSet || got.MaxCount != 16 {
+		t.Fatalf("expected reloaded max_count = 16, got %+v", got)
+	}
+	if whyOut := readSettingsAlarms(t, l.cfg.Store); strings.Contains(whyOut, alarms.SettingsDrift) {
+		t.Fatalf("unexpected settings-drift alarm after reloadable [worktrees] change:\n%s", whyOut)
+	}
+}

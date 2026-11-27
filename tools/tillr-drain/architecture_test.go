@@ -270,6 +270,7 @@ var drainAllowlist = map[string]bool{
 	"workflow_failover.go":        true,
 	"workflow_order.go":           true,
 	"worktree_authority.go":       true,
+	"worktree_collect.go":         true,
 	"worktree_registry.go":        true,
 }
 

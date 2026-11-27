@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-drain/internal/worktreebudget"
 	"github.com/mschulkind-oss/tillr-drain/obstacles"
 	"github.com/mschulkind-oss/tillr-drain/ownercriteria"
 	"github.com/mschulkind-oss/tillr-item/item"
@@ -81,9 +82,10 @@ type Pass struct {
 	StorePath     string  `json:"-"`
 	// runFaces is a fixed process observation supplied by the live loop.
 	// The planner does not consult the process table, even with StorePath set.
-	runFaces       map[string]bool
-	Now            string    `json:"now"`
-	AvailableLanes *[]string `json:"available_lanes"`
+	runFaces         map[string]bool
+	Now              string                   `json:"now"`
+	AvailableLanes   *[]string                `json:"available_lanes"`
+	WorktreeSnapshot *worktreebudget.Snapshot `json:"worktrees,omitempty"`
 	// ItemWorktrees plans dispatches into item-owned directories (<lane-root>/<item-id>)
 	// instead of pool lanes. Off by default; AvailableLanes still supplies the
 	// running-agent limit count.
@@ -1077,7 +1079,11 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 				var lane string
 				slotOpen := p.ordinaryAgentSlotOpen(item.Express, isCommand, runKey)
 				limitFull := !slotOpen && p.runningAgentLimit > 0
-				ok := slotOpen
+				wtBound, wtMover := false, ""
+				if slotOpen && !isCommand {
+					wtBound, wtMover = p.worktreeBoundReached(item.ItemID)
+				}
+				ok := slotOpen && !wtBound
 				if ok {
 					lane, ok = p.freeLaneForItem(item.ItemID, item.Express)
 					if !ok && decision.Action == ActionJudge {
@@ -1091,7 +1097,10 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 					}
 				}
 				if !ok {
-					if limitFull {
+					if wtBound {
+						decision.Action, decision.Reason, decision.To = ActionHold, ReasonWorktreeBound, ""
+						decision.DeferredBy = wtMover
+					} else if limitFull {
 						decision.Action, decision.Reason, decision.To = ActionHold, ReasonAgentLimit, ""
 						decision.DeferredBy = activeOrdinaryAgentSummary(p.activeOrdinaryAgents)
 					} else {
@@ -1103,6 +1112,9 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 					req.LaneID = lane
 					decision.RunRequest = &req
 					if p.captureStart == nil {
+						if p.needsNewWorktree(item.ItemID) {
+							p.plannedNewWorktrees++
+						}
 						p.assigned[lane] = true
 						p.claimOrdinaryAgentSlot(item.Express, isCommand, lane, runKey)
 					}
@@ -1550,6 +1562,7 @@ type planner struct {
 	assigned             map[string]bool
 	runningAgentLimit    int
 	activeOrdinaryAgents map[string]string
+	plannedNewWorktrees  int
 	pausedBlocked        map[string]bool
 	pausedReserved       map[string]string
 	// laneShort records that some item asked this plan for a free lane and got none.
@@ -1818,6 +1831,13 @@ func (p *planner) decide(item itemRow, edges []itemEdge) Decision {
 		runKey := attemptRunID(item.ItemID, p.nextAttempt(item.ItemID))
 		slotOpen := p.ordinaryAgentSlotOpen(item.Express, isCommand, runKey)
 		limitFull := !slotOpen && p.runningAgentLimit > 0
+		if slotOpen && !isCommand {
+			if wtBound, wtMover := p.worktreeBoundReached(item.ItemID); wtBound {
+				decision.Action, decision.Reason = ActionHold, ReasonWorktreeBound
+				decision.DeferredBy = wtMover
+				break
+			}
+		}
 		var lane string
 		var ok bool
 		if slotOpen {
@@ -1882,6 +1902,9 @@ func (p *planner) decide(item itemRow, edges []itemEdge) Decision {
 			break
 		}
 		p.assignLane(lane)
+		if p.captureStart == nil && p.needsNewWorktree(item.ItemID) {
+			p.plannedNewWorktrees++
+		}
 		p.claimOrdinaryAgentSlot(item.Express, isCommand, lane, runKey)
 		if p.captureStart == nil {
 			p.forks = append(p.forks, plannedFork{itemID: item.ItemID, fork: item.Delivery.ActiveFork()})
@@ -2014,7 +2037,7 @@ func stampDecisionRequest(d Decision, req *run.Request) {
 func identifyDecision(decision *Decision) {
 	// A resource deferral does not move an otherwise queued item into held.
 	// Pending runs and candidates retain their independently derived positions.
-	if decision.Action == ActionHold && decision.From == "held" && (decision.Reason == ReasonNoLane || decision.Reason == ReasonAgentLimit || decision.Reason == ReasonForkHeld || decision.Reason == ReasonDeskCapacity || decision.Reason == ReasonDocumentDeskBusy) {
+	if decision.Action == ActionHold && decision.From == "held" && (decision.Reason == ReasonNoLane || decision.Reason == ReasonAgentLimit || decision.Reason == ReasonWorktreeBound || decision.Reason == ReasonForkHeld || decision.Reason == ReasonDeskCapacity || decision.Reason == ReasonDocumentDeskBusy) {
 		decision.From = "queued"
 	}
 	decision.Position, decision.Transition = decision.From, decision.Action
@@ -2496,6 +2519,73 @@ func (p *planner) claimOrdinaryAgentSlot(express, isCommand bool, lane, runKey s
 		runKey = "planned:" + lane
 	}
 	p.activeOrdinaryAgents[runKey] = lane
+}
+
+func (p *planner) needsNewWorktree(itemID string) bool {
+	if !p.tick.ItemWorktrees || p.tick.WorktreeSnapshot == nil || itemID == "" {
+		return false
+	}
+	if isPoolLaneName(itemID) {
+		return false
+	}
+	if u, ok := p.tick.WorktreeSnapshot.Items[itemID]; ok && u.HasWorktree {
+		return false
+	}
+	if p.assigned[itemID] {
+		return false
+	}
+	return true
+}
+
+func (p *planner) worktreeBoundReached(itemID string) (bool, string) {
+	if !p.needsNewWorktree(itemID) {
+		return false, ""
+	}
+	snap := p.tick.WorktreeSnapshot
+	if snap.Idle > 0 {
+		return false, ""
+	}
+	atCount := snap.CountLimit > 0 && snap.OnDisk+p.plannedNewWorktrees >= snap.CountLimit
+	atDisk := snap.DiskBudgetBytes > 0 && snap.TotalBytes >= snap.DiskBudgetBytes
+	if !atCount && !atDisk {
+		return false, ""
+	}
+	return true, p.worktreeBoundMover()
+}
+
+func (p *planner) worktreeBoundMover() string {
+	if len(p.activeOrdinaryAgents) > 0 {
+		return activeOrdinaryAgentSummary(p.activeOrdinaryAgents)
+	}
+	if p.inputDecisionReader != nil {
+		if rows, err := p.inputDecisionReader.Query(`SELECT lane_id, COALESCE(run_id, '') FROM lanes WHERE state = 'leased'`); err == nil {
+			runs := map[string]string{}
+			for rows.Next() {
+				var lane, runID string
+				if err := rows.Scan(&lane, &runID); err == nil && runID != "" {
+					runs[runID] = lane
+				}
+			}
+			rows.Close()
+			if len(runs) > 0 {
+				return activeOrdinaryAgentSummary(runs)
+			}
+		}
+		if rows, err := p.inputDecisionReader.Query(`SELECT run_id, COALESCE(NULLIF(lane_id, ''), item_id) FROM runs WHERE state = 'running'`); err == nil {
+			runs := map[string]string{}
+			for rows.Next() {
+				var runID, lane string
+				if err := rows.Scan(&runID, &lane); err == nil && runID != "" {
+					runs[runID] = lane
+				}
+			}
+			rows.Close()
+			if len(runs) > 0 {
+				return activeOrdinaryAgentSummary(runs)
+			}
+		}
+	}
+	return "a running node holding a worktree"
 }
 
 func (p *planner) itemLane(itemID string) (string, bool) {

@@ -18,6 +18,7 @@ import (
 	"github.com/mschulkind-oss/tillr-drain/alarms"
 	"github.com/mschulkind-oss/tillr-drain/drain"
 	"github.com/mschulkind-oss/tillr-drain/heavy"
+	"github.com/mschulkind-oss/tillr-drain/internal/worktreebudget"
 	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/settings"
@@ -125,6 +126,10 @@ func whyFace(args []string) int {
 		} else if ok {
 			livePriority = lp
 		}
+		if *root != "" {
+			wtSnap := measureWhyWorktrees(r, *root, tick.AvailableLanes, repositorySettings.Worktrees)
+			tick.WorktreeSnapshot = &wtSnap
+		}
 		answer, err = drain.WhyForItem(r, tick, policy, questions, itemID)
 		if err == nil {
 			answer.LanesSource = lanesSource
@@ -171,6 +176,9 @@ func whyFace(args []string) int {
 				}
 				if !*asJSON {
 					fmt.Println(formatWhyLanes(answer.Lanes, answer.LanesSource))
+					if line := formatWhyWorktrees(answer.Worktrees); line != "" {
+						fmt.Println(line)
+					}
 					if line := formatWhyProcessPriority(answer.ProcessPriority); line != "" {
 						fmt.Println(line)
 					}
@@ -209,6 +217,9 @@ func whyFace(args []string) int {
 		}
 		if err == nil {
 			_, err = fmt.Fprintln(os.Stdout, formatWhyLanes(answer.Lanes, answer.LanesSource))
+		}
+		if line := formatWhyWorktrees(answer.Worktrees); err == nil && line != "" {
+			_, err = fmt.Fprintln(os.Stdout, line)
 		}
 		if line := formatWhyProcessPriority(answer.ProcessPriority); err == nil && line != "" {
 			_, err = fmt.Fprintln(os.Stdout, line)
@@ -344,4 +355,52 @@ func revParseTrunk(ctx context.Context, root, trunkRef string) (string, bool) {
 	}
 	sha := strings.TrimSpace(string(out))
 	return sha, sha != ""
+}
+
+func measureWhyWorktrees(r *store.Reader, root string, availableLanes *[]string, bounds settings.Worktrees) worktreebudget.Snapshot {
+	inUse := map[string]bool{}
+	if rows, err := r.Query(`SELECT lane_id FROM lanes WHERE state = 'leased'`); err == nil {
+		for rows.Next() {
+			var lane string
+			if err := rows.Scan(&lane); err == nil && lane != "" {
+				inUse[lane] = true
+			}
+		}
+		rows.Close()
+	}
+	agentLimit := 0
+	if availableLanes != nil {
+		for _, lane := range *availableLanes {
+			if !strings.HasPrefix(lane, "express-") {
+				agentLimit++
+			}
+		}
+	} else if rows, err := r.Query(`SELECT lane_id FROM lanes`); err == nil {
+		for rows.Next() {
+			var lane string
+			if err := rows.Scan(&lane); err == nil && !strings.HasPrefix(lane, "express-") {
+				agentLimit++
+			}
+		}
+		rows.Close()
+	}
+	laneRoot, _ := resolveLaneRoot(root, "")
+	snap, _ := worktreebudget.MeasureLaneRoot(laneRoot, inUse)
+	snap.CountLimit = bounds.EffectiveMaxCount(agentLimit)
+	snap.DiskBudgetBytes = bounds.EffectiveDiskBudgetBytes(agentLimit)
+	snap.RunLogBytes = worktreebudget.MeasureRunLogs(root)
+	return snap
+}
+
+func formatWhyWorktrees(w *worktreebudget.Snapshot) string {
+	if w == nil {
+		return ""
+	}
+	return fmt.Sprintf("worktrees: %d on disk (%d in use, %d idle; limit %d), %s worktrees + %s scratch / %s budget, %s run logs",
+		w.OnDisk, w.InUse, w.Idle, w.CountLimit,
+		worktreebudget.FormatBytes(w.WorktreeBytes),
+		worktreebudget.FormatBytes(w.ScratchBytes),
+		worktreebudget.FormatBytes(w.DiskBudgetBytes),
+		worktreebudget.FormatBytes(w.RunLogBytes),
+	)
 }

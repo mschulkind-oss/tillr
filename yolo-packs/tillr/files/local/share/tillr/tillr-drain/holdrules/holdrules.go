@@ -99,6 +99,7 @@ var Rules = map[string]Rule{
 	"capacity":                     {"waits on work", "queue", "the next pass"},
 	"no-lane":                      {"waits on work", "queue", "a free lane"},
 	"agent-limit":                  {"waits on work", "queue", "a running ordinary agent to finish"},
+	"worktree-bound":               {"waits on work", "queue", "a running node holding a worktree to finish"},
 	"waits on a desk":              {"waits on work", "desk", "a design desk to free up"},
 	"waits on the document's desk": {"waits on work", "desk", "the document's desk to finish its current item"},
 	"no-fence":                     {"needs you", "queue", "the owner"},

@@ -410,6 +410,22 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 	}
 	itemBaseSHA := baseSHA
 	worktreeSpec := spec
+	if !isFork && !isPoolLaneName(spec.LaneID) {
+		if _, statErr := os.Stat(worktree); os.IsNotExist(statErr) {
+			if spec.Continue {
+				if _, rErr := s.restoreCollectedWorktree(ctx, spec, laneDir, worktree); rErr != nil {
+					endRead()
+					return Externalf("restoring collected worktree for %s: %v", spec.ItemID, rErr)
+				}
+			} else if spec.KeptHeadSHA == "" && (spec.Returned != nil || spec.DesignContinuationHead != "" || spec.RetryCandidate != nil) {
+				if pinned, pErr := s.git(ctx, s.Root, "rev-parse", "--verify", itemPinRef(spec.ItemID)+"^{commit}"); pErr == nil {
+					if sha := strings.TrimSpace(pinned); sha != "" {
+						worktreeSpec.BaseSHA = sha
+					}
+				}
+			}
+		}
+	}
 	if spec.KeptHeadSHA != "" && !isFork {
 		worktreeSpec.BaseSHA = spec.KeptHeadSHA
 	}
@@ -1044,6 +1060,39 @@ func (s *LaneStager) ensureForkCheckout(ctx context.Context, spec StageSpec, for
 // the next run's tree. It also refuses a branch a live worktree has checked out, which the
 // branch scoping leaves as this lane's own directory moved aside; that one is refused by
 // name rather than left to git's `fatal:` line (refuseBranchHeld).
+func (s *LaneStager) restoreCollectedWorktree(ctx context.Context, spec StageSpec, laneDir, worktree string) (bool, error) {
+	if isPoolLaneName(spec.LaneID) || spec.ItemID == "" {
+		return false, nil
+	}
+	if _, err := os.Stat(worktree); err == nil {
+		return false, nil
+	} else if !os.IsNotExist(err) {
+		return false, err
+	}
+	pinned, err := s.git(ctx, s.Root, "rev-parse", "--verify", itemPinRef(spec.ItemID)+"^{commit}")
+	if err != nil {
+		return false, fmt.Errorf("missing item branch pin %s: %w", itemPinRef(spec.ItemID), err)
+	}
+	pinnedSHA := strings.TrimSpace(pinned)
+	if err := authorizeWorktreeRoot(s.Root); err != nil {
+		return false, err
+	}
+	if err := os.MkdirAll(laneDir, 0o755); err != nil {
+		return false, err
+	}
+	branch := LaneBranch(s.LaneRoot, spec.LaneID)
+	if err := withWorktreeRegistryLock(ctx, s.Root, func() error {
+		if err := s.clearWorktree(ctx, worktree); err != nil {
+			return err
+		}
+		_, err := s.git(ctx, s.Root, "worktree", "add", "--force", "-B", branch, worktree, pinnedSHA)
+		return err
+	}); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 func (s *LaneStager) ensureWorktree(ctx context.Context, spec StageSpec, laneDir, worktree string) error {
 	if err := authorizeWorktreeRoot(s.Root); err != nil {
 		return err

@@ -58,6 +58,7 @@ const (
 	ReasonNoPolicy            = drainmodel.ReasonNoPolicy
 	ReasonNoLane              = drainmodel.ReasonNoLane
 	ReasonAgentLimit          = drainmodel.ReasonAgentLimit
+	ReasonWorktreeBound       = drainmodel.ReasonWorktreeBound
 	ReasonRunLive             = drainmodel.ReasonRunLive
 	ReasonNoFence             = drainmodel.ReasonNoFence
 	ReasonForkHeld            = drainmodel.ReasonForkHeld

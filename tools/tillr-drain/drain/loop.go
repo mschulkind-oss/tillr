@@ -420,6 +420,10 @@ type LoopConfig struct {
 	// instead of pool lanes. Off by default; pool lanes in Lanes still supply the
 	// running-agent limit count.
 	ItemWorktrees bool
+	// WorktreeCountOverride optionally overrides [worktrees] max_count (--worktree-count).
+	WorktreeCountOverride int
+	// WorktreeDiskBudgetOverride optionally overrides [worktrees] disk_budget_bytes (--worktree-disk-budget).
+	WorktreeDiskBudgetOverride int64
 	// BackoffBase is the wait before the next attempt after the first consecutive
 	// infrastructure failure; each further one doubles it up to BackoffCap. 0 is
 	// DefaultBackoffBase. It is a wait, never a stop: the ruling's answer to a repeated

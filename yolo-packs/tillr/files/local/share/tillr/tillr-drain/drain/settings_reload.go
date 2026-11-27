@@ -165,6 +165,7 @@ func (l *Loop) reloadSettingsOnLanding(ctx context.Context, tip string) {
 	l.cfg.PostLanding.CandidateSize = next.CandidateSize
 	l.cfg.PostLanding.Prose = next.Prose
 	l.cfg.PostLanding.Intake = next.Intake
+	l.cfg.PostLanding.Worktrees = next.Worktrees
 	l.cfg.Comments = next.Comments
 	l.cfg.VantageURL = vantageURL
 	l.cfg.VantageRepo = vantageRepo

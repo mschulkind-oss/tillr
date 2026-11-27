@@ -925,6 +925,8 @@ func loopFace(args []string) int {
 	path := fs.String("store", "", "the store to reap and plan from (default <root>/.tillr/state.db)")
 	maxAgents := fs.Int("max-agents", 2, "running-agent limit on a fresh start (replaces any saved scale target when set explicitly; express work runs outside the limit)")
 	laneCount := fs.Int("lanes", 2, "alias for --max-agents")
+	worktreeCount := fs.Int("worktree-count", 0, "worktree count bound (0 uses .tillr.toml or 2x running-agent limit)")
+	worktreeDiskBudget := fs.Int64("worktree-disk-budget", 0, "worktree and scratch disk budget in bytes (0 uses .tillr.toml or 4 GiB * running-agent limit)")
 	maxConcurrentTriage := fs.Int("max-concurrent-triage", 2, "maximum concurrent alert triage runs dispatched outside build lanes (max_concurrent_triage)")
 	laneRoot := fs.String("lane-root", "", "where the lanes' worktrees live (default <root>/.tillr/items, or <root>/.tillr/lanes if it exists)")
 	backoffBase := fs.Duration("backoff-base", drain.DefaultBackoffBase, "the wait before the next attempt after the first consecutive infrastructure failure; each further one doubles it, up to 5m. It is a wait and not a stop: the loop reports the failure and keeps trying, because the pile still holds work")
@@ -982,6 +984,12 @@ func loopFace(args []string) int {
 	}
 	if *maxConcurrentTriage < 0 {
 		return failStartup(drain.Usagef("loop needs --max-concurrent-triage N (N >= 0)"))
+	}
+	if *worktreeCount < 0 {
+		return failStartup(drain.Usagef("loop needs --worktree-count N (N >= 0)"))
+	}
+	if *worktreeDiskBudget < 0 {
+		return failStartup(drain.Usagef("loop needs --worktree-disk-budget N (N >= 0)"))
 	}
 	// A missing store must not mask invalid repository settings, including
 	// when --check is run before the first loop startup.
@@ -1097,7 +1105,7 @@ func loopFace(args []string) int {
 	}
 	loop, err := drain.NewLoop(drain.LoopConfig{
 		Root: *root, Store: *path, LaneRoot: *laneRoot, MigrateOwnerQuestions: *migrateOwner,
-		Lanes: laneIDs(agentLimit), ItemWorktrees: true, LiveScale: true, ExplicitLanes: explicitLanes, BackoffBase: *backoffBase, MaxConcurrentTriage: *maxConcurrentTriage, StorePollInterval: *fallbackPoll, NoNotify: *noNotify, ExitWhenDrained: *exitWhenDrained,
+		Lanes: laneIDs(agentLimit), ItemWorktrees: true, WorktreeCountOverride: *worktreeCount, WorktreeDiskBudgetOverride: *worktreeDiskBudget, LiveScale: true, ExplicitLanes: explicitLanes, BackoffBase: *backoffBase, MaxConcurrentTriage: *maxConcurrentTriage, StorePollInterval: *fallbackPoll, NoNotify: *noNotify, ExitWhenDrained: *exitWhenDrained,
 		Policy: policy, PolicyRef: *policyPath, QuestionsCmd: commandFields(*questionsCmd), QuestionsIndex: *questionsIndex,
 		Steps: steps, Stage: stager, Now: at, Report: os.Stderr,
 		Comments: repositorySettings.Comments, WorkflowDefaults: repositorySettings.WorkflowDefaults,

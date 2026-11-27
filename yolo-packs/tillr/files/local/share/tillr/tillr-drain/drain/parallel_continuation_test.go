@@ -405,7 +405,7 @@ func TestPlanDoesNotObserveWorkerProcesses(t *testing.T) {
 			t.Fatalf("planning changed without new inputs: before %s; after %+v", before[0].Payload, after)
 		}
 		var observed []plannedApplication
-		if err := l.readPassPlans(context.Background(), r, at, d.ItemID, nil, &observed, nil, false, nil); err != nil {
+		if err := l.readPassPlans(context.Background(), r, at, d.ItemID, nil, &observed, nil, false, nil, nil); err != nil {
 			return err
 		}
 		if len(observed) != 1 || observed[0].decision.Reason != ReasonRunLive {

@@ -60,6 +60,7 @@ const (
 	ReasonNoPolicy            = "no-policy"
 	ReasonNoLane              = "no-lane"
 	ReasonAgentLimit          = "agent-limit"
+	ReasonWorktreeBound       = "worktree-bound"
 	ReasonRunLive             = "run-live"
 	ReasonNoFence             = "no-fence"
 	ReasonForkHeld            = "fork-held"

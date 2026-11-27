@@ -15,6 +15,7 @@ import (
 	"github.com/mschulkind-oss/tillr-drain/heavy"
 	"github.com/mschulkind-oss/tillr-drain/holdrules"
 	"github.com/mschulkind-oss/tillr-drain/internal/splitclosing"
+	"github.com/mschulkind-oss/tillr-drain/internal/worktreebudget"
 	"github.com/mschulkind-oss/tillr-drain/obstacles"
 	"github.com/mschulkind-oss/tillr-drain/presence"
 	"github.com/mschulkind-oss/tillr-item/item"
@@ -113,12 +114,13 @@ type WhySummary struct {
 }
 
 type WhyAnswer struct {
-	Alarms          []alarms.Alarm          `json:"alarms,omitempty"`
-	Definition      string                  `json:"definition"`
-	EventHeadSeq    int64                   `json:"event_head_seq"`
-	Lanes           []string                `json:"lanes"`
-	LanesSource     string                  `json:"lanes_source,omitempty"`
-	ProcessPriority *ProcessPrioritySummary `json:"process_priority,omitempty"`
+	Alarms          []alarms.Alarm           `json:"alarms,omitempty"`
+	Definition      string                   `json:"definition"`
+	EventHeadSeq    int64                    `json:"event_head_seq"`
+	Lanes           []string                 `json:"lanes"`
+	LanesSource     string                   `json:"lanes_source,omitempty"`
+	Worktrees       *worktreebudget.Snapshot `json:"worktrees,omitempty"`
+	ProcessPriority *ProcessPrioritySummary  `json:"process_priority,omitempty"`
 	// Draining lists the lanes above the offered count that still hold work, each with the
 	// item it holds. The loop serves them until that work lands or is released.
 	Draining []DrainingLane `json:"draining,omitempty"`
@@ -146,7 +148,7 @@ func WhyForItem(r *store.Reader, tick Pass, policy *Policy, questions QuestionSo
 }
 
 func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, namedItem string) (WhyAnswer, error) {
-	answer := WhyAnswer{Rows: []WhyRow{}, Summary: WhySummary{Held: map[string]int{}}}
+	answer := WhyAnswer{Rows: []WhyRow{}, Summary: WhySummary{Held: map[string]int{}}, Worktrees: tick.WorktreeSnapshot}
 	head, err := r.EventHeadSeq()
 	if err != nil {
 		return answer, readFailure(err)
@@ -640,6 +642,12 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 				row.Why += ": waiting for an ordinary agent slot to judge"
 				ownLaneReason = "candidate awaits judge slot"
 			}
+		case d.Reason == ReasonWorktreeBound:
+			runs := splitDeferredRuns(d.DeferredBy)
+			row.WaitingOn = append(row.WaitingOn, runs...)
+			if len(runs) > 0 {
+				row.Mover = strings.Join(runs, ", ")
+			}
 		case d.Reason == ReasonNoLane && details.retryLaneWait[it.ItemID]:
 			lanes, laneLeases := offered, leases
 			if d.LaneID != "" {
@@ -1058,7 +1066,7 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 				answer.Summary.OwnerWaiting++
 			} else if liveWorker {
 				// The worker has the next move, not drain.
-			} else if (d.Reason == ReasonForkHeld && d.DeferredBy != "") || (row.ClassSource == "store" && row.Class == "waits on work" && row.Mover != "plan" && row.Mover != "design") {
+			} else if (d.Reason == ReasonForkHeld && d.DeferredBy != "") || (d.Reason == ReasonWorktreeBound && d.DeferredBy != "") || (row.ClassSource == "store" && row.Class == "waits on work" && row.Mover != "plan" && row.Mover != "design") {
 				// A fork holder or named waiter is the mover, not the drain.
 				// Planning waits still use their existing design-seat action below.
 			} else {
@@ -1356,6 +1364,12 @@ func whyPresentation(d Decision) (class, where, mover string) {
 		return "waits on work", where, "the next pass"
 	case ReasonAgentLimit:
 		return "waits on work", where, "a running ordinary agent to finish"
+	case ReasonWorktreeBound:
+		mover := "a running node holding a worktree to finish"
+		if d.DeferredBy != "" {
+			mover = d.DeferredBy
+		}
+		return "waits on work", where, mover
 	case ReasonTrunkBroken:
 		return "waits on work", "trunk", "the trunk fixer"
 	case ReasonTrunkUnproved:
