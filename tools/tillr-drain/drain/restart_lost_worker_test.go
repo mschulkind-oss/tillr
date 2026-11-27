@@ -289,7 +289,7 @@ printf '{"record_version":1,"kind":"land.record","id":"land-1","producer":{"syst
 	if mode == "stop" {
 		// Queue SIGTERM while the replacement cannot dispatch; the CLI then waits
 		// for the session to end, and we also require the OS process to exit.
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), hangGuard)
 		defer cancel()
 		stop := exec.CommandContext(ctx, drainBin(t), "stop", "--root", f.root, "--store", f.store)
 		stopDone := make(chan error, 1)
@@ -311,7 +311,7 @@ printf '{"record_version":1,"kind":"land.record","id":"land-1","producer":{"syst
 			t.Fatal(err)
 		}
 		if err := <-stopDone; err != nil {
-			t.Fatal(err)
+			t.Fatalf("%v\n%s", err, s.output(t))
 		}
 		select {
 		case err := <-exited:

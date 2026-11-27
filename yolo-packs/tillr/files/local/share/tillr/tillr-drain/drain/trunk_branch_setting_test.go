@@ -292,7 +292,7 @@ func TestTrunkBranchMainCheckoutOnOtherBranch(t *testing.T) {
 	// Switch main checkout to an unrelated branch `work` and keep it there.
 	git("checkout", "-b", "work", initialDev)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), hangGuard)
 	defer cancel()
 	dbPath := filepath.Join(t.TempDir(), "state.db")
 	s, err := store.InitFixture(ctx, dbPath)
