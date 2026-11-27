@@ -90,4 +90,43 @@ func TestLoopCheckAdapter(t *testing.T) {
 			t.Fatalf("code = %d, want 0; out:\n%s", code, out)
 		}
 	})
+
+	t.Run("shipped-relative-adapter-resolves-from-install-root", func(t *testing.T) {
+		const relAdapter = "tools/tillr-run/backends/claude/run-claude"
+		root, storePath, policyPath, installRoot := setup(t, relAdapter)
+		installedAdapter := filepath.Join(installRoot, "tillr-run", "backends", "claude", "run-claude")
+		if err := os.MkdirAll(filepath.Dir(installedAdapter), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(installedAdapter, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+
+		code, out := invokeInDir(t, root, installRoot,
+			"loop", "--check", "--root", root, "--store", storePath, "--policy", policyPath,
+			"--gate", "true", "--land", "true", "--verdict", "true")
+		if code != 0 {
+			t.Fatalf("code = %d, want 0; out:\n%s", code, out)
+		}
+	})
+
+	t.Run("shipped-relative-adapter-missing-names-both-locations", func(t *testing.T) {
+		const relAdapter = "tools/tillr-run/backends/claude/run-claude"
+		root, storePath, policyPath, installRoot := setup(t, relAdapter)
+		wantRepoPath := filepath.Join(root, relAdapter)
+		wantInstallPath := filepath.Join(installRoot, "tillr-run", "backends", "claude", "run-claude")
+
+		code, out := invokeInDir(t, root, installRoot,
+			"loop", "--check", "--root", root, "--store", storePath, "--policy", policyPath,
+			"--gate", "true", "--land", "true", "--verdict", "true")
+		if code != record.ExitUsage {
+			t.Fatalf("code = %d, want %d; out:\n%s", code, record.ExitUsage, out)
+		}
+		if !strings.Contains(out, wantRepoPath) {
+			t.Fatalf("refusal did not name operated repository path %q:\n%s", wantRepoPath, out)
+		}
+		if !strings.Contains(out, wantInstallPath) {
+			t.Fatalf("refusal did not name installed adapter path %q:\n%s", wantInstallPath, out)
+		}
+	})
 }

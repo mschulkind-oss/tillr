@@ -313,10 +313,25 @@ To spread fresh dispatches across backends, give every entry of a seat a positiv
 }
 ```
 
-Each named backend needs a row in the policy's `backends` map. Its `adapter` may be
-`run-pi`, `run-claude`, `run-agy` or `run-muse`: tillr resolves that name to its own
-installed executable, independently of the backend key. A missing installed executable
-is an error, not a PATH lookup. Explicit adapter paths retain their existing meaning.
+Each named backend needs a row in the policy's `backends` map. Tillr resolves `adapter` in
+this order:
+
+1. **Built-in adapter names** (`run-pi`, `run-claude`, `run-agy`, `run-muse`): resolved
+   directly to tillr's installed executable under `$TILLR_INSTALL_ROOT/tillr-run/backends/`
+   (or `<checkout>/tools/tillr-run/backends/` on a direct source invocation), independently
+   of the backend key. A missing installed executable is an error, not a `PATH` lookup.
+2. **Absolute paths**: used as given.
+3. **Relative shipped adapter paths** under `tools/tillr-run/backends/` (for example,
+   `tools/tillr-run/backends/claude/run-claude`): resolved first under the operated
+   repository root (`<root>/<adapter>`), then against tillr's installed backends directory
+   (`$TILLR_INSTALL_ROOT/tillr-run/backends/<rest>`, or `<checkout>/tools/tillr-run/backends/<rest>`
+   on a direct source invocation) when the operated repository has no file at the relative
+   path. When neither location has the adapter, validation refuses and names every location
+   tried.
+4. **Other relative paths** (containing a path separator): resolved under the operated
+   repository root (`<root>/<adapter>`).
+5. **Other bare command names** (no path separator): looked up on `PATH`.
+
 Direct source invocations use the source checkout; a binary run elsewhere can set
 `TILLR_INSTALL_ROOT` to the rendered installation root.
 

@@ -178,42 +178,37 @@ func CheckAdapterWithOrigin(root, adapter string) (string, bool, error) {
 		return checked, false, err
 	}
 	if strings.ContainsRune(adapter, filepath.Separator) {
+		firstPath := adapter
 		if root != "" {
 			base := root
 			if absRoot, err := filepath.Abs(root); err == nil {
 				base = absRoot
 			}
-			rootPath := filepath.Join(base, adapter)
-			if _, err := os.Stat(rootPath); err == nil {
-				checked, err := checkExecutableFile(adapter, rootPath)
-				return checked, false, err
-			}
-			clean := filepath.ToSlash(filepath.Clean(adapter))
-			if rest, ok := strings.CutPrefix(clean, relBackendsPrefix); ok && rest != "" {
-				backendsDir, err := resolveBackendsDir()
-				if err != nil {
-					return "", true, fmt.Errorf("adapter %q (%s) is missing and fallback failed: %w", adapter, rootPath, err)
-				}
-				checked, err := checkExecutableFile(adapter, filepath.Join(backendsDir, filepath.FromSlash(rest)))
-				return checked, true, err
-			}
-			checked, err := checkExecutableFile(adapter, rootPath)
-			return checked, false, err
+			firstPath = filepath.Join(base, adapter)
+		} else if absAdapter, err := filepath.Abs(adapter); err == nil {
+			firstPath = absAdapter
 		}
-		if _, err := os.Stat(adapter); err == nil {
-			checked, err := checkExecutableFile(adapter, adapter)
+		if _, err := os.Stat(firstPath); err == nil {
+			checked, err := checkExecutableFile(adapter, firstPath)
 			return checked, false, err
 		}
 		clean := filepath.ToSlash(filepath.Clean(adapter))
 		if rest, ok := strings.CutPrefix(clean, relBackendsPrefix); ok && rest != "" {
 			backendsDir, err := resolveBackendsDir()
 			if err != nil {
-				return "", true, fmt.Errorf("adapter %q is missing and fallback failed: %w", adapter, err)
+				return "", true, fmt.Errorf("adapter %q is missing (tried %s; installed backends fallback failed: %w)", adapter, firstPath, err)
 			}
-			checked, err := checkExecutableFile(adapter, filepath.Join(backendsDir, filepath.FromSlash(rest)))
-			return checked, true, err
+			installPath := filepath.Join(backendsDir, filepath.FromSlash(rest))
+			checked, err := checkExecutableFile(adapter, installPath)
+			if err != nil {
+				if errors.Is(err, os.ErrNotExist) {
+					return "", true, fmt.Errorf("adapter %q is missing (tried %s and %s): %w", adapter, firstPath, installPath, err)
+				}
+				return "", true, fmt.Errorf("adapter %q (tried %s, found %s): %w", adapter, firstPath, installPath, err)
+			}
+			return checked, true, nil
 		}
-		checked, err := checkExecutableFile(adapter, adapter)
+		checked, err := checkExecutableFile(adapter, firstPath)
 		return checked, false, err
 	}
 	resolved, err := exec.LookPath(adapter)

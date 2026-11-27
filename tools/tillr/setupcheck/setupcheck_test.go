@@ -85,9 +85,62 @@ func TestCheckAdapterRelativeAndFallback(t *testing.T) {
 		t.Fatalf("unexpected fallback path %q", got)
 	}
 
-	// Relative tools/tillr-run/backends/... missing everywhere fails.
-	if _, err := CheckAdapter(root, filepath.Join("tools", "tillr-run", "backends", "pi", "missing-bin")); err == nil || !strings.Contains(err.Error(), "missing") {
-		t.Fatalf("expected missing error, got %v", err)
+	// Relative tools/tillr-run/backends/... missing everywhere fails and names both locations tried.
+	missingRel := filepath.Join("tools", "tillr-run", "backends", "pi", "missing-bin")
+	if _, err := CheckAdapter(root, missingRel); err == nil {
+		t.Fatalf("expected missing error, got nil")
+	} else {
+		wantRoot := filepath.Join(root, missingRel)
+		if !strings.Contains(err.Error(), "missing") || !strings.Contains(err.Error(), wantRoot) || !strings.Contains(err.Error(), "missing-bin") {
+			t.Fatalf("expected refusal naming both locations tried (%s and installed path), got: %v", wantRoot, err)
+		}
+	}
+
+	// Installed copy via TILLR_INSTALL_ROOT resolves relative shipped adapter paths
+	// when the operated repository has no file at the relative path.
+	installRoot := t.TempDir()
+	claudeRel := filepath.Join("tools", "tillr-run", "backends", "claude", "run-claude")
+	installedClaude := writeExecFile(t, filepath.Join(installRoot, "tillr-run", "backends", "claude", "run-claude"), 0o755)
+	t.Setenv("TILLR_INSTALL_ROOT", installRoot)
+
+	got, fromInstall, err := CheckAdapterWithOrigin(root, claudeRel)
+	if err != nil {
+		t.Fatalf("CheckAdapterWithOrigin(install fallback) failed: %v", err)
+	}
+	if !fromInstall || got != installedClaude {
+		t.Fatalf("got (%q, %v), want (%q, true)", got, fromInstall, installedClaude)
+	}
+
+	// Missing in both the operated repository and TILLR_INSTALL_ROOT names both locations tried.
+	missingClaudeRel := filepath.Join("tools", "tillr-run", "backends", "claude", "missing-claude")
+	wantRootMissing := filepath.Join(root, missingClaudeRel)
+	wantInstallMissing := filepath.Join(installRoot, "tillr-run", "backends", "claude", "missing-claude")
+	if _, _, err := CheckAdapterWithOrigin(root, missingClaudeRel); err == nil {
+		t.Fatalf("expected missing error for %s", missingClaudeRel)
+	} else if !strings.Contains(err.Error(), wantRootMissing) || !strings.Contains(err.Error(), wantInstallMissing) {
+		t.Fatalf("refusal must name both %q and %q, got: %v", wantRootMissing, wantInstallMissing, err)
+	}
+
+	// Missing backends directory under TILLR_INSTALL_ROOT names both the repo path and the install path.
+	emptyInstall := t.TempDir()
+	t.Setenv("TILLR_INSTALL_ROOT", emptyInstall)
+	wantRootClaude := filepath.Join(root, claudeRel)
+	wantInstallBackends := filepath.Join(emptyInstall, "tillr-run", "backends")
+	if _, _, err := CheckAdapterWithOrigin(root, claudeRel); err == nil {
+		t.Fatalf("expected error when install backends dir is missing")
+	} else if !strings.Contains(err.Error(), wantRootClaude) || !strings.Contains(err.Error(), wantInstallBackends) {
+		t.Fatalf("refusal must name both %q and %q, got: %v", wantRootClaude, wantInstallBackends, err)
+	}
+
+	// Operated repository wins over TILLR_INSTALL_ROOT when both exist.
+	t.Setenv("TILLR_INSTALL_ROOT", installRoot)
+	repoClaude := writeExecFile(t, filepath.Join(root, claudeRel), 0o755)
+	got, fromInstall, err = CheckAdapterWithOrigin(root, claudeRel)
+	if err != nil {
+		t.Fatalf("CheckAdapterWithOrigin(repo precedence) failed: %v", err)
+	}
+	if fromInstall || got != repoClaude {
+		t.Fatalf("got (%q, %v), want (%q, false)", got, fromInstall, repoClaude)
 	}
 }
 
