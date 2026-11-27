@@ -202,6 +202,9 @@ func (l *Loop) settleEvaluator(ctx context.Context, d Decision, rec run.Record, 
 		return true, err
 	}
 	if c.NoChange != nil {
+		if err := l.stampMirroredDesignBuiltOnNoChange(ctx, d, c); err != nil {
+			return true, err
+		}
 		if err := l.completeNoChangeExit(ctx, d, c); err != nil {
 			return true, err
 		}

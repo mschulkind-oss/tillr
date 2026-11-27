@@ -828,6 +828,32 @@ func (l *Loop) settleNodeFormat(ctx context.Context, d Decision, rec run.Record,
 		}
 		if footer != "done" && footer != "failed" && !noChangeAllowed {
 			if footer == "blocked" {
+				if detail, ok := needsCompanionPlanSliceHold(d, stage, log); ok {
+					if !l.nonLanding && (head != base || head != nodeBase || strings.TrimSpace(dirty) != "") {
+						if err := l.nodeOutcome(ctx, d, "refused"); err != nil {
+							return true, err
+						}
+						refDetail := fmt.Sprintf("node %s reported %s with uncommitted or committed work", stage.ID, ReasonNeedsCompanionPlanSlice)
+						c := Candidate{ItemID: d.ItemID, LaneID: d.LaneID, RunID: rec.RunID, Worktree: target, BaseSHA: base, HeadSHA: head, RefusalDetail: refDetail}
+						if err := l.refuse(ctx, c, result, RefusalFence); err != nil {
+							return true, err
+						}
+						if stop := l.abandon(ctx, d.LaneID, rec.RunID, head, refDetail); stop != "" {
+							return true, retainedAfter(d.LaneID, stop)
+						}
+						return true, l.markExamined(ctx, d)
+					}
+					if err := l.holdItemFault(ctx, Candidate{ItemID: d.ItemID, RunID: rec.RunID, LaneID: d.LaneID, BaseSHA: base, HeadSHA: head}, ReasonNeedsCompanionPlanSlice, detail); err != nil {
+						return true, err
+					}
+					if err := l.nodeOutcome(ctx, d, "blocked"); err != nil {
+						return true, err
+					}
+					if stop := l.abandonFromBase(ctx, d.LaneID, rec.RunID, head, l.settleBase(d.LaneID, base), ReasonNeedsCompanionPlanSlice); stop != "" {
+						return true, retainedAfter(d.LaneID, stop)
+					}
+					return true, l.markExamined(ctx, d)
+				}
 				if writer, finding := missingCandidateFinding(d, base, head, dirty, log); writer >= 0 {
 					ready, err := l.canReturnMissingCandidate(ctx, d, writer)
 					if err != nil {

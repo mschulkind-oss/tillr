@@ -1739,12 +1739,6 @@ func (p *planner) decide(item itemRow, edges []itemEdge) Decision {
 	case questions.reason != "":
 		decision.Action, decision.Reason = ActionHold, questions.reason
 		decision.QuestionID = questions.questionID
-	case strings.HasPrefix(item.ItemID, "item-design-") && item.State == p.rules().Ready:
-		if item.Seat == "plan" {
-			decision.Action, decision.Reason = ActionHold, ReasonAwaitingOQQM3
-		} else {
-			decision.Action, decision.Reason = ActionHold, ReasonAwaitingOQQM2
-		}
 	case retry != nil && retry.refusal != "":
 		// The operator claimed this run was the harness's failure and the store says
 		// otherwise: the claim is recorded, and the decision names why it does not hold.

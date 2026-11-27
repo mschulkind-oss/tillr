@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strings"
 
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr/store"
@@ -106,6 +107,9 @@ func selectWorkflowFromStored(stored storedWorkflowSelection, root string, row i
 	selected, source = row.Workflow, "block"
 	if selected == "" {
 		selected, source = defaults[row.Seat], "default"
+	}
+	if selected == "" && strings.HasPrefix(row.ItemID, "item-design-") && row.Seat == "plan" {
+		selected, source = "planned-build@v1", "default"
 	}
 	if selected == "" {
 		return nil, singleWorkerWorkflow, "implicit", nil

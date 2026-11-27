@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
@@ -254,4 +255,114 @@ func (l *Loop) completeNoChangeExit(ctx context.Context, d Decision, c Candidate
 			"base_sha":   c.BaseSHA,
 		}, at)
 	})
+}
+
+func needsCompanionPlanSliceHold(d Decision, stage WorkflowStage, log string) (string, bool) {
+	if !strings.HasPrefix(d.ItemID, "item-design-") || stage.ID != "plan" {
+		return "", false
+	}
+	obs := parseObstacle(log)
+	if obs.Problem != "" || obs.Kind != ObstacleDefinition {
+		return "", false
+	}
+	ev := strings.TrimSpace(obs.Field("EVIDENCE"))
+	if !strings.HasPrefix(strings.ToLower(ev), ReasonNeedsCompanionPlanSlice) {
+		return "", false
+	}
+	return ev, true
+}
+
+func stampDesignStageBuilt(raw []byte) ([]byte, bool) {
+	text := string(raw)
+	lines := strings.Split(text, "\n")
+	if len(lines) < 3 || strings.TrimSpace(lines[0]) != "---" {
+		return raw, false
+	}
+	end := -1
+	for i := 1; i < len(lines); i++ {
+		if strings.TrimSpace(lines[i]) == "---" {
+			end = i
+			break
+		}
+		if strings.HasPrefix(lines[i], "stage:") {
+			if strings.TrimSpace(strings.TrimPrefix(lines[i], "stage:")) == "BUILT" {
+				return raw, false
+			}
+			lines[i] = "stage: BUILT"
+			return []byte(strings.Join(lines, "\n")), true
+		}
+	}
+	if end < 0 {
+		return raw, false
+	}
+	updated := make([]string, 0, len(lines)+1)
+	updated = append(updated, lines[:end]...)
+	updated = append(updated, "stage: BUILT")
+	updated = append(updated, lines[end:]...)
+	return []byte(strings.Join(updated, "\n")), true
+}
+
+func (l *Loop) stampMirroredDesignBuiltOnNoChange(ctx context.Context, d Decision, c Candidate) error {
+	if !strings.HasPrefix(c.ItemID, "item-design-") || l.nonLanding || c.Worktree == "" {
+		return nil
+	}
+	var designDoc string
+	if err := l.readStore(ctx, func(r *store.Reader) error {
+		return r.QueryRow(`SELECT COALESCE(design_doc, '') FROM items WHERE item_id = ?`, c.ItemID).Scan(&designDoc)
+	}); err != nil {
+		return err
+	}
+	docPath, _, _ := strings.Cut(designDoc, "#")
+	docPath = strings.TrimSpace(docPath)
+	if docPath == "" {
+		return nil
+	}
+	fullPath := filepath.Join(c.Worktree, filepath.FromSlash(docPath))
+	raw, err := os.ReadFile(fullPath)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	updated, changed := stampDesignStageBuilt(raw)
+	if !changed {
+		return nil
+	}
+	if err := os.WriteFile(fullPath, updated, 0o644); err != nil {
+		return err
+	}
+	if _, err := l.git(ctx, c.Worktree, "add", "--", docPath); err != nil {
+		return err
+	}
+	if _, err := l.git(ctx, c.Worktree, "commit", "-m", "docs: mark "+docPath+" built"); err != nil {
+		return err
+	}
+	newHead, err := l.git(ctx, c.Worktree, "rev-parse", "HEAD")
+	if err != nil {
+		return err
+	}
+	stampCand := Candidate{
+		ItemID:   c.ItemID,
+		LaneID:   c.LaneID,
+		RunID:    c.RunID,
+		Worktree: c.Worktree,
+		BaseSHA:  c.BaseSHA,
+		HeadSHA:  strings.TrimSpace(newHead),
+	}
+	gate, err := l.cfg.Steps.Gate(ctx, stampCand)
+	if err != nil {
+		return err
+	}
+	if gate.Outcome != GatePassed && gate.Outcome != GatePassedInherited {
+		return Externalf("stamping %s BUILT failed gate (%s): %s", docPath, gate.Outcome, strings.Join(gate.FailingChecks, ", "))
+	}
+	land, err := l.cfg.Steps.Land(ctx, stampCand)
+	if err != nil {
+		return err
+	}
+	if land.Result != LandLanded {
+		return Externalf("stamping %s BUILT refused to land (%s): %s", docPath, land.Result, land.Reason)
+	}
+	return nil
 }

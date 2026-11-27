@@ -88,7 +88,7 @@ var generalHolds = map[string]string{
 	ReasonPiExtensionsBuildFailed: "",
 	ReasonObstacleOwner:           "", ReasonObstacleTooling: "",
 	ReasonObstacleSeat: "", ReasonObstacleDefinition: "",
-	ReasonIcebox: "", ReasonAwaitingOQQM2: "", ReasonAwaitingOQQM3: "",
+	ReasonIcebox: "", ReasonNeedsCompanionPlanSlice: "",
 	ReasonSplitCallDesign: "",
 }
 

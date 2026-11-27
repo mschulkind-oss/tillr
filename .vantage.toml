@@ -17,7 +17,7 @@ exclude = ["yolo-packs/tillr/files/local/share/tillr/docs/**"]
 # Declaring all seven is deliberate: a short table fails every other word on
 # `planning/stage-vocabulary`, so a word added here is a word the whole tree may use.
 [planning.stages]
-SKETCH = "open"       # thinking out loud; nobody should act on it
+SKETCH = "open"       # early notes; still open — park in a roadmap's Icebox to hold back
 DESIGN = "open"       # owes a ruling from the owner
 DECIDED = "ready"     # every ruling is in; nothing is built
 BUILT = "built"       # nothing owed; a graduation candidate

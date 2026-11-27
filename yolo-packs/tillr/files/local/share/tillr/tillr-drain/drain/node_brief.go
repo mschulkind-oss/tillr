@@ -40,6 +40,13 @@ func (s *LaneStager) workflowNodeBrief(spec StageSpec, brief string, landing boo
 	if spec.Node.Prompt != "" {
 		brief += "\nNode task: " + spec.Node.Prompt + "\n"
 	}
+	if landing && spec.Node.ID == "plan" && strings.HasPrefix(spec.ItemID, "item-design-") {
+		brief += "\n## Mirrored design instructions\n\n" +
+			"This item mirrors a design document (`" + spec.ItemID + "`):\n" +
+			"- If the design is already satisfied on HEAD through other commits, leave the target clean at base, write neither do-it-now nor a proposal, and end with CAUSE:, EVIDENCE:, WHY_NO_CHANGE:, and RESULT: no_change. Once verify confirms no_change, the loop stamps the design document `stage: BUILT` and closes this item without building it a second time.\n" +
+			"- If the design fits one commit, build it (via do-it-now or work) and stamp the design document `stage: BUILT` in that commit.\n" +
+			"- If the design needs several commits (cannot fit in one commit), commit nothing, leave the target clean at base, write neither do-it-now nor a proposal, and end with OBSTACLE: definition, CRITERIA: c1, EVIDENCE: " + ReasonNeedsCompanionPlanSlice + ": <reason>, and RESULT: blocked so the item holds for Slice 2's companion-plan piece reader.\n"
+	}
 	if spec.Node.Seat == "plan" {
 		guidance, err := os.ReadFile(filepath.Join(s.Root, "config/tillr/plan-guidance.md"))
 		if err != nil && !os.IsNotExist(err) {
