@@ -100,7 +100,17 @@ func checkEvaluator(_ context.Context, r *store.Reader, v verdictPayload) error 
 	if v.ActorKind != ActorAgent {
 		return nil
 	}
-	binding, classes, err := readEvaluator(r, v.ItemID)
+	var (
+		binding EvaluatorBinding
+		classes []string
+		err     error
+	)
+	if v.EvaluatorBinding.Workflow == SplitClosingWorkflow {
+		binding, err = SplitClosingEvaluatorBinding(r, v.ItemID)
+		classes = []string{ClaimVerification, ClaimRedGateTriage, ClaimDirection}
+	} else {
+		binding, classes, err = readEvaluator(r, v.ItemID)
+	}
 	if err != nil {
 		return err
 	}

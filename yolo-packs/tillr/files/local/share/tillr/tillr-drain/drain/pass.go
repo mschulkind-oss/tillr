@@ -3206,6 +3206,16 @@ func (l *Loop) passMode(ctx context.Context, result *LoopResult, pendingOnly boo
 	if stop != "" || err != nil {
 		return stop, err
 	}
+	var splitClosingWorked bool
+	if !l.nonLanding {
+		if err := l.timePassPhase("advance_split_closing_checks", func() error {
+			worked, err := l.advanceSplitClosingChecks(ctx, mainSHA, result)
+			splitClosingWorked = worked
+			return err
+		}); err != nil {
+			return "", err
+		}
+	}
 	var commentChecks []plannedApplication
 	plan := func(ctx context.Context, at time.Time, generation *string) ([]plannedApplication, []LaneLease, error) {
 		endPlan := l.startPassPhase("plan")
@@ -3319,7 +3329,7 @@ func (l *Loop) passMode(ctx context.Context, result *LoopResult, pendingOnly boo
 			watched = append(watched, lane)
 		}
 	}
-	stale := maintenanceDrained > 0
+	stale := maintenanceDrained > 0 || splitClosingWorked
 	// A staging refusal that took its lane out of rotation re-plans the item in this same
 	// pass, so it is offered the next free lane; each re-plan removes a lane, so this is
 	// bounded by the lane count.

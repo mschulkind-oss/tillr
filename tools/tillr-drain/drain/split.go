@@ -11,12 +11,11 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
-	"unicode/utf16"
 	"unicode/utf8"
 
+	"github.com/mschulkind-oss/tillr-drain/internal/splitclosing"
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/definition"
@@ -105,32 +104,7 @@ func FileSplit(ctx context.Context, root, path, parent string, input io.Reader, 
 // checkSplitJSONSurrogates walks escapes before any JSON decoding can discard
 // their original spelling. The JSON decoder still checks all syntax.
 func checkSplitJSONSurrogates(raw []byte) error {
-	codeUnit := func(b []byte) rune {
-		if len(b) < 6 || b[0] != '\\' || b[1] != 'u' {
-			return -1
-		}
-		u, err := strconv.ParseUint(string(b[2:6]), 16, 16)
-		if err != nil {
-			return -1
-		}
-		return rune(u)
-	}
-	for i := 0; i+1 < len(raw); i++ {
-		if raw[i] != '\\' {
-			continue
-		}
-		u := codeUnit(raw[i:])
-		if !utf16.IsSurrogate(u) {
-			i++ // Includes an escaped backslash: its following 'u' is literal.
-			continue
-		}
-		v := codeUnit(raw[i+6:])
-		if u >= 0xdc00 || v < 0xdc00 || v > 0xdfff {
-			return fmt.Errorf("unpaired surrogate escape at byte %d", i+1)
-		}
-		i += 11 // Skip both six-byte escapes, including the low surrogate.
-	}
-	return nil
+	return splitclosing.CheckSplitJSONSurrogates(raw)
 }
 
 // checkSplitJSONKeys checks exact field spellings after the typed decode checked
@@ -174,9 +148,9 @@ func checkSplitJSONKeys(raw []byte) error {
 	return nil
 }
 
-// splitWait describes a blocked parent without releasing it. Until there is a
-// closing verifier, a parent with all required parts landed needs the operator.
-func splitWait(row *WhyRow, blockers []string, states map[string]string, def definition.Definition) {
+// splitWait describes a blocked parent without releasing it, reading the current
+// split-closing state when all required parts have landed.
+func splitWait(r *store.Reader, row *WhyRow, parent string, blockers []string, states map[string]string, def definition.Definition) error {
 	row.ClassSource = "store"
 	row.WaitingOn = []string{}
 	for _, id := range blockers {
@@ -185,10 +159,37 @@ func splitWait(row *WhyRow, blockers []string, states map[string]string, def def
 		}
 	}
 	if len(row.WaitingOn) == 0 {
-		row.Class, row.Mover = "needs you", "check the parent's criteria by hand"
-		row.Why = "required parts have landed; check the parent's criteria by hand"
+		st, err := splitclosing.ReadState(r, parent)
+		if err != nil {
+			return err
+		}
+		if st.Held != nil {
+			if st.Held.Mover == "owner" {
+				row.Class = "needs you"
+				row.Mover = "owner; " + st.Held.Reason
+			} else {
+				row.Class = "waits on work"
+				row.Mover = st.Held.Mover
+			}
+			row.Why = st.Held.Reason
+			row.tableReason = row.Why
+			return nil
+		}
+		if st.Finding != nil {
+			row.Class = "waits on work"
+			row.Mover = "design"
+			why := splitclosing.FormatFindingWhy(st.Finding)
+			if st.Refused != nil && strings.TrimSpace(st.Refused.Reason) != "" {
+				why += "; prior extension refused: " + st.Refused.Reason
+			}
+			row.Why = why
+			row.tableReason = row.Why
+			return nil
+		}
+		row.Class, row.Mover = "waits on work", "review"
+		row.Why = "required parts have landed; waiting on the closing check"
 		row.tableReason = row.Why
-		return
+		return nil
 	}
 	row.Class, row.Why = "waits on work", "waiting for required parts to land"
 	row.Mover = strings.Join(row.WaitingOn, ", ")
@@ -196,9 +197,10 @@ func splitWait(row *WhyRow, blockers []string, states map[string]string, def def
 		if finishedState(def, states[id]) {
 			row.Class, row.Mover = "needs you", "owner; required part did not land: "+id
 			row.Why = "required part did not land: " + id + " (" + states[id] + ")"
-			return
+			return nil
 		}
 	}
+	return nil
 }
 
 func readItemTitles(r *store.Reader) (map[string]string, error) {
@@ -311,9 +313,11 @@ func decorateSplitParents(answer *WhyAnswer, splits map[string]item.SplitStateme
 			row.Why = summary + "; required part did not land: " + id + " (" + states[id] + ")"
 			row.tableReason = row.Why
 		case sp.RequiredLanded == sp.RequiredParts:
-			row.Class = "needs you"
-			row.Mover = "operator; check the parent's criteria by hand"
-			row.Why = summary + "; check the parent's criteria by hand"
+			if row.Why != "" {
+				row.Why = summary + "; " + row.Why
+			} else {
+				row.Why = summary + "; waiting on the closing check"
+			}
 			row.tableReason = row.Why
 		case len(sp.HeldParts) > 0:
 			heldDetails := make([]string, 0, len(sp.HeldParts))
@@ -821,4 +825,38 @@ func (l *Loop) settleSplitCallRun(ctx context.Context, decision Decision, reques
 		return laneOutcome{stop: l.abandon(ctx, lane, request.RunID, l.headOf(ctx, lane), "rejected split statement")}
 	}
 	return laneOutcome{stop: l.abandon(ctx, lane, request.RunID, l.headOf(ctx, lane), "split statement filed")}
+}
+
+func (l *Loop) advanceSplitClosingChecks(ctx context.Context, mainSHA string, result *LoopResult) (bool, error) {
+	return splitclosing.Advance(ctx, splitclosing.Env{
+		NonLanding: l.nonLanding,
+		Root:       l.cfg.Root,
+		Store:      l.cfg.Store,
+		LaneRoot:   l.cfg.LaneRoot,
+		TrunkRef:   l.trunkRef(),
+		Now:        l.cfg.Now,
+		LaneDir:    l.laneDirPath,
+		RevParse:   l.revParse,
+		SelectSeats: func(seat string) (splitclosing.SeatSelection, bool) {
+			p := l.currentPolicy()
+			if p == nil {
+				return splitclosing.SeatSelection{}, false
+			}
+			return splitclosing.SeatSelection{
+				Backends:  p.SeatList(seat),
+				SeatLines: seatLines(p),
+				Request: func(itemID, laneID, runID, backend string) run.Request {
+					return *p.Request(itemID, laneID, runID, backend)
+				},
+			}, true
+		},
+		RunRestartable:   l.runRestartable,
+		CountSpend:       func(rec run.Record) { l.countSpend(result, rec) },
+		IsRestartPending: func(err error) bool { return errors.Is(err, errRestartPending) },
+		SetItemState: func(ctx context.Context, id, runID, state string) error {
+			return l.cfg.Steps.ItemState(ctx, id, runID, state)
+		},
+		RequestWordsSuffix: requestWordsSuffix,
+		BraceLiteralCount:  braceLiteralCount,
+	}, mainSHA)
 }

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"time"
@@ -45,9 +46,24 @@ type SplitCoverage struct {
 }
 
 const (
-	SplitWaitSource = "split"
-	SplitGapKind    = "item.split-gap"
+	SplitWaitSource      = "split"
+	SplitGapKind         = "item.split-gap"
+	SplitClosingWorkflow = "split-closing-check"
+	SplitClosingNode     = "closing-check"
 )
+
+type SplitPartLanding struct {
+	Label    string `json:"label"`
+	ItemID   string `json:"item_id"`
+	Required bool   `json:"required"`
+	State    string `json:"state"`
+	Commit   string `json:"commit,omitempty"`
+}
+
+type SplitExtension struct {
+	Parts    []SplitPart                `json:"parts"`
+	Coverage map[string][]SplitCoverage `json:"coverage,omitempty"`
+}
 
 // SplitSibling describes a sibling part in a filed split statement.
 type SplitSibling struct {
@@ -315,7 +331,11 @@ func SplitPartID(parent, label string) string {
 }
 
 func splitOrder(parent string, parts []SplitPart) ([]SplitPart, map[string]string, error) {
-	if len(parts) < 2 {
+	return validateSplitParts(parent, parts, 2)
+}
+
+func validateSplitParts(parent string, parts []SplitPart, minParts int) ([]SplitPart, map[string]string, error) {
+	if len(parts) < minParts {
 		return nil, nil, Rejectionf("split-parts", parent, "a split needs at least two parts")
 	}
 	byLabel := map[string]SplitPart{}
@@ -466,16 +486,20 @@ func splitPartWords(words []byte, p SplitPart) []byte {
 // A design answer can replace a design wait, but must not route work around
 // another mover or an outstanding owner ruling. Check live rows in the same
 // transaction as the filing, so a newly placed hold cannot race it.
-func checkSplitParentHolds(r *store.Reader, p itemPayload, blockedState string) error {
+func checkSplitParentHolds(r *store.Reader, p itemPayload, blockedState string, allowSplitWait bool) error {
 	parent := p.ItemID
 	if wait := p.WaitingOn; p.State == blockedState && wait != nil {
-		switch wait.Waiter {
-		case "owner":
-			return Rejectionf("split-owner-hold", parent, "parent %q is held for the owner: %s; ask the owner to authorize the work or keep it held", parent, wait.Reason)
-		case "design":
-			// The statement is the design seat's answer.
-		default:
-			return Rejectionf("split-parent-wait", parent, "parent %q still waits on %s: %s; settle the wait before filing a split", parent, wait.Waiter, wait.Reason)
+		if allowSplitWait && wait.Source == SplitWaitSource {
+			// Extending an active split parent is allowed; owner holds and conflicts are still checked below.
+		} else {
+			switch wait.Waiter {
+			case "owner":
+				return Rejectionf("split-owner-hold", parent, "parent %q is held for the owner: %s; ask the owner to authorize the work or keep it held", parent, wait.Reason)
+			case "design":
+				// The statement is the design seat's answer.
+			default:
+				return Rejectionf("split-parent-wait", parent, "parent %q still waits on %s: %s; settle the wait before filing a split", parent, wait.Waiter, wait.Reason)
+			}
 		}
 	}
 	for _, c := range p.Criteria {
@@ -539,7 +563,7 @@ func FileSplit(ctx context.Context, tx *store.Tx, parent string, statement Split
 	if d.Name != definition.GitLandingName || (p.State != d.Ready && p.State != d.Blocked) {
 		return nil, Rejectionf("split-state", parent, "only a queued or blocked Git-landing request may be split")
 	}
-	if err := checkSplitParentHolds(tx.Reader(), p, d.Blocked); err != nil {
+	if err := checkSplitParentHolds(tx.Reader(), p, d.Blocked, false); err != nil {
 		return nil, err
 	}
 	words, err := RequestWords(tx.Reader(), parent)
@@ -598,6 +622,240 @@ func FileSplit(ctx context.Context, tx *store.Tx, parent string, statement Split
 		return nil, err
 	}
 	return ids, nil
+}
+
+// ReadSplit reads the filed split statement and returns its deterministic label->itemID map.
+func ReadSplit(r *store.Reader, parent string) (*SplitStatement, map[string]string, error) {
+	var raw []byte
+	if err := r.QueryRow(`SELECT statement FROM item_splits WHERE parent_id=?`, parent).Scan(&raw); err != nil {
+		return nil, nil, err
+	}
+	var statement SplitStatement
+	if err := json.Unmarshal(raw, &statement); err != nil {
+		return nil, nil, err
+	}
+	ids := make(map[string]string, len(statement.Parts))
+	for _, p := range statement.Parts {
+		ids[p.Label] = "item-part-" + splitKey(parent, p.Label)
+	}
+	return &statement, ids, nil
+}
+
+// ReadSplitPartLandings returns each part's current state and latest unreverted landed commit SHA.
+func ReadSplitPartLandings(r *store.Reader, parent string) ([]SplitPartLanding, error) {
+	statement, ids, err := ReadSplit(r, parent)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]SplitPartLanding, 0, len(statement.Parts))
+	for _, p := range statement.Parts {
+		itemID := ids[p.Label]
+		var state string
+		if err := r.QueryRow(`SELECT state FROM items WHERE item_id=?`, itemID).Scan(&state); err != nil {
+			return nil, err
+		}
+		landing, err := CurrentLanding(r, itemID)
+		if err != nil {
+			return nil, err
+		}
+		commit := ""
+		if landing != nil {
+			commit = landing.TrunkAfter
+		}
+		out = append(out, SplitPartLanding{
+			Label:    p.Label,
+			ItemID:   itemID,
+			Required: p.Required != nil && *p.Required,
+			State:    state,
+			Commit:   commit,
+		})
+	}
+	return out, nil
+}
+
+// SplitClosingEvaluatorBinding returns the evaluator binding for a split parent's closing check.
+func SplitClosingEvaluatorBinding(r *store.Reader, parent string) (EvaluatorBinding, error) {
+	var raw []byte
+	err := r.QueryRow(`SELECT statement FROM item_splits WHERE parent_id=?`, parent).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return EvaluatorBinding{}, Rejectionf("evaluator-selection", parent, "split parent %q has no filed split statement", parent)
+	}
+	if err != nil {
+		return EvaluatorBinding{}, Internalf("reading split statement: %v", err)
+	}
+	return EvaluatorBinding{
+		Workflow:      SplitClosingWorkflow,
+		EvaluatorNode: SplitClosingNode,
+		GraphSHA256:   CriterionHash(string(raw)),
+	}, nil
+}
+
+// ExtendSplit appends new parts to an existing split statement in the caller's transaction.
+// On any error the caller must roll back. Exact replays are idempotent no-ops.
+func ExtendSplit(ctx context.Context, tx *store.Tx, parent string, ext SplitExtension, at time.Time) (map[string]string, error) {
+	if len(ext.Parts) < 1 {
+		return nil, Rejectionf("split-parts", parent, "a split extension needs at least one part")
+	}
+	var raw []byte
+	err := tx.QueryRow(`SELECT statement FROM item_splits WHERE parent_id=?`, parent).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, Rejectionf("split-not-found", parent, "parent %q has no filed split", parent)
+	}
+	if err != nil {
+		return nil, err
+	}
+	var existing SplitStatement
+	if err := json.Unmarshal(raw, &existing); err != nil {
+		return nil, err
+	}
+	existingByLabel := make(map[string]SplitPart, len(existing.Parts))
+	for _, ep := range existing.Parts {
+		existingByLabel[ep.Label] = ep
+	}
+
+	seenNew := make(map[string]bool, len(ext.Parts))
+	newIDs := make(map[string]string, len(ext.Parts))
+	existingMatches := 0
+	for _, p := range ext.Parts {
+		if p.Label == "" || strings.ContainsFunc(p.Label, func(r rune) bool {
+			return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_')
+		}) {
+			return nil, Rejectionf("split-label", parent, "invalid part label %q: use letters, digits, hyphens or underscores", p.Label)
+		}
+		if seenNew[p.Label] {
+			return nil, Rejectionf("split-label", parent, "duplicate part label %q", p.Label)
+		}
+		seenNew[p.Label] = true
+		newIDs[p.Label] = "item-part-" + splitKey(parent, p.Label)
+		if ep, ok := existingByLabel[p.Label]; ok {
+			existingMatches++
+			if !reflect.DeepEqual(p, ep) {
+				return nil, Rejectionf("split-differs", parent, "part %q already exists in parent %q with different fields", p.Label, parent)
+			}
+		}
+	}
+	if existingMatches == len(ext.Parts) {
+		if len(ext.Coverage) > 0 && !reflect.DeepEqual(ext.Coverage, existing.Coverage) {
+			return nil, Rejectionf("split-differs", parent, "parent %q already has a different coverage map", parent)
+		}
+		return newIDs, nil
+	}
+	if existingMatches > 0 {
+		for _, p := range ext.Parts {
+			if _, ok := existingByLabel[p.Label]; ok {
+				return nil, Rejectionf("split-label", parent, "part %q already exists in parent %q", p.Label, parent)
+			}
+		}
+	}
+
+	hasRequired := false
+	for _, p := range ext.Parts {
+		if strings.TrimSpace(p.Share) == "" || p.Required == nil {
+			return nil, Rejectionf("split-part", parent, "part %q needs its share and an explicit required choice", p.Label)
+		}
+		if *p.Required {
+			hasRequired = true
+		}
+	}
+	if !hasRequired {
+		return nil, Rejectionf("split-parts", parent, "a split extension needs at least one required part")
+	}
+
+	combinedParts := make([]SplitPart, 0, len(existing.Parts)+len(ext.Parts))
+	combinedParts = append(combinedParts, existing.Parts...)
+	combinedParts = append(combinedParts, ext.Parts...)
+	order, ids, err := validateSplitParts(parent, combinedParts, 2)
+	if err != nil {
+		return nil, err
+	}
+
+	p, _, err := readStoredItem(tx.Reader(), parent)
+	if err != nil {
+		return nil, err
+	}
+	d, err := itemDefinition(tx.Reader())
+	if err != nil {
+		return nil, err
+	}
+	if d.Name != definition.GitLandingName || p.State != d.Blocked || p.WaitingOn == nil || p.WaitingOn.Source != SplitWaitSource {
+		return nil, Rejectionf("split-state", parent, "only a blocked split parent waiting on %q may be extended", SplitWaitSource)
+	}
+	if err := checkSplitParentHolds(tx.Reader(), p, d.Blocked, true); err != nil {
+		return nil, err
+	}
+	words, err := RequestWords(tx.Reader(), parent)
+	if err != nil {
+		return nil, err
+	}
+	if words == nil {
+		return nil, Rejectionf("split-parent", parent, "parent %q has no saved request words", parent)
+	}
+
+	coverage := existing.Coverage
+	if len(ext.Coverage) > 0 {
+		requiredParts := map[string]bool{}
+		for _, part := range order {
+			if *part.Required {
+				requiredParts[part.Label] = true
+			}
+		}
+		if err := checkSplitCoverage(parent, p.Criteria, ext.Coverage, ids, requiredParts); err != nil {
+			return nil, err
+		}
+		coverage = ext.Coverage
+	}
+
+	allRequired := []string{}
+	for _, part := range order {
+		if *part.Required {
+			allRequired = append(allRequired, ids[part.Label])
+		}
+		if _, isExisting := existingByLabel[part.Label]; isExisting {
+			continue
+		}
+		f := RequestFiling{
+			Words:       splitPartWords(words, part),
+			Title:       part.Title,
+			Criteria:    part.Criteria,
+			Ordinary:    !p.Express,
+			Destination: Destination{Before: parent},
+			At:          at,
+			By:          "design",
+			Via:         "split",
+		}
+		for _, label := range part.Follows {
+			f.BlockedBy = append(f.BlockedBy, ids[label])
+		}
+		if err := normalizeRequest(&f); err != nil {
+			return nil, Rejectionf("split-part", parent, "part %q: %v", part.Label, err)
+		}
+		id := ids[part.Label]
+		exists, err := itemExists(ctx, tx.Reader(), id)
+		if err != nil {
+			return nil, err
+		}
+		if exists {
+			return nil, Rejectionf("split-part-exists", parent, "part %q would reuse existing item %s", part.Label, id)
+		}
+		if _, err := insertRequest(ctx, tx, f, id, "split:"+splitKey(parent, part.Label), requestInputHash(f)); err != nil {
+			return nil, err
+		}
+	}
+	if _, err := SetDeps(ctx, tx, parent, allRequired, nil, at); err != nil {
+		return nil, err
+	}
+	grown := SplitStatement{
+		Parts:    combinedParts,
+		Coverage: coverage,
+	}
+	grownRaw, err := json.Marshal(grown)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := tx.Exec(`UPDATE item_splits SET statement=? WHERE parent_id=?`, grownRaw, parent); err != nil {
+		return nil, err
+	}
+	return newIDs, nil
 }
 
 // SplitRequiredParts reads the filed requirements, not a mutable queue edge.

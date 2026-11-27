@@ -1,19 +1,18 @@
 package drain
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 
+	"github.com/mschulkind-oss/tillr-drain/internal/splitclosing"
 	"github.com/mschulkind-oss/tillr-drain/workflow"
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/store"
@@ -318,57 +317,7 @@ func checkNodeOutputs(root string, d Decision) ([]nodeArtifact, error) {
 // Token traversal keeps object keys at every depth; unmarshaling into a map
 // would silently replace the first occurrence of a duplicate key.
 func uniqueJSON(raw []byte) error {
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.UseNumber()
-	var value func() error
-	value = func() error {
-		token, err := decoder.Token()
-		if err != nil {
-			return err
-		}
-		delim, ok := token.(json.Delim)
-		if !ok {
-			return nil
-		}
-		switch delim {
-		case '{':
-			keys := map[string]bool{}
-			for decoder.More() {
-				key, err := decoder.Token()
-				if err != nil {
-					return err
-				}
-				name, ok := key.(string)
-				if !ok {
-					return fmt.Errorf("expected object key")
-				}
-				if keys[name] {
-					return fmt.Errorf("duplicate key %q", name)
-				}
-				keys[name] = true
-				if err := value(); err != nil {
-					return err
-				}
-			}
-		case '[':
-			for decoder.More() {
-				if err := value(); err != nil {
-					return err
-				}
-			}
-		default:
-			return fmt.Errorf("unexpected delimiter %s", delim)
-		}
-		_, err = decoder.Token()
-		return err
-	}
-	if err := value(); err != nil {
-		return err
-	}
-	if _, err := decoder.Token(); err != io.EOF {
-		return fmt.Errorf("trailing JSON content")
-	}
-	return nil
+	return splitclosing.UniqueJSON(raw)
 }
 
 // Acceptance and the passed outcome share a transaction. A crash cannot leave

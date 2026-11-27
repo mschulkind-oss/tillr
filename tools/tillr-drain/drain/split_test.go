@@ -127,7 +127,7 @@ func TestFileSplitFilesPartsAndKeepsParentHeld(t *testing.T) {
 		}
 		return nil
 	})
-	checkWhy := func(operator bool) {
+	checkWhy := func(closingCheck bool) {
 		t.Helper()
 		s, err := store.OpenRead(ctx, f.storePath)
 		if err != nil {
@@ -143,8 +143,8 @@ func TestFileSplitFilesPartsAndKeepsParentHeld(t *testing.T) {
 				if row.ItemID != parent {
 					continue
 				}
-				if row.State != StateBlocked || row.Decision.Action != ActionHold || (row.Mover == "operator; check the parent's criteria by hand") != operator {
-					t.Fatalf("parent why (operator=%v): %+v", operator, row)
+				if row.State != StateBlocked || row.Decision.Action != ActionHold || row.Class != "waits on work" || (row.Mover == "review") != closingCheck {
+					t.Fatalf("parent why (closingCheck=%v): %+v", closingCheck, row)
 				}
 				return nil
 			}
@@ -539,17 +539,17 @@ func TestWhyReportsSplitParentAndParts(t *testing.T) {
 		t.Fatalf("expected Closed=1, got %+v", prow.SplitParent)
 	}
 
-	// Landing all required parts surfaces operator hand-check with split count prefix.
+	// Landing all required parts surfaces closing check wait with split count prefix.
 	fixtureWrite(t, f, func(tx *store.Tx) error {
 		_, err := tx.Exec(`UPDATE items SET state='landed' WHERE item_id=?`, parts["second"])
 		return err
 	})
 	byID = readWhy()
 	prow = byID[parent]
-	if prow.Class != "needs you" || prow.Mover != "operator; check the parent's criteria by hand" {
+	if prow.Class != "waits on work" || prow.Mover != "review" {
 		t.Fatalf("all-required-landed parent: class=%q mover=%q", prow.Class, prow.Mover)
 	}
-	if !strings.Contains(prow.Why, "split into 3 parts: 2 landed, 1 held; check the parent's criteria by hand") {
+	if !strings.Contains(prow.Why, "split into 3 parts: 2 landed, 1 held; required parts have landed; waiting on the closing check") {
 		t.Fatalf("all-required-landed Why = %q", prow.Why)
 	}
 	if prow.SplitParent.ProgressSummary != "2 of 2 required parts landed" {

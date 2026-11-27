@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-drain/internal/splitclosing"
 	"github.com/mschulkind-oss/tillr-drain/internal/storelog"
 	"github.com/mschulkind-oss/tillr-drain/patchmoves"
 
@@ -17,8 +18,14 @@ import (
 	"github.com/mschulkind-oss/tillr/store"
 )
 
+const (
+	splitClosingFindingKind = splitclosing.FindingKind
+	splitClosingRefusedKind = splitclosing.RefusedKind
+	splitClosingHeldKind    = splitclosing.HeldKind
+)
+
 func init() {
-	for _, kind := range []string{judgeRequestKind, judgeLandedKind, verifyTriageResetKind, "drain.graph-completed", RevertKind, callOffered, callAnswered, callLanded, callDelivered, callClosed, endingCapabilitiesKind, piFeaturesKind} {
+	for _, kind := range []string{judgeRequestKind, judgeLandedKind, verifyTriageResetKind, "drain.graph-completed", RevertKind, callOffered, callAnswered, callLanded, callDelivered, callClosed, endingCapabilitiesKind, piFeaturesKind, splitClosingFindingKind, splitClosingRefusedKind, splitClosingHeldKind} {
 		if err := event.Register(kind, Utility); err != nil {
 			panic(err)
 		}

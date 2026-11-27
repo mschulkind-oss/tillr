@@ -843,7 +843,9 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 				if err != nil {
 					return WhyAnswer{}, readFailure(err)
 				}
-				splitWait(&row, required, states, def)
+				if err := splitWait(r, &row, it.ItemID, required, states, def); err != nil {
+					return WhyAnswer{}, readFailure(err)
+				}
 			} else if waiting != nil && waiting.Waiter != "" {
 				row.Class, row.Mover, row.Why = "waits on work", waiting.Waiter, waiting.Reason
 				row.ClassSource = "store"
