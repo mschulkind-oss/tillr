@@ -54,6 +54,7 @@ type SplitPart struct {
 	Paths             []string          `json:"paths,omitempty"`
 	SharedFiles       []string          `json:"shared_files,omitempty"`
 	InheritedFindings []string          `json:"inherited_findings,omitempty"`
+	ReplacedBy        []string          `json:"replaced_by,omitempty"`
 }
 
 // An empty Clause names the whole criterion. Otherwise quoted clauses exhaust
@@ -72,16 +73,92 @@ const (
 )
 
 type SplitPartLanding struct {
-	Label    string `json:"label"`
-	ItemID   string `json:"item_id"`
-	Required bool   `json:"required"`
-	State    string `json:"state"`
-	Commit   string `json:"commit,omitempty"`
+	Label      string   `json:"label"`
+	ItemID     string   `json:"item_id"`
+	Required   bool     `json:"required"`
+	State      string   `json:"state"`
+	Commit     string   `json:"commit,omitempty"`
+	ReplacedBy []string `json:"replaced_by,omitempty"`
 }
 
 type SplitExtension struct {
+	Replaces []string                   `json:"replaces,omitempty"`
 	Parts    []SplitPart                `json:"parts"`
 	Coverage map[string][]SplitCoverage `json:"coverage,omitempty"`
+}
+
+// IsDefectiveClose reports whether an item state and close_reason represent a
+// verifier-issued defective closure.
+func IsDefectiveClose(state, closeReason string) bool {
+	return state == "closed" && strings.HasPrefix(closeReason, "defective:")
+}
+
+type DefectiveVerdict struct {
+	CriterionID string          `json:"criterion_id"`
+	Reason      string          `json:"reason"`
+	Findings    VerdictFindings `json:"findings,omitempty"`
+}
+
+type DefectivePartFindings struct {
+	PartID      string             `json:"part_id"`
+	CloseReason string             `json:"close_reason"`
+	ClosedBy    string             `json:"closed_by"`
+	Verdicts    []DefectiveVerdict `json:"verdicts,omitempty"`
+}
+
+// ReadDefectivePartFindings reads the close_reason, closed_by, and any active
+// defective criterion verdicts recorded for partID.
+func ReadDefectivePartFindings(r *store.Reader, partID string) (DefectivePartFindings, error) {
+	var out DefectivePartFindings
+	out.PartID = partID
+	if err := r.QueryRow(`SELECT close_reason, closed_by FROM items WHERE item_id=?`, partID).Scan(&out.CloseReason, &out.ClosedBy); err != nil {
+		return DefectivePartFindings{}, err
+	}
+	rows, err := r.Query(
+		`SELECT kind, payload FROM events WHERE object_type='item' AND object_id=? AND kind IN (?,?) ORDER BY seq ASC`,
+		partID, VerdictRecordKind, VerdictsWithdrawnKind,
+	)
+	if err != nil {
+		return DefectivePartFindings{}, err
+	}
+	defer rows.Close()
+	latest := map[string]verdictPayload{}
+	for rows.Next() {
+		var kind string
+		var raw []byte
+		if err := rows.Scan(&kind, &raw); err != nil {
+			return DefectivePartFindings{}, err
+		}
+		switch kind {
+		case VerdictsWithdrawnKind:
+			clear(latest)
+		case VerdictRecordKind:
+			var v verdictPayload
+			if err := json.Unmarshal(raw, &v); err != nil {
+				return DefectivePartFindings{}, err
+			}
+			latest[v.CriterionID] = v
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return DefectivePartFindings{}, err
+	}
+	ids := make([]string, 0, len(latest))
+	for id, v := range latest {
+		if v.Verdict == VerdictDefective {
+			ids = append(ids, id)
+		}
+	}
+	slices.Sort(ids)
+	for _, id := range ids {
+		v := latest[id]
+		out.Verdicts = append(out.Verdicts, DefectiveVerdict{
+			CriterionID: v.CriterionID,
+			Reason:      v.Reason,
+			Findings:    v.Findings,
+		})
+	}
+	return out, nil
 }
 
 // SplitSibling describes a sibling part in a filed split statement.
@@ -746,11 +823,12 @@ func ReadSplitPartLandings(r *store.Reader, parent string) ([]SplitPartLanding, 
 			commit = landing.TrunkAfter
 		}
 		out = append(out, SplitPartLanding{
-			Label:    p.Label,
-			ItemID:   itemID,
-			Required: p.Required != nil && *p.Required,
-			State:    state,
-			Commit:   commit,
+			Label:      p.Label,
+			ItemID:     itemID,
+			Required:   p.Required != nil && *p.Required,
+			State:      state,
+			Commit:     commit,
+			ReplacedBy: slices.Clone(p.ReplacedBy),
 		})
 	}
 	return out, nil
@@ -821,6 +899,18 @@ func ExtendSplit(ctx context.Context, tx *store.Tx, parent string, ext SplitExte
 		if len(ext.Coverage) > 0 && !reflect.DeepEqual(ext.Coverage, existing.Coverage) {
 			return nil, Rejectionf("split-differs", parent, "parent %q already has a different coverage map", parent)
 		}
+		var newRequiredLabels []string
+		for _, p := range ext.Parts {
+			if p.Required != nil && *p.Required {
+				newRequiredLabels = append(newRequiredLabels, p.Label)
+			}
+		}
+		for _, repLabel := range ext.Replaces {
+			ep, ok := existingByLabel[repLabel]
+			if !ok || !slices.Equal(ep.ReplacedBy, newRequiredLabels) {
+				return nil, Rejectionf("split-differs", parent, "parent %q already has a different replacement state for %q", parent, repLabel)
+			}
+		}
 		return newIDs, nil
 	}
 	if existingMatches > 0 {
@@ -832,20 +922,94 @@ func ExtendSplit(ctx context.Context, tx *store.Tx, parent string, ext SplitExte
 	}
 
 	hasRequired := false
+	var newRequiredLabels []string
+	var newRequiredIDs []string
 	for _, p := range ext.Parts {
 		if strings.TrimSpace(p.Share) == "" || p.Required == nil {
 			return nil, Rejectionf("split-part", parent, "part %q needs its share and an explicit required choice", p.Label)
 		}
 		if *p.Required {
 			hasRequired = true
+			newRequiredLabels = append(newRequiredLabels, p.Label)
+			newRequiredIDs = append(newRequiredIDs, newIDs[p.Label])
 		}
 	}
 	if !hasRequired {
 		return nil, Rejectionf("split-parts", parent, "a split extension needs at least one required part")
 	}
 
+	replacesSet := make(map[string]bool, len(ext.Replaces))
+	var replacedIDs []string
+	for _, repLabel := range ext.Replaces {
+		if replacesSet[repLabel] {
+			return nil, Rejectionf("split-replaces", parent, "duplicate replaced part %q", repLabel)
+		}
+		replacesSet[repLabel] = true
+		ep, ok := existingByLabel[repLabel]
+		if !ok {
+			return nil, Rejectionf("split-replaces", parent, "replaced part %q does not exist in parent %q", repLabel, parent)
+		}
+		if ep.Required == nil || !*ep.Required {
+			return nil, Rejectionf("split-replaces", parent, "replaced part %q is not a required part", repLabel)
+		}
+		if len(ep.ReplacedBy) > 0 {
+			return nil, Rejectionf("split-replaces", parent, "replaced part %q has already been replaced", repLabel)
+		}
+		repID := SplitPartID(parent, repLabel)
+		var repState, closeReason string
+		if err := tx.QueryRow(`SELECT state, close_reason FROM items WHERE item_id=?`, repID).Scan(&repState, &closeReason); err != nil {
+			return nil, err
+		}
+		if !IsDefectiveClose(repState, closeReason) {
+			return nil, Rejectionf("split-replaces", parent, "replaced part %q is %s (%q), not closed as defective", repLabel, repState, closeReason)
+		}
+		replacedIDs = append(replacedIDs, repID)
+	}
+	for _, p := range ext.Parts {
+		for _, fl := range p.Follows {
+			if replacesSet[fl] {
+				return nil, Rejectionf("split-follows", parent, "replacement part %q cannot follow replaced part %q", p.Label, fl)
+			}
+		}
+	}
+
+	d, err := itemDefinition(tx.Reader())
+	if err != nil {
+		return nil, err
+	}
+
 	combinedParts := make([]SplitPart, 0, len(existing.Parts)+len(ext.Parts))
-	combinedParts = append(combinedParts, existing.Parts...)
+	for _, ep := range existing.Parts {
+		cp := ep
+		if replacesSet[cp.Label] {
+			cp.ReplacedBy = slices.Clone(newRequiredLabels)
+		} else if len(replacesSet) > 0 && len(cp.ReplacedBy) == 0 {
+			sibID := SplitPartID(parent, cp.Label)
+			sibPayload, _, err := readStoredItem(tx.Reader(), sibID)
+			if err != nil {
+				return nil, err
+			}
+			if !d.IsFinished(sibPayload.State) {
+				var updatedFollows []string
+				seenFollow := make(map[string]bool, len(cp.Follows)+len(newRequiredLabels))
+				for _, fl := range cp.Follows {
+					if replacesSet[fl] {
+						for _, nl := range newRequiredLabels {
+							if !seenFollow[nl] {
+								seenFollow[nl] = true
+								updatedFollows = append(updatedFollows, nl)
+							}
+						}
+					} else if !seenFollow[fl] {
+						seenFollow[fl] = true
+						updatedFollows = append(updatedFollows, fl)
+					}
+				}
+				cp.Follows = updatedFollows
+			}
+		}
+		combinedParts = append(combinedParts, cp)
+	}
 	combinedParts = append(combinedParts, ext.Parts...)
 	order, ids, err := validateSplitParts(parent, combinedParts, existing.Donor, 2)
 	if err != nil {
@@ -853,10 +1017,6 @@ func ExtendSplit(ctx context.Context, tx *store.Tx, parent string, ext SplitExte
 	}
 
 	p, _, err := readStoredItem(tx.Reader(), parent)
-	if err != nil {
-		return nil, err
-	}
-	d, err := itemDefinition(tx.Reader())
 	if err != nil {
 		return nil, err
 	}
@@ -876,21 +1036,23 @@ func ExtendSplit(ctx context.Context, tx *store.Tx, parent string, ext SplitExte
 
 	coverage := existing.Coverage
 	if len(ext.Coverage) > 0 {
+		coverage = ext.Coverage
+	}
+	if len(ext.Coverage) > 0 || len(replacesSet) > 0 {
 		requiredParts := map[string]bool{}
 		for _, part := range order {
-			if *part.Required {
+			if *part.Required && len(part.ReplacedBy) == 0 {
 				requiredParts[part.Label] = true
 			}
 		}
-		if err := checkSplitCoverage(parent, p.Criteria, ext.Coverage, ids, requiredParts); err != nil {
+		if err := checkSplitCoverage(parent, p.Criteria, coverage, ids, requiredParts); err != nil {
 			return nil, err
 		}
-		coverage = ext.Coverage
 	}
 
 	allRequired := []string{}
 	for _, part := range order {
-		if *part.Required {
+		if *part.Required && len(part.ReplacedBy) == 0 {
 			allRequired = append(allRequired, ids[part.Label])
 		}
 		if _, isExisting := existingByLabel[part.Label]; isExisting {
@@ -924,10 +1086,41 @@ func ExtendSplit(ctx context.Context, tx *store.Tx, parent string, ext SplitExte
 			return nil, err
 		}
 	}
-	if _, err := SetDeps(ctx, tx, parent, allRequired, nil, at); err != nil {
-		return nil, err
+	if len(replacesSet) > 0 {
+		for _, ep := range existing.Parts {
+			if replacesSet[ep.Label] || len(ep.ReplacedBy) > 0 {
+				continue
+			}
+			sibID := SplitPartID(parent, ep.Label)
+			sibPayload, _, err := readStoredItem(tx.Reader(), sibID)
+			if err != nil {
+				return nil, err
+			}
+			if d.IsFinished(sibPayload.State) {
+				continue
+			}
+			var removeSib []string
+			for _, repID := range replacedIDs {
+				if slices.Contains(sibPayload.BlockedBy, repID) {
+					removeSib = append(removeSib, repID)
+				}
+			}
+			if len(removeSib) > 0 {
+				if _, err := SetDeps(ctx, tx, sibID, newRequiredIDs, removeSib, at); err != nil {
+					return nil, err
+				}
+			}
+		}
+		if _, err := SetDeps(ctx, tx, parent, newRequiredIDs, replacedIDs, at); err != nil {
+			return nil, err
+		}
+	} else {
+		if _, err := SetDeps(ctx, tx, parent, allRequired, nil, at); err != nil {
+			return nil, err
+		}
 	}
 	grown := SplitStatement{
+		Donor:    existing.Donor,
 		Parts:    combinedParts,
 		Coverage: coverage,
 	}
@@ -953,7 +1146,7 @@ func SplitRequiredParts(r *store.Reader, parent string) ([]string, error) {
 	}
 	var required []string
 	for _, p := range statement.Parts {
-		if p.Required != nil && *p.Required {
+		if p.Required != nil && *p.Required && len(p.ReplacedBy) == 0 {
 			required = append(required, SplitPartID(parent, p.Label))
 		}
 	}

@@ -452,8 +452,54 @@ func UniqueJSON(raw []byte) error {
 	return nil
 }
 
+func FormatDefectiveBrief(parent, runID, target, outPath, seats string, words []byte, wordsSuffix func([]byte) string, criteria []Criterion, statement *item.SplitStatement, landings []item.SplitPartLanding, defectiveParts []item.DefectivePartFindings, priorRefusal *RefusedPayload) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "# Split Defective Part Repair\n\n## Header\nItem: %s; run: %s; seat: design; node: split-defective-repair; target: %s (read-only)\n\n", parent, runID, target)
+	fmt.Fprintf(&b, "## Task\nOne or more required parts of split parent %s were closed as defective by a verifier.\n", parent)
+	fmt.Fprintf(&b, "Write either a replacement SplitExtension JSON object or an owner_decision JSON object to %s.\n\n", outPath)
+	fmt.Fprintf(&b, "## Scope and boundaries\nDo not commit, edit the worktree, modify git refs, or write the store. %s is your only deliverable.\n\n", outPath)
+	fmt.Fprintf(&b, "## Seats\nThese are seats tillr runs as nodes; a worker cannot start one.\n\n%s\n\n", seats)
+	fmt.Fprintf(&b, "## Settled decisions\n- A split statement keeps closed parts in history (marked replaced_by) without deleting them.\n")
+	fmt.Fprintf(&b, "- When replacing a defective required part, set \"replaces\" to the defective part label(s), add at least one new required part (required: true) with a unique label, title, and share, and update \"coverage\" so no parent criterion or clause still points to a replaced part.\n")
+	fmt.Fprintf(&b, "- Only if the verifier's finding exposes a problem in the parent's request or requires dropping/changing what the owner asked for, output {\"owner_decision\": true, \"question\": \"...\"} instead.\n\n")
+	fmt.Fprintf(&b, "## Facts carried\n\n### Defective Required Part Findings\n")
+	for _, dp := range defectiveParts {
+		fmt.Fprintf(&b, "- Part %s: close_reason=%q closed_by=%q\n", dp.PartID, dp.CloseReason, dp.ClosedBy)
+		for _, v := range dp.Verdicts {
+			fmt.Fprintf(&b, "  - %s (defective): %s\n", v.CriterionID, v.Reason)
+			for _, f := range v.Findings {
+				fmt.Fprintf(&b, "    - finding [%s]: %s (%s)\n", f.Kind, f.Case, strings.Join(f.Paths, ", "))
+			}
+		}
+	}
+	if priorRefusal != nil && strings.TrimSpace(priorRefusal.Reason) != "" {
+		fmt.Fprintf(&b, "\n### Prior Extension Refusal\nYour previous extension was refused for: %s\nFix this reason in the new output.\n", priorRefusal.Reason)
+	}
+	fmt.Fprintf(&b, "\n### Parent Criteria\n")
+	for _, c := range criteria {
+		fmt.Fprintf(&b, "- %s (%s, hash=%s): %s\n", c.ID, c.ClaimClass, c.Hash, c.Text)
+	}
+	fmt.Fprintf(&b, "\n### Existing Split Statement\n")
+	stmtRaw, _ := json.MarshalIndent(statement, "", "  ")
+	b.Write(stmtRaw)
+	b.WriteString("\n\n### Split Parts Status\n")
+	for _, p := range landings {
+		fmt.Fprintf(&b, "- %s (%s): required=%t state=%s commit=%s replaced_by=%v\n", p.Label, p.ItemID, p.Required, p.State, p.Commit, p.ReplacedBy)
+	}
+	fmt.Fprintf(&b, "\n## Method\nReview the verifier's defective finding against the parent's criteria and existing split statement.\n")
+	fmt.Fprintf(&b, "Write a SplitExtension JSON object matching this schema:\n```json\n{\n  \"replaces\": [\"defective-part-label\"],\n  \"parts\": [\n    {\n      \"label\": \"corrected-part-label\",\n      \"title\": \"Short title\",\n      \"share\": \"What this corrected part implements\",\n      \"leaves\": {},\n      \"criteria\": [\"Criterion text for this part\"],\n      \"follows\": [],\n      \"required\": true\n    }\n  ],\n  \"coverage\": {}\n}\n```\nOr, if only the owner can decide:\n```json\n{\n  \"owner_decision\": true,\n  \"question\": \"Specific question for the owner\"\n}\n```\n\n")
+	fmt.Fprintf(&b, "## Verification commands\nNone required; verify that your JSON output matches one of the schemas above.\n\n")
+	fmt.Fprintf(&b, "## Report shape\nWrite the JSON output to %s, then report RESULT: done.\n\n", outPath)
+	fmt.Fprintf(&b, "## Stop conditions\nDo not edit the repository, commit, or write the store.\n")
+	if len(words) > 0 && wordsSuffix != nil {
+		b.WriteString(wordsSuffix(words))
+	}
+	return b.String()
+}
+
 func checkExtensionJSONKeys(raw []byte) error {
 	var shape struct {
+		Replaces []json.RawMessage                       `json:"replaces"`
 		Parts    []map[string]json.RawMessage            `json:"parts"`
 		Coverage map[string][]map[string]json.RawMessage `json:"coverage"`
 	}
@@ -479,11 +525,11 @@ func checkExtensionJSONKeys(raw []byte) error {
 	if err := json.Unmarshal(raw, &top); err != nil {
 		return err
 	}
-	if err := keys(top, "parts", "coverage"); err != nil {
+	if err := keys(top, "replaces", "parts", "coverage"); err != nil {
 		return err
 	}
 	for _, part := range shape.Parts {
-		if err := keys(part, "label", "title", "share", "leaves", "criteria", "follows", "required"); err != nil {
+		if err := keys(part, "label", "title", "share", "leaves", "criteria", "follows", "required", "takes", "paths", "shared_files", "inherited_findings"); err != nil {
 			return err
 		}
 	}
@@ -497,6 +543,49 @@ func checkExtensionJSONKeys(raw []byte) error {
 	return nil
 }
 
+type ownerDecisionOutput struct {
+	OwnerDecision bool   `json:"owner_decision"`
+	Question      string `json:"question"`
+}
+
+func parseExtensionOrOwnerDecision(raw []byte) (item.SplitExtension, *ownerDecisionOutput, error) {
+	if !utf8.Valid(raw) {
+		return item.SplitExtension{}, nil, fmt.Errorf("invalid split extension: input must be UTF-8")
+	}
+	if err := CheckSplitJSONSurrogates(raw); err != nil {
+		return item.SplitExtension{}, nil, fmt.Errorf("invalid split extension: %v", err)
+	}
+	if err := UniqueJSON(raw); err != nil {
+		return item.SplitExtension{}, nil, fmt.Errorf("invalid split extension: %v", err)
+	}
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &top); err == nil {
+		if _, hasOD := top["owner_decision"]; hasOD {
+			var od ownerDecisionOutput
+			dec := json.NewDecoder(bytes.NewReader(raw))
+			dec.DisallowUnknownFields()
+			if err := dec.Decode(&od); err != nil {
+				return item.SplitExtension{}, nil, fmt.Errorf("invalid owner_decision: %v", err)
+			}
+			if _, err := dec.Token(); err != io.EOF {
+				return item.SplitExtension{}, nil, fmt.Errorf("invalid owner_decision: expected a single JSON object")
+			}
+			if !od.OwnerDecision {
+				return item.SplitExtension{}, nil, fmt.Errorf("invalid owner_decision: owner_decision must be true")
+			}
+			if strings.TrimSpace(od.Question) == "" {
+				return item.SplitExtension{}, nil, fmt.Errorf("invalid owner_decision: question must not be empty")
+			}
+			return item.SplitExtension{}, &od, nil
+		}
+	}
+	ext, err := parseExtensionDirect(raw)
+	if err != nil {
+		return item.SplitExtension{}, nil, err
+	}
+	return ext, nil, nil
+}
+
 func parseExtension(raw []byte) (item.SplitExtension, error) {
 	if !utf8.Valid(raw) {
 		return item.SplitExtension{}, fmt.Errorf("invalid split extension: input must be UTF-8")
@@ -507,6 +596,10 @@ func parseExtension(raw []byte) (item.SplitExtension, error) {
 	if err := UniqueJSON(raw); err != nil {
 		return item.SplitExtension{}, fmt.Errorf("invalid split extension: %v", err)
 	}
+	return parseExtensionDirect(raw)
+}
+
+func parseExtensionDirect(raw []byte) (item.SplitExtension, error) {
 	var ext item.SplitExtension
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
@@ -595,6 +688,7 @@ func Advance(ctx context.Context, env Env, mainSHA string) (bool, error) {
 	worked := false
 	for _, parent := range parents {
 		var ready bool
+		var defectiveParts []item.DefectivePartFindings
 		var st State
 		if err := s.ReadTx(ctx, func(r *store.Reader) error {
 			required, err := item.SplitRequiredParts(r, parent)
@@ -604,14 +698,31 @@ func Advance(ctx context.Context, env Env, mainSHA string) (bool, error) {
 				}
 				return err
 			}
+			allLanded := true
 			for _, partID := range required {
-				var partState string
-				if err := r.QueryRow(`SELECT state FROM items WHERE item_id=?`, partID).Scan(&partState); err != nil {
-					return err
+				var partState, closeReason string
+				if err := r.QueryRow(`SELECT state, close_reason FROM items WHERE item_id=?`, partID).Scan(&partState, &closeReason); err != nil {
+					if strings.Contains(err.Error(), "no such column: close_reason") {
+						if err := r.QueryRow(`SELECT state FROM items WHERE item_id=?`, partID).Scan(&partState); err != nil {
+							return err
+						}
+					} else {
+						return err
+					}
+				}
+				if item.IsDefectiveClose(partState, closeReason) {
+					findings, err := item.ReadDefectivePartFindings(r, partID)
+					if err != nil {
+						return err
+					}
+					defectiveParts = append(defectiveParts, findings)
 				}
 				if partState != drainmodel.StateLanded {
-					return nil
+					allLanded = false
 				}
+			}
+			if len(defectiveParts) == 0 && !allLanded {
+				return nil
 			}
 			st, err = ReadState(r, parent)
 			if err != nil {
@@ -625,6 +736,16 @@ func Advance(ctx context.Context, env Env, mainSHA string) (bool, error) {
 			return worked, err
 		}
 		if !ready {
+			continue
+		}
+		if len(defectiveParts) > 0 {
+			w, err := runExtendWithDefective(ctx, env, s, parent, st, defectiveParts)
+			if w {
+				worked = true
+			}
+			if err != nil {
+				return worked, err
+			}
 			continue
 		}
 		if st.Finding == nil {
@@ -856,11 +977,21 @@ func runCheck(ctx context.Context, env Env, s *store.Store, parent, mainSHA, stm
 }
 
 func runExtend(ctx context.Context, env Env, s *store.Store, parent string, st State) (bool, error) {
+	return runExtendWithDefective(ctx, env, s, parent, st, nil)
+}
+
+func runExtendWithDefective(ctx context.Context, env Env, s *store.Store, parent string, st State, defectiveParts []item.DefectivePartFindings) (bool, error) {
 	sel, ok := env.SelectSeats("design")
 	if !ok || len(sel.Backends) == 0 {
 		return false, nil
 	}
-	runID, err := nextRunID(ctx, s, env.Root, "closing-extend", parent)
+	prefix := "closing-extend"
+	nodeID := "split-closing-extend"
+	if len(defectiveParts) > 0 {
+		prefix = "defective-extend"
+		nodeID = "split-defective-repair"
+	}
+	runID, err := nextRunID(ctx, s, env.Root, prefix, parent)
 	if err != nil {
 		return false, err
 	}
@@ -879,7 +1010,12 @@ func runExtend(ctx context.Context, env Env, s *store.Store, parent string, st S
 		return false, err
 	}
 
-	brief := FormatExtensionBrief(parent, runID, env.Root, extOut, sel.SeatLines, words, env.RequestWordsSuffix, criteria, statement, landings, st.Finding, st.Refused)
+	var brief string
+	if len(defectiveParts) > 0 {
+		brief = FormatDefectiveBrief(parent, runID, env.Root, extOut, sel.SeatLines, words, env.RequestWordsSuffix, criteria, statement, landings, defectiveParts, st.Refused)
+	} else {
+		brief = FormatExtensionBrief(parent, runID, env.Root, extOut, sel.SeatLines, words, env.RequestWordsSuffix, criteria, statement, landings, st.Finding, st.Refused)
+	}
 	if err := StageBriefFiles(env.Root, runID, laneDir, durableDir, brief, env.BraceLiteralCount(brief)); err != nil {
 		return false, err
 	}
@@ -887,8 +1023,8 @@ func runExtend(ctx context.Context, env Env, s *store.Store, parent string, st S
 	req := sel.Request(parent, laneID, runID, sel.Backends[0])
 	req.Seat = "design"
 	req.Workflow = item.SplitClosingWorkflow
-	req.NodeID = "split-closing-extend"
-	req.Node = "split-closing-extend"
+	req.NodeID = nodeID
+	req.Node = nodeID
 
 	rec, _, runErr := env.RunRestartable(ctx, req)
 	if env.IsRestartPending(runErr) {
@@ -899,13 +1035,13 @@ func runExtend(ctx context.Context, env Env, s *store.Store, parent string, st S
 	}
 	env.CountSpend(rec)
 
-	hold := func(reason string) (bool, error) {
+	hold := func(reason, mover string) (bool, error) {
 		if err := storelog.AppendJudgment(ctx, env.Store, HeldKind, "item", parent, HeldPayload{
 			ItemID:        parent,
 			RunID:         runID,
 			StatementHash: st.StatementHash,
 			Reason:        reason,
-			Mover:         "design",
+			Mover:         mover,
 		}, env.Now().UTC()); err != nil {
 			return false, err
 		}
@@ -919,17 +1055,17 @@ func runExtend(ctx context.Context, env Env, s *store.Store, parent string, st S
 		} else if rec.ExitCode != nil {
 			reason = fmt.Sprintf("design extension run %s exited with code %d", runID, *rec.ExitCode)
 		}
-		return hold(reason)
+		return hold(reason, "design")
 	}
 
 	rawExt, err := os.ReadFile(extOut)
 	if err != nil {
-		return hold(fmt.Sprintf("design extension run %s missing split-extension.json: %v", runID, err))
+		return hold(fmt.Sprintf("design extension run %s missing split-extension.json: %v", runID, err), "design")
 	}
 
 	refuseOrHold := func(reason string) (bool, error) {
 		if st.Refused != nil && st.Refused.Reason == reason {
-			return hold(reason)
+			return hold(reason, "design")
 		}
 		if err := storelog.AppendJudgment(ctx, env.Store, RefusedKind, "item", parent, RefusedPayload{
 			ItemID:        parent,
@@ -942,9 +1078,18 @@ func runExtend(ctx context.Context, env Env, s *store.Store, parent string, st S
 		return true, nil
 	}
 
-	ext, err := parseExtension(rawExt)
+	ext, od, err := parseExtensionOrOwnerDecision(rawExt)
 	if err != nil {
 		return refuseOrHold(err.Error())
+	}
+	if od != nil {
+		if len(defectiveParts) == 0 {
+			return refuseOrHold("owner_decision is only valid when repairing a defective required part")
+		}
+		return hold(strings.TrimSpace(od.Question), "owner")
+	}
+	if len(defectiveParts) > 0 && len(ext.Replaces) == 0 {
+		return refuseOrHold("defective-part repair must specify replaces naming the defective part label(s)")
 	}
 
 	ws, err := store.Open(ctx, env.Store, true)

@@ -501,3 +501,226 @@ func TestExtendSplit(t *testing.T) {
 		})
 	}
 }
+
+func TestExtendSplitReplacesDefectivePart(t *testing.T) {
+	s, parent, origIDs, at := splitClosingFixture(t)
+	ctx := context.Background()
+
+	// Record a defective verdict on "first" and close it as defective:.
+	err := s.WriteTx(ctx, func(tx *store.Tx) error {
+		var cID, cText, cClass string
+		if err := tx.QueryRow(`SELECT criterion_id, text, claim_class FROM item_criteria WHERE item_id=? ORDER BY criterion_id LIMIT 1`, origIDs["first"]).Scan(&cID, &cText, &cClass); err != nil {
+			return err
+		}
+		vPayload, err := json.Marshal(map[string]any{
+			"item_id":        origIDs["first"],
+			"criterion_id":   cID,
+			"criterion_hash": item.CriterionHash(cText),
+			"verdict":        "defective",
+			"claim_class":    cClass,
+			"reason":         "part words forbid test change the work needs",
+			"evidence":       []string{"file:tools/tillr-item/item/split.go:1"},
+			"actor_kind":     "agent",
+			"actor":          "verifier",
+		})
+		if err != nil {
+			return err
+		}
+		firstID := origIDs["first"]
+		if _, err := tx.Append(event.Event{
+			Kind:       item.VerdictRecordKind,
+			ObjectType: "item",
+			ObjectID:   &firstID,
+			Payload:    vPayload,
+			At:         at.Add(time.Minute),
+		}); err != nil {
+			return err
+		}
+		_, err = item.Close(ctx, tx, origIDs["first"], "defective: part words forbid test change the work needs", "verifier", at.Add(2*time.Minute))
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify IsDefectiveClose and ReadDefectivePartFindings.
+	if !item.IsDefectiveClose("closed", "defective: bad") || item.IsDefectiveClose("closed", "obsolete") || item.IsDefectiveClose("in-queue", "defective: bad") {
+		t.Fatalf("unexpected IsDefectiveClose results")
+	}
+	err = s.ReadTx(ctx, func(r *store.Reader) error {
+		findings, err := item.ReadDefectivePartFindings(r, origIDs["first"])
+		if err != nil {
+			return err
+		}
+		if findings.CloseReason != "defective: part words forbid test change the work needs" || findings.ClosedBy != "verifier" || len(findings.Verdicts) != 1 {
+			t.Fatalf("unexpected findings: %+v", findings)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Rejections before successful replacement.
+	badCases := []struct {
+		name     string
+		ext      item.SplitExtension
+		wantRule string
+	}{
+		{
+			name: "coverage still names replaced part",
+			ext: item.SplitExtension{
+				Replaces: []string{"first"},
+				Parts:    []item.SplitPart{{Label: "first-v2", Title: "First v2", Share: "Deliver A with tests", Required: boolPtr(true)}},
+			},
+			wantRule: "split-coverage",
+		},
+		{
+			name: "replaces unclosed part",
+			ext: item.SplitExtension{
+				Replaces: []string{"second"},
+				Parts:    []item.SplitPart{{Label: "second-v2", Title: "Second v2", Share: "Deliver B", Required: boolPtr(true)}},
+			},
+			wantRule: "split-replaces",
+		},
+		{
+			name: "replaces optional part",
+			ext: item.SplitExtension{
+				Replaces: []string{"extra"},
+				Parts:    []item.SplitPart{{Label: "extra-v2", Title: "Extra v2", Share: "Add docs", Required: boolPtr(true)}},
+			},
+			wantRule: "split-replaces",
+		},
+	}
+	for _, tc := range badCases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := s.WriteTx(ctx, func(tx *store.Tx) error {
+				_, err := item.ExtendSplit(ctx, tx, parent, tc.ext, at.Add(3*time.Minute))
+				return err
+			})
+			if rej, ok := item.RejectionOf(err); !ok || rej.Rule != tc.wantRule {
+				t.Fatalf("got %v, want rule %q", err, tc.wantRule)
+			}
+		})
+	}
+
+	// Successful replacement of "first" with "first-v2".
+	ext := item.SplitExtension{
+		Replaces: []string{"first"},
+		Parts: []item.SplitPart{{
+			Label:    "first-v2",
+			Title:    "First part v2",
+			Share:    "Deliver A including test change",
+			Leaves:   map[string]string{"second": "Deliver B"},
+			Criteria: []string{"A works with tests"},
+			Required: boolPtr(true),
+		}},
+		Coverage: map[string][]item.SplitCoverage{
+			"c5": {
+				{Clause: "A works;", Part: "first-v2"},
+				{Clause: "B works.", Part: "second"},
+			},
+			"c6": {{ClosingCheck: true}},
+		},
+	}
+	var extIDs map[string]string
+	err = s.WriteTx(ctx, func(tx *store.Tx) error {
+		var err error
+		extIDs, err = item.ExtendSplit(ctx, tx, parent, ext, at.Add(4*time.Minute))
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify SplitRequiredParts, statement history, parent deps, and sibling rewiring.
+	err = s.ReadTx(ctx, func(r *store.Reader) error {
+		req, err := item.SplitRequiredParts(r, parent)
+		if err != nil {
+			return err
+		}
+		slices.Sort(req)
+		wantReq := []string{extIDs["first-v2"], origIDs["second"]}
+		slices.Sort(wantReq)
+		if !slices.Equal(req, wantReq) {
+			t.Fatalf("SplitRequiredParts = %v, want %v", req, wantReq)
+		}
+
+		stmt, _, err := item.ReadSplit(r, parent)
+		if err != nil {
+			return err
+		}
+		if len(stmt.Parts) != 4 {
+			t.Fatalf("expected closed part retained in history (4 parts), got %d", len(stmt.Parts))
+		}
+		byLabel := map[string]item.SplitPart{}
+		for _, p := range stmt.Parts {
+			byLabel[p.Label] = p
+		}
+		if !slices.Equal(byLabel["first"].ReplacedBy, []string{"first-v2"}) {
+			t.Fatalf("first.ReplacedBy = %v, want [first-v2]", byLabel["first"].ReplacedBy)
+		}
+		if !slices.Equal(byLabel["second"].Follows, []string{"first-v2"}) {
+			t.Fatalf("second.Follows = %v, want [first-v2]", byLabel["second"].Follows)
+		}
+
+		var secondBlocked string
+		if err := r.QueryRow(`SELECT group_concat(blocked_by) FROM item_edges WHERE item_id=? AND kind='blocked_by'`, origIDs["second"]).Scan(&secondBlocked); err != nil {
+			return err
+		}
+		if secondBlocked != extIDs["first-v2"] {
+			t.Fatalf("second.BlockedBy = %q, want %q", secondBlocked, extIDs["first-v2"])
+		}
+
+		parentRows, err := r.Query(`SELECT blocked_by FROM item_edges WHERE item_id=? AND kind='blocked_by' ORDER BY blocked_by`, parent)
+		if err != nil {
+			return err
+		}
+		defer parentRows.Close()
+		var parentBlocked []string
+		for parentRows.Next() {
+			var dep string
+			if err := parentRows.Scan(&dep); err != nil {
+				return err
+			}
+			parentBlocked = append(parentBlocked, dep)
+		}
+		if err := parentRows.Err(); err != nil {
+			return err
+		}
+		if !slices.Equal(parentBlocked, wantReq) {
+			t.Fatalf("parent.BlockedBy = %v, want %v", parentBlocked, wantReq)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Idempotent replay succeeds.
+	err = s.WriteTx(ctx, func(tx *store.Tx) error {
+		replay, err := item.ExtendSplit(ctx, tx, parent, ext, at.Add(5*time.Minute))
+		if err != nil {
+			return err
+		}
+		if !reflect.DeepEqual(replay, extIDs) {
+			t.Fatalf("replay IDs %v != %v", replay, extIDs)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Re-replacing an already-replaced part is rejected.
+	err = s.WriteTx(ctx, func(tx *store.Tx) error {
+		_, err := item.ExtendSplit(ctx, tx, parent, item.SplitExtension{
+			Replaces: []string{"first"},
+			Parts:    []item.SplitPart{{Label: "first-v3", Share: "x", Required: boolPtr(true)}},
+		}, at.Add(6*time.Minute))
+		return err
+	})
+	if rej, ok := item.RejectionOf(err); !ok || rej.Rule != "split-replaces" {
+		t.Fatalf("re-replacing got %v, want split-replaces", err)
+	}
+}

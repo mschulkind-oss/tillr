@@ -14,6 +14,7 @@ import (
 	"github.com/mschulkind-oss/tillr-drain/alarms"
 	"github.com/mschulkind-oss/tillr-drain/heavy"
 	"github.com/mschulkind-oss/tillr-drain/holdrules"
+	"github.com/mschulkind-oss/tillr-drain/internal/splitclosing"
 	"github.com/mschulkind-oss/tillr-drain/obstacles"
 	"github.com/mschulkind-oss/tillr-drain/presence"
 	"github.com/mschulkind-oss/tillr-item/item"
@@ -199,6 +200,14 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 		return answer, readFailure(err)
 	}
 	partIndex := item.SplitPartIndex(splits)
+	splitStates := make(map[string]splitclosing.State, len(splits))
+	for parentID := range splits {
+		cst, err := splitclosing.ReadState(r, parentID)
+		if err != nil {
+			return answer, readFailure(err)
+		}
+		splitStates[parentID] = cst
+	}
 	titles := map[string]string{}
 	if len(splits) > 0 {
 		titles, err = readItemTitles(r)
@@ -209,6 +218,27 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 	states := map[string]string{}
 	for _, it := range items {
 		states[it.ItemID] = it.State
+	}
+	closeReasons := map[string]string{}
+	crRows, crErr := r.Query(`SELECT item_id, close_reason FROM items WHERE close_reason != ''`)
+	if crErr != nil {
+		if !strings.Contains(crErr.Error(), "no such column: close_reason") {
+			return answer, readFailure(crErr)
+		}
+	} else {
+		for crRows.Next() {
+			var id, cr string
+			if scanErr := crRows.Scan(&id, &cr); scanErr != nil {
+				crRows.Close()
+				return answer, readFailure(scanErr)
+			}
+			closeReasons[id] = cr
+		}
+		if crErr := crRows.Err(); crErr != nil {
+			crRows.Close()
+			return answer, readFailure(crErr)
+		}
+		crRows.Close()
 	}
 	at, err := tick.At()
 	if err != nil {
@@ -834,8 +864,38 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 			}
 		}
 		if len(closedBlockers) > 0 {
-			row.Class = "needs you"
-			row.Mover = "remove the dependency or reopen the closed item (" + strings.Join(row.WaitingOn, ", ") + ")"
+			allDefectiveSibling := false
+			if partMem, isPart := partIndex[it.ItemID]; isPart {
+				allDefectiveSibling = true
+				for _, b := range closedBlockers {
+					bMem, ok := partIndex[b]
+					if !ok || bMem.ParentID != partMem.ParentID || bMem.Part.Required == nil || !*bMem.Part.Required || len(bMem.Part.ReplacedBy) > 0 || !item.IsDefectiveClose(states[b], closeReasons[b]) {
+						allDefectiveSibling = false
+						break
+					}
+				}
+				if allDefectiveSibling {
+					cst := splitStates[partMem.ParentID]
+					if cst.Held != nil {
+						if cst.Held.Mover == "owner" {
+							row.Class = "needs you"
+							row.Mover = "owner; " + cst.Held.Reason
+						} else {
+							row.Class = "waits on work"
+							row.Mover = cst.Held.Mover
+						}
+						row.Why = cst.Held.Reason
+					} else {
+						row.Class = "waits on work"
+						row.Mover = "design"
+						row.Why = "waiting on design seat to replace defective required part (" + strings.Join(closedBlockers, ", ") + ")"
+					}
+				}
+			}
+			if !allDefectiveSibling {
+				row.Class = "needs you"
+				row.Mover = "remove the dependency or reopen the closed item (" + strings.Join(row.WaitingOn, ", ") + ")"
+			}
 		}
 		if d.Reason == ReasonBlocked || d.Reason == ReasonToolingDefect {
 			if waiting != nil && waiting.Source == item.SplitWaitSource {
@@ -1012,6 +1072,9 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 				if row.Class == "alarm" || row.Class == "needs you" || row.Class == "needs a cause" || strings.HasPrefix(d.Reason, ReasonTrunkPathDirty+": ") {
 					actor = "operator"
 				}
+				if strings.HasPrefix(row.Mover, "owner;") {
+					actor = "owner"
+				}
 				if d.Reason == ReasonConflictOwner {
 					c := conflicts[it.ItemID]
 					isReq, _ := isFiledRequest(r, it.ItemID)
@@ -1176,7 +1239,7 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 		}
 		answer.Rows = append(answer.Rows, row)
 	}
-	decorateSplitParents(&answer, splits, states, def)
+	decorateSplitParents(&answer, splits, states, closeReasons, splitStates, def)
 	current := make([]alarms.Hold, 0, len(answer.Rows))
 	for _, row := range answer.Rows {
 		d := row.Decision

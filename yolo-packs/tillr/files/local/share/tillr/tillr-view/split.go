@@ -39,6 +39,7 @@ type splitPart struct {
 	Paths             []string          `json:"paths,omitempty"`
 	SharedFiles       []string          `json:"shared_files,omitempty"`
 	InheritedFindings []string          `json:"inherited_findings,omitempty"`
+	ReplacedBy        []string          `json:"replaced_by,omitempty"`
 }
 
 type splitCoverage struct {
@@ -213,23 +214,118 @@ type splitLeafView struct {
 }
 
 type splitItemMeta struct {
-	Title string
-	State string
+	Title       string
+	State       string
+	CloseReason string
+}
+
+func isDefectiveClose(state, closeReason string) bool {
+	return state == "closed" && strings.HasPrefix(closeReason, "defective:")
+}
+
+type splitClosingHold struct {
+	Mover  string `json:"mover"`
+	Reason string `json:"reason"`
+}
+
+type splitClosingState struct {
+	Held          *splitClosingHold
+	RefusedReason string
+}
+
+func readSplitClosingStates(r *store.Reader) (map[string]splitClosingState, error) {
+	out := map[string]splitClosingState{}
+	hashes := map[string]string{}
+	srows, err := r.Query(`SELECT parent_id, statement FROM item_splits`)
+	if isMissingTable(err) {
+		return out, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	for srows.Next() {
+		var parentID string
+		var raw []byte
+		if err := srows.Scan(&parentID, &raw); err != nil {
+			srows.Close()
+			return nil, err
+		}
+		hashes[parentID] = fmt.Sprintf("%x", sha256.Sum256(raw))
+	}
+	if err := srows.Err(); err != nil {
+		srows.Close()
+		return nil, err
+	}
+	srows.Close()
+	if len(hashes) == 0 {
+		return out, nil
+	}
+	erows, err := r.Query(`SELECT object_id, kind, payload FROM events WHERE object_type='item' AND kind IN ('drain.split-closing-held','drain.split-closing-refused') ORDER BY seq ASC`)
+	if isMissingTable(err) {
+		return out, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer erows.Close()
+	for erows.Next() {
+		var parentID, kind string
+		var raw []byte
+		if err := erows.Scan(&parentID, &kind, &raw); err != nil {
+			return nil, err
+		}
+		wantHash, ok := hashes[parentID]
+		if !ok {
+			continue
+		}
+		var payload struct {
+			StatementHash string `json:"statement_hash"`
+			Reason        string `json:"reason"`
+			Mover         string `json:"mover"`
+		}
+		if err := json.Unmarshal(raw, &payload); err != nil || payload.StatementHash != wantHash {
+			continue
+		}
+		st := out[parentID]
+		switch kind {
+		case "drain.split-closing-held":
+			st.Held = &splitClosingHold{Mover: payload.Mover, Reason: payload.Reason}
+		case "drain.split-closing-refused":
+			st.RefusedReason = payload.Reason
+		}
+		out[parentID] = st
+	}
+	return out, erows.Err()
 }
 
 func readSplitItemMeta(r *store.Reader) (map[string]splitItemMeta, error) {
 	out := map[string]splitItemMeta{}
-	rows, err := r.Query(`SELECT item_id, title, state FROM items`)
+	rows, err := r.Query(`SELECT item_id, title, state, close_reason FROM items`)
+	if err != nil && strings.Contains(err.Error(), "no such column: close_reason") {
+		rows, err = r.Query(`SELECT item_id, title, state FROM items`)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var id, title, state string
+			if err := rows.Scan(&id, &title, &state); err != nil {
+				return nil, err
+			}
+			out[id] = splitItemMeta{Title: title, State: state}
+		}
+		return out, rows.Err()
+	}
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var id, title, state string
-		if err := rows.Scan(&id, &title, &state); err != nil {
+		var id, title, state, closeReason string
+		if err := rows.Scan(&id, &title, &state, &closeReason); err != nil {
 			return nil, err
 		}
-		out[id] = splitItemMeta{Title: title, State: state}
+		out[id] = splitItemMeta{Title: title, State: state, CloseReason: closeReason}
 	}
 	return out, rows.Err()
 }
@@ -471,6 +567,10 @@ func decorateWhyPassSplits(r *store.Reader, rows []whyPassRow) error {
 	if err != nil {
 		return err
 	}
+	closingStates, err := readSplitClosingStates(r)
+	if err != nil {
+		return err
+	}
 	declared, err := definition.ForReader(r)
 	if err != nil {
 		return err
@@ -497,10 +597,15 @@ func decorateWhyPassSplits(r *store.Reader, rows []whyPassRow) error {
 		if !ok {
 			continue
 		}
-		sp := &whySplitParent{TotalParts: len(st.Parts)}
+		sp := &whySplitParent{}
 		var closedRequired []string
+		var defectiveRequired []string
 		var unlandedRequired []string
 		for _, p := range st.Parts {
+			if len(p.ReplacedBy) > 0 {
+				continue
+			}
+			sp.TotalParts++
 			partID := splitPartID(row.ItemID, p.Label)
 			req := p.Required != nil && *p.Required
 			if req {
@@ -516,7 +621,11 @@ func decorateWhyPassSplits(r *store.Reader, rows []whyPassRow) error {
 			case def.IsFinished(partState) || partState == def.Closed || partState == "closed":
 				sp.Closed++
 				if req {
-					closedRequired = append(closedRequired, partID)
+					if isDefectiveClose(partState, meta[partID].CloseReason) {
+						defectiveRequired = append(defectiveRequired, partID)
+					} else {
+						closedRequired = append(closedRequired, partID)
+					}
 					unlandedRequired = append(unlandedRequired, partID)
 				}
 			default:
@@ -555,6 +664,26 @@ func decorateWhyPassSplits(r *store.Reader, rows []whyPassRow) error {
 			row.Class = "needs you"
 			row.Mover = "owner; required part did not land: " + id
 			row.Why = summary + "; required part did not land: " + id + " (" + meta[id].State + ")"
+		case len(defectiveRequired) > 0:
+			id := defectiveRequired[0]
+			cs := closingStates[row.ItemID]
+			if cs.Held != nil {
+				if cs.Held.Mover == "owner" {
+					row.Class = "needs you"
+					row.Mover = "owner; " + cs.Held.Reason
+				} else {
+					row.Class = "waits on work"
+					row.Mover = cs.Held.Mover
+				}
+				row.Why = summary + "; " + cs.Held.Reason
+			} else {
+				row.Class = "waits on work"
+				row.Mover = "design"
+				row.Why = summary + "; required part closed as defective: " + id + "; waiting on design seat"
+				if cs.RefusedReason != "" {
+					row.Why += "; prior extension refused: " + cs.RefusedReason
+				}
+			}
 		case sp.RequiredLanded == sp.RequiredParts:
 			row.Class = "needs you"
 			row.Mover = "operator; check the parent's criteria by hand"
@@ -603,6 +732,9 @@ func splitSnapshotDecorations(r *store.Reader) (map[string]string, map[string]*w
 		}
 		reqTotal, reqLanded := 0, 0
 		for _, p := range st.Parts {
+			if len(p.ReplacedBy) > 0 {
+				continue
+			}
 			if p.Required != nil && *p.Required {
 				reqTotal++
 				if meta[splitPartID(parentID, p.Label)].State == "landed" {

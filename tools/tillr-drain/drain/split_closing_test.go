@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -16,6 +18,7 @@ import (
 	"github.com/mschulkind-oss/tillr-drain/internal/splitclosing"
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
+	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -805,4 +808,190 @@ func TestSplitClosingBriefsPassPreflight(t *testing.T) {
 		&splitclosing.RefusedPayload{Reason: "prior refusal"},
 	)
 	checkPreflight("closing-extend", "closing-extend-preflight-1", extBrief)
+
+	defBrief := splitclosing.FormatDefectiveBrief(
+		parent,
+		"defective-extend-preflight-1",
+		l.cfg.Root,
+		filepath.Join(t.TempDir(), "split-extension.json"),
+		seatLines(l.currentPolicy()),
+		words,
+		requestWordsSuffix,
+		criteria,
+		statement,
+		landings,
+		[]item.DefectivePartFindings{{
+			PartID:      parts["first"],
+			CloseReason: "defective: forbidden test change",
+			ClosedBy:    "verifier",
+			Verdicts:    []item.DefectiveVerdict{{CriterionID: "c1", Reason: "forbidden test change"}},
+		}},
+		&splitclosing.RefusedPayload{Reason: "prior refusal"},
+	)
+	checkPreflight("defective-extend", "defective-extend-preflight-1", defBrief)
+}
+
+func TestSplitClosingDefectiveRequiredPartReplacedByDesign(t *testing.T) {
+	f, l, steps, parent, parts := splitClosingFixture(t)
+	ctx := context.Background()
+	for _, seat := range []string{"plan", "verify", "test-run", "test-write", "edit", "tricky"} {
+		l.cfg.Policy.Seats[seat] = "fixture"
+	}
+
+	// Close "first" as defective with a defective verdict.
+	// "second" follows "first" in the fixture.
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		var cID, cText, cClass string
+		if err := tx.QueryRow(`SELECT criterion_id, text, claim_class FROM item_criteria WHERE item_id=? ORDER BY criterion_id LIMIT 1`, parts["first"]).Scan(&cID, &cText, &cClass); err != nil {
+			return err
+		}
+		vPayload, err := json.Marshal(map[string]any{
+			"item_id":        parts["first"],
+			"criterion_id":   cID,
+			"criterion_hash": item.CriterionHash(cText),
+			"verdict":        "defective",
+			"claim_class":    cClass,
+			"reason":         "part words forbid test change the work needs",
+			"evidence":       []string{"file:tools/tillr-drain/drain/split.go:1"},
+			"actor_kind":     "agent",
+			"actor":          "verifier",
+		})
+		if err != nil {
+			return err
+		}
+		firstID := parts["first"]
+		if _, err := tx.Append(event.Event{
+			Kind:       item.VerdictRecordKind,
+			ObjectType: "item",
+			ObjectID:   &firstID,
+			Payload:    vPayload,
+			At:         l.cfg.Now(),
+		}); err != nil {
+			return err
+		}
+		_, err = item.Close(ctx, tx, parts["first"], "defective: part words forbid test change the work needs", "verifier", l.cfg.Now().Add(time.Second))
+		return err
+	})
+
+	// Before advancing: parent Why must NOT name owner, and sibling Why must NOT name operator/remove the dependency.
+	pWhy := parentWhyRow(t, ctx, l, f.storePath, parent)
+	if pWhy.Class != "waits on work" || pWhy.Mover != "design" || strings.Contains(pWhy.Mover, "owner") {
+		t.Fatalf("parent why before design = %+v, want waits on work / design", pWhy)
+	}
+	sWhy := parentWhyRow(t, ctx, l, f.storePath, parts["second"])
+	if sWhy.Class != "waits on work" || !strings.Contains(sWhy.Mover, "design") || strings.Contains(sWhy.Mover, "operator") || strings.Contains(sWhy.Mover, "remove the dependency") {
+		t.Fatalf("sibling why before design = %+v, want waits on work / design", sWhy)
+	}
+
+	// Advancing the loop starts a design run on the parent carrying the verifier's finding,
+	// and files a replacement SplitExtension.
+	var designBrief string
+	steps.onDesign = func(req run.Request, brief, extOut string) error {
+		if req.Seat != "design" || req.ItemID != parent {
+			return fmt.Errorf("unexpected run %+v", req)
+		}
+		designBrief = brief
+		body := `{
+  "replaces": ["first"],
+  "parts": [
+    {
+      "label": "first-v2",
+      "title": "First part corrected",
+      "share": "Deliver A including needed test change",
+      "leaves": {"second": "Deliver B"},
+      "criteria": ["A works with tests"],
+      "follows": [],
+      "required": true
+    }
+  ],
+  "coverage": {
+    "c5": [
+      {"clause": "A works；", "part": "first-v2"},
+      {"clause": "B works.", "part": "second"}
+    ],
+    "c6": [{"closing_check": true}]
+  }
+}`
+		return os.WriteFile(extOut, []byte(body), 0o644)
+	}
+
+	worked, err := l.advanceSplitClosingChecks(ctx, "", &LoopResult{})
+	if err != nil || !worked {
+		t.Fatalf("advanceSplitClosingChecks: worked=%v err=%v", worked, err)
+	}
+	if len(steps.runs) != 1 {
+		t.Fatalf("expected 1 design run, got %d", len(steps.runs))
+	}
+	if !strings.Contains(designBrief, "part words forbid test change the work needs") {
+		t.Fatalf("design brief missing verifier finding:\n%s", designBrief)
+	}
+
+	// Verify replacement took closed part's place in parent's required parts, coverage, and sibling's dependencies.
+	firstV2ID := item.SplitPartID(parent, "first-v2")
+	s, err := store.Open(ctx, f.storePath, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err := s.ReadTx(ctx, func(r *store.Reader) error {
+		req, err := item.SplitRequiredParts(r, parent)
+		if err != nil {
+			return err
+		}
+		wantReq := []string{firstV2ID, parts["second"]}
+		slices.Sort(req)
+		slices.Sort(wantReq)
+		if !slices.Equal(req, wantReq) {
+			t.Fatalf("SplitRequiredParts = %v, want %v", req, wantReq)
+		}
+		stmt, _, err := item.ReadSplit(r, parent)
+		if err != nil {
+			return err
+		}
+		if len(stmt.Coverage["c5"]) != 2 || stmt.Coverage["c5"][0].Part != "first-v2" {
+			t.Fatalf("unexpected coverage c5: %+v", stmt.Coverage["c5"])
+		}
+		var sibBlocked string
+		if err := r.QueryRow(`SELECT group_concat(blocked_by) FROM item_edges WHERE item_id=? AND kind='blocked_by'`, parts["second"]).Scan(&sibBlocked); err != nil {
+			return err
+		}
+		if sibBlocked != firstV2ID {
+			t.Fatalf("second blocked_by = %q, want %q", sibBlocked, firstV2ID)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSplitClosingDefectiveRequiredPartOwnerDecision(t *testing.T) {
+	f, l, steps, parent, parts := splitClosingFixture(t)
+	ctx := context.Background()
+	for _, seat := range []string{"plan", "verify", "test-run", "test-write", "edit", "tricky"} {
+		l.cfg.Policy.Seats[seat] = "fixture"
+	}
+
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := item.Close(ctx, tx, parts["first"], "defective: request contradicts itself", "verifier", l.cfg.Now())
+		return err
+	})
+
+	steps.onDesign = func(_ run.Request, _, extOut string) error {
+		body := `{"owner_decision": true, "question": "Should A or B win?"}`
+		return os.WriteFile(extOut, []byte(body), 0o644)
+	}
+
+	worked, err := l.advanceSplitClosingChecks(ctx, "", &LoopResult{})
+	if err != nil || !worked {
+		t.Fatalf("advanceSplitClosingChecks: worked=%v err=%v", worked, err)
+	}
+
+	pWhy := parentWhyRow(t, ctx, l, f.storePath, parent)
+	if pWhy.Class != "needs you" || pWhy.Mover != "owner; Should A or B win?" {
+		t.Fatalf("parent why after owner_decision = %+v", pWhy)
+	}
+	sWhy := parentWhyRow(t, ctx, l, f.storePath, parts["second"])
+	if sWhy.Class != "needs you" || sWhy.Mover != "owner; Should A or B win?" {
+		t.Fatalf("sibling why after owner_decision = %+v", sWhy)
+	}
 }

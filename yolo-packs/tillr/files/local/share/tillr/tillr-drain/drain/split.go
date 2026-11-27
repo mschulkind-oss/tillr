@@ -201,6 +201,35 @@ func splitWait(r *store.Reader, row *WhyRow, parent string, blockers []string, s
 	row.Mover = strings.Join(row.WaitingOn, ", ")
 	for _, id := range row.WaitingOn {
 		if finishedState(def, states[id]) {
+			var closeReason string
+			if err := r.QueryRow(`SELECT close_reason FROM items WHERE item_id=?`, id).Scan(&closeReason); err != nil && !errors.Is(err, sql.ErrNoRows) && !strings.Contains(err.Error(), "no such column: close_reason") {
+				return err
+			}
+			if item.IsDefectiveClose(states[id], closeReason) {
+				st, err := splitclosing.ReadState(r, parent)
+				if err != nil {
+					return err
+				}
+				if st.Held != nil {
+					if st.Held.Mover == "owner" {
+						row.Class = "needs you"
+						row.Mover = "owner; " + st.Held.Reason
+					} else {
+						row.Class = "waits on work"
+						row.Mover = st.Held.Mover
+					}
+					row.Why = st.Held.Reason
+					row.tableReason = row.Why
+					return nil
+				}
+				row.Class, row.Mover = "waits on work", "design"
+				row.Why = "required part closed as defective: " + id + "; waiting on design seat"
+				if st.Refused != nil && strings.TrimSpace(st.Refused.Reason) != "" {
+					row.Why += "; prior extension refused: " + st.Refused.Reason
+				}
+				row.tableReason = row.Why
+				return nil
+			}
 			row.Class, row.Mover = "needs you", "owner; required part did not land: "+id
 			row.Why = "required part did not land: " + id + " (" + states[id] + ")"
 			return nil
@@ -249,7 +278,7 @@ func formatSplitCounts(total, landed, working, held, queued, closed int) string 
 	return fmt.Sprintf("split into %d parts: %s", total, strings.Join(parts, ", "))
 }
 
-func decorateSplitParents(answer *WhyAnswer, splits map[string]item.SplitStatement, states map[string]string, def definition.Definition) {
+func decorateSplitParents(answer *WhyAnswer, splits map[string]item.SplitStatement, states, closeReasons map[string]string, splitStates map[string]splitclosing.State, def definition.Definition) {
 	if len(splits) == 0 || len(answer.Rows) == 0 {
 		return
 	}
@@ -263,10 +292,15 @@ func decorateSplitParents(answer *WhyAnswer, splits map[string]item.SplitStateme
 		if !ok {
 			continue
 		}
-		sp := &WhySplitParent{TotalParts: len(st.Parts)}
+		sp := &WhySplitParent{}
 		var closedRequired []string
+		var defectiveRequired []string
 		var unlandedRequired []string
 		for _, p := range st.Parts {
+			if len(p.ReplacedBy) > 0 {
+				continue
+			}
+			sp.TotalParts++
 			partID := item.SplitPartID(row.ItemID, p.Label)
 			req := p.Required != nil && *p.Required
 			if req {
@@ -282,7 +316,11 @@ func decorateSplitParents(answer *WhyAnswer, splits map[string]item.SplitStateme
 			case finishedState(def, partState):
 				sp.Closed++
 				if req {
-					closedRequired = append(closedRequired, partID)
+					if item.IsDefectiveClose(partState, closeReasons[partID]) {
+						defectiveRequired = append(defectiveRequired, partID)
+					} else {
+						closedRequired = append(closedRequired, partID)
+					}
 					unlandedRequired = append(unlandedRequired, partID)
 				}
 			default:
@@ -317,6 +355,27 @@ func decorateSplitParents(answer *WhyAnswer, splits map[string]item.SplitStateme
 			row.Class = "needs you"
 			row.Mover = "owner; required part did not land: " + id
 			row.Why = summary + "; required part did not land: " + id + " (" + states[id] + ")"
+			row.tableReason = row.Why
+		case len(defectiveRequired) > 0:
+			id := defectiveRequired[0]
+			cst := splitStates[row.ItemID]
+			if cst.Held != nil {
+				if cst.Held.Mover == "owner" {
+					row.Class = "needs you"
+					row.Mover = "owner; " + cst.Held.Reason
+				} else {
+					row.Class = "waits on work"
+					row.Mover = cst.Held.Mover
+				}
+				row.Why = summary + "; " + cst.Held.Reason
+			} else {
+				row.Class = "waits on work"
+				row.Mover = "design"
+				row.Why = summary + "; required part closed as defective: " + id + "; waiting on design seat"
+				if cst.Refused != nil && strings.TrimSpace(cst.Refused.Reason) != "" {
+					row.Why += "; prior extension refused: " + cst.Refused.Reason
+				}
+			}
 			row.tableReason = row.Why
 		case sp.RequiredLanded == sp.RequiredParts:
 			if row.Why != "" {

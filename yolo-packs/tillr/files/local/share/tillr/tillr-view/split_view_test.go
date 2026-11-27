@@ -343,3 +343,148 @@ func TestItemSplitDonorAndCarvingFields(t *testing.T) {
 }
 
 func boolPtr(v bool) *bool { return &v }
+
+func TestSplitViewDefectiveRequiredPartAndWaiting(t *testing.T) {
+	ctx := context.Background()
+	h := newServeHarness(t)
+
+	parentID := "item-parent-defective"
+	partAID := splitPartID(parentID, "a")
+	partAV2ID := splitPartID(parentID, "a-v2")
+	partBID := splitPartID(parentID, "b")
+
+	stmt := splitStatement{
+		Parts: []splitPart{
+			{Label: "a", Title: "Part A", Share: "Do A", Required: boolPtr(true)},
+			{Label: "b", Title: "Part B", Share: "Do B", Follows: []string{"a"}, Required: boolPtr(true)},
+		},
+	}
+	rawStmt, err := json.Marshal(stmt)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := store.Open(ctx, h.store, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.WriteTx(ctx, func(tx *store.Tx) error {
+		if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS item_splits (parent_id TEXT PRIMARY KEY, statement BLOB NOT NULL)`); err != nil {
+			return err
+		}
+		_, _ = tx.Exec(`ALTER TABLE items ADD COLUMN close_reason TEXT NOT NULL DEFAULT ''`)
+		for _, it := range []struct {
+			id, title, state, closeReason string
+		}{
+			{parentID, "Parent Ask", "blocked", ""},
+			{partAID, "Part A", "closed", "defective: part words forbid test change"},
+			{partBID, "Part B", "in-queue", ""},
+		} {
+			if _, err := tx.Exec(`INSERT INTO items(item_id,title,state,close_reason,updated_at) VALUES (?,?,?,?,?)`,
+				it.id, it.title, it.state, it.closeReason, int64(1795770000000)); err != nil {
+				return err
+			}
+		}
+		if _, err := tx.Exec(`INSERT INTO item_edges(item_id, blocked_by) VALUES (?,?)`, partBID, partAID); err != nil {
+			return err
+		}
+		_, err := tx.Exec(`INSERT INTO item_splits(parent_id, statement) VALUES (?,?)`, parentID, rawStmt)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+
+	rs, err := store.OpenRead(ctx, h.store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rs.Close()
+	if err := rs.ReadTx(ctx, func(r *store.Reader) error {
+		// 1. Parent row via decorateWhyPassSplits -> waits on work / design (not owner).
+		rows := []whyPassRow{
+			{waitingRow: waitingRow{ItemID: parentID, Class: "waits on work", Why: "waiting", Mover: partAID}, State: "blocked", Reason: "blocked"},
+		}
+		if err := decorateWhyPassSplits(r, rows); err != nil {
+			return err
+		}
+		if rows[0].Class != "waits on work" || rows[0].Mover != "design" {
+			t.Fatalf("parent row = %+v, want waits on work / design", rows[0])
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// 2. Dependent sibling via readWaiting -> waits on work / design (not operator).
+	wRows, err := readWaiting(ctx, h.store, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sibRow *waitingRow
+	for i := range wRows {
+		if wRows[i].ItemID == partBID {
+			sibRow = &wRows[i]
+			break
+		}
+	}
+	if sibRow == nil || sibRow.Class != "waits on work" || !strings.Contains(sibRow.Mover, "design") || strings.Contains(sibRow.Mover, "operator") {
+		t.Fatalf("sibling waiting row = %+v, want waits on work / design", sibRow)
+	}
+
+	// 3. After replacement: replaced part is excluded from active required counts,
+	// and a non-defective closed required part still names owner.
+	stmtReplaced := splitStatement{
+		Parts: []splitPart{
+			{Label: "a", Title: "Part A", Share: "Do A", Required: boolPtr(true), ReplacedBy: []string{"a-v2"}},
+			{Label: "a-v2", Title: "Part A v2", Share: "Do A v2", Required: boolPtr(true)},
+			{Label: "b", Title: "Part B", Share: "Do B", Follows: []string{"a-v2"}, Required: boolPtr(true)},
+		},
+	}
+	rawReplaced, _ := json.Marshal(stmtReplaced)
+	s, err = store.Open(ctx, h.store, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.WriteTx(ctx, func(tx *store.Tx) error {
+		if _, err := tx.Exec(`INSERT INTO items(item_id,title,state,close_reason,updated_at) VALUES (?,?,?,?,?)`,
+			partAV2ID, "Part A v2", "landed", "", int64(1795770300000)); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`UPDATE items SET state='closed', close_reason='obsolete' WHERE item_id=?`, partBID); err != nil {
+			return err
+		}
+		_, err := tx.Exec(`UPDATE item_splits SET statement=? WHERE parent_id=?`, rawReplaced, parentID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+
+	rs2, err := store.OpenRead(ctx, h.store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rs2.Close()
+	if err := rs2.ReadTx(ctx, func(r *store.Reader) error {
+		progress, _, err := splitSnapshotDecorations(r)
+		if err != nil {
+			return err
+		}
+		if progress[parentID] != "1 of 2 required parts landed" {
+			t.Fatalf("progress = %q, want 1 of 2 required parts landed", progress[parentID])
+		}
+		rows := []whyPassRow{
+			{waitingRow: waitingRow{ItemID: parentID, Class: "waits on work", Why: "waiting", Mover: partBID}, State: "blocked", Reason: "blocked"},
+		}
+		if err := decorateWhyPassSplits(r, rows); err != nil {
+			return err
+		}
+		if rows[0].Class != "needs you" || !strings.HasPrefix(rows[0].Mover, "owner; required part did not land: "+partBID) {
+			t.Fatalf("non-defective closed part row = %+v, want owner; required part did not land", rows[0])
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}

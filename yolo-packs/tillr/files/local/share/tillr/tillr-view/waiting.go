@@ -350,6 +350,23 @@ func assembleWaitingAt(r *store.Reader, questions vantage.QuestionSource, storeP
 	for _, item := range items {
 		states[item.ItemID] = item.State
 	}
+	splits, err := readAllSplits(r)
+	if err != nil {
+		return nil, err
+	}
+	partIndex := splitPartIndex(splits)
+	var splitMeta map[string]splitItemMeta
+	var closingStates map[string]splitClosingState
+	if len(splits) > 0 {
+		splitMeta, err = readSplitItemMeta(r)
+		if err != nil {
+			return nil, err
+		}
+		closingStates, err = readSplitClosingStates(r)
+		if err != nil {
+			return nil, err
+		}
+	}
 	sort.Slice(items, func(i, j int) bool {
 		if items[i].Rank != items[j].Rank {
 			if items[i].Rank == "" {
@@ -488,13 +505,43 @@ func assembleWaitingAt(r *store.Reader, questions vantage.QuestionSource, storeP
 					blockers = append(blockers, edge.BlockedBy)
 				}
 				if len(closedBlockers) > 0 {
-					row.Class = "needs you"
-					if len(blockers) > 0 {
-						row.Why = fmt.Sprintf("blocked: waiting on %s; %s closed without landing", strings.Join(blockers, ", "), strings.Join(closedBlockers, ", "))
-					} else {
-						row.Why = fmt.Sprintf("blocked: %s closed without landing", strings.Join(closedBlockers, ", "))
+					allDefectiveSibling := false
+					if pm, isPart := partIndex[item.ItemID]; isPart {
+						allDefectiveSibling = true
+						for _, b := range closedBlockers {
+							bm, ok := partIndex[b]
+							if !ok || bm.ParentID != pm.ParentID || bm.Part.Required == nil || !*bm.Part.Required || len(bm.Part.ReplacedBy) > 0 || !isDefectiveClose(states[b], splitMeta[b].CloseReason) {
+								allDefectiveSibling = false
+								break
+							}
+						}
+						if allDefectiveSibling {
+							cs := closingStates[pm.ParentID]
+							if cs.Held != nil {
+								if cs.Held.Mover == "owner" {
+									row.Class = "needs you"
+									row.Mover = "owner; " + cs.Held.Reason
+								} else {
+									row.Class = "waits on work"
+									row.Mover = cs.Held.Mover
+								}
+								row.Why = cs.Held.Reason
+							} else {
+								row.Class = "waits on work"
+								row.Mover = "design"
+								row.Why = "waiting on design seat to replace defective required part (" + strings.Join(closedBlockers, ", ") + ")"
+							}
+						}
 					}
-					row.Mover = fmt.Sprintf("operator; remove the dependency or reopen %s", strings.Join(closedBlockers, ", "))
+					if !allDefectiveSibling {
+						row.Class = "needs you"
+						if len(blockers) > 0 {
+							row.Why = fmt.Sprintf("blocked: waiting on %s; %s closed without landing", strings.Join(blockers, ", "), strings.Join(closedBlockers, ", "))
+						} else {
+							row.Why = fmt.Sprintf("blocked: %s closed without landing", strings.Join(closedBlockers, ", "))
+						}
+						row.Mover = fmt.Sprintf("operator; remove the dependency or reopen %s", strings.Join(closedBlockers, ", "))
+					}
 				} else if len(blockers) > 0 {
 					row.Why = "blocked: waiting on " + strings.Join(blockers, ", ")
 					row.Mover = strings.Join(blockers, ", ")
@@ -582,13 +629,43 @@ func assembleWaitingAt(r *store.Reader, questions vantage.QuestionSource, storeP
 				blockers = append(blockers, edge.BlockedBy)
 			}
 			if len(closedBlockers) > 0 {
-				row.Class = "needs you"
-				if len(blockers) > 0 {
-					row.Why = fmt.Sprintf("blocked: waiting on %s; %s closed without landing", strings.Join(blockers, ", "), strings.Join(closedBlockers, ", "))
-				} else {
-					row.Why = fmt.Sprintf("blocked: %s closed without landing", strings.Join(closedBlockers, ", "))
+				allDefectiveSibling := false
+				if pm, isPart := partIndex[item.ItemID]; isPart {
+					allDefectiveSibling = true
+					for _, b := range closedBlockers {
+						bm, ok := partIndex[b]
+						if !ok || bm.ParentID != pm.ParentID || bm.Part.Required == nil || !*bm.Part.Required || len(bm.Part.ReplacedBy) > 0 || !isDefectiveClose(states[b], splitMeta[b].CloseReason) {
+							allDefectiveSibling = false
+							break
+						}
+					}
+					if allDefectiveSibling {
+						cs := closingStates[pm.ParentID]
+						if cs.Held != nil {
+							if cs.Held.Mover == "owner" {
+								row.Class = "needs you"
+								row.Mover = "owner; " + cs.Held.Reason
+							} else {
+								row.Class = "waits on work"
+								row.Mover = cs.Held.Mover
+							}
+							row.Why = cs.Held.Reason
+						} else {
+							row.Class = "waits on work"
+							row.Mover = "design"
+							row.Why = "waiting on design seat to replace defective required part (" + strings.Join(closedBlockers, ", ") + ")"
+						}
+					}
 				}
-				row.Mover = fmt.Sprintf("operator; remove the dependency or reopen %s", strings.Join(closedBlockers, ", "))
+				if !allDefectiveSibling {
+					row.Class = "needs you"
+					if len(blockers) > 0 {
+						row.Why = fmt.Sprintf("blocked: waiting on %s; %s closed without landing", strings.Join(blockers, ", "), strings.Join(closedBlockers, ", "))
+					} else {
+						row.Why = fmt.Sprintf("blocked: %s closed without landing", strings.Join(closedBlockers, ", "))
+					}
+					row.Mover = fmt.Sprintf("operator; remove the dependency or reopen %s", strings.Join(closedBlockers, ", "))
+				}
 			} else if len(blockers) > 0 {
 				row.Class = "waits on work"
 				row.Why = "blocked: waiting on " + strings.Join(blockers, ", ")
