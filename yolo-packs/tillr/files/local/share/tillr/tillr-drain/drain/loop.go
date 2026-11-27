@@ -1101,6 +1101,9 @@ func (l *Loop) Run(ctx context.Context) (result LoopResult, err error) {
 		}
 	}()
 	defer func() {
+		if result.Stop == StopQueueDrained && ctx.Err() == nil {
+			l.heavyWG.Wait()
+		}
 		cancel()
 		// A worker-end handoff registers under mu only while its context is
 		// live. Cross that admission point before joining the examinations.

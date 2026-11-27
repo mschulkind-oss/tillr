@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -520,15 +521,31 @@ type parityLanding struct {
 	LandedTree string
 }
 
+func countExaminedEvents(t *testing.T, storePath string) int {
+	t.Helper()
+	s, err := store.OpenRead(context.Background(), storePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	var n int
+	if err := s.ReadTx(context.Background(), func(r *store.Reader) error {
+		return r.QueryRow(`SELECT COUNT(*) FROM events WHERE kind = 'drain.examined'`).Scan(&n)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
 func snapshotParityStore(t *testing.T, storePath string) paritySnapshot {
 	t.Helper()
 	s := openFixture(t, storePath)
 	defer s.Close()
 	var snap paritySnapshot
 	if err := s.ReadTx(context.Background(), func(r *store.Reader) error {
-		// Events (excluding wall-time-throttled session observation events).
+		// Events (excluding wall-time-throttled session observation and transient store-busy events).
 		rows, err := r.Query(`SELECT kind, COALESCE(object_type,''), COALESCE(object_id,''), COALESCE(payload,'{}')
-			FROM events WHERE kind NOT IN (?, ?) ORDER BY seq`, LoopPassKind, ProcessCPUKind)
+			FROM events WHERE kind NOT IN (?, ?, ?) ORDER BY seq`, LoopPassKind, ProcessCPUKind, StoreBusyKind)
 		if err != nil {
 			return err
 		}
@@ -618,6 +635,7 @@ func runParityScenario(t *testing.T, withNotify bool) paritySnapshot {
 
 	itemALanded := make(chan struct{}, 1)
 	itemBLanded := make(chan struct{}, 1)
+	var itemALandedFlag, itemBSeededFlag, itemBLandedFlag atomic.Bool
 	steps := &paritySteps{
 		t:   t,
 		f:   f,
@@ -625,11 +643,13 @@ func runParityScenario(t *testing.T, withNotify bool) paritySnapshot {
 		onLanded: func(id string) {
 			switch id {
 			case "item-a":
+				itemALandedFlag.Store(true)
 				select {
 				case itemALanded <- struct{}{}:
 				default:
 				}
 			case "item-b":
+				itemBLandedFlag.Store(true)
 				select {
 				case itemBLanded <- struct{}{}:
 				default:
@@ -658,27 +678,37 @@ func runParityScenario(t *testing.T, withNotify bool) paritySnapshot {
 
 	stepFallback := make(chan struct{}, 8)
 	clockStepped := make(chan time.Duration, 8)
-	waitingForTrigger := make(chan struct{}, 8)
+	idleAfterA := make(chan struct{}, 8)
+	idleAfterB := make(chan struct{}, 8)
+	signalIdle := func() {
+		if itemBLandedFlag.Load() && countExaminedEvents(t, f.storePath) >= 2 {
+			select {
+			case idleAfterB <- struct{}{}:
+			default:
+			}
+			return
+		}
+		if itemALandedFlag.Load() && !itemBSeededFlag.Load() && countExaminedEvents(t, f.storePath) >= 1 {
+			select {
+			case idleAfterA <- struct{}{}:
+			default:
+			}
+		}
+	}
 	if withNotify {
 		startInProcessRelay(t, f.storePath)
 		l.triggerTimer = func(d time.Duration) (<-chan time.Time, func()) {
 			if d != DefaultFallbackPollInterval {
 				t.Errorf("notify run fallback timer = %s, want %s", d, DefaultFallbackPollInterval)
 			}
-			select {
-			case waitingForTrigger <- struct{}{}:
-			default:
-			}
+			signalIdle()
 			// Never fires: the notify run must wake strictly via the relay.
 			return make(chan time.Time), func() {}
 		}
 	} else {
 		l.triggerTimer = func(d time.Duration) (<-chan time.Time, func()) {
 			ch := make(chan time.Time, 1)
-			select {
-			case waitingForTrigger <- struct{}{}:
-			default:
-			}
+			signalIdle()
 			go func() {
 				<-stepFallback
 				clockMu.Lock()
@@ -710,7 +740,7 @@ func runParityScenario(t *testing.T, withNotify bool) paritySnapshot {
 
 	// Wait until the loop enters waitForTrigger idle after landing item-a.
 	select {
-	case <-waitingForTrigger:
+	case <-idleAfterA:
 	case <-time.After(hangGuard):
 		cancel()
 		<-runDone
@@ -718,6 +748,7 @@ func runParityScenario(t *testing.T, withNotify bool) paritySnapshot {
 	}
 
 	// Step 2: file item-b while the loop is waiting in waitForTrigger.
+	itemBSeededFlag.Store(true)
 	st, err := store.Open(context.Background(), f.storePath, true)
 	if err != nil {
 		t.Fatal(err)
@@ -754,7 +785,7 @@ func runParityScenario(t *testing.T, withNotify bool) paritySnapshot {
 
 	// Wait for the loop to settle back into waitForTrigger, then stop cleanly.
 	select {
-	case <-waitingForTrigger:
+	case <-idleAfterB:
 	case <-time.After(hangGuard):
 		cancel()
 		<-runDone

@@ -497,3 +497,85 @@ func TestTrunkBranchUnsetDefaultsToMain(t *testing.T) {
 	}
 	_ = json.Marshal
 }
+
+type delayedHeavyTrunkSteps struct {
+	*trunkBranchTestSteps
+	delay time.Duration
+}
+
+func (s *delayedHeavyTrunkSteps) JudgeHeavy(ctx context.Context, dir, only string) ([]HeavyCheck, error) {
+	select {
+	case <-time.After(s.delay):
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	return s.trunkBranchTestSteps.JudgeHeavy(ctx, dir, only)
+}
+
+func TestExitWhenDrainedWaitsForInFlightHeavyProofBeforeCancel(t *testing.T) {
+	root, git := initNoMainRepo(t, "dev")
+	remote := filepath.Join(t.TempDir(), "upstream.git")
+	git("init", "--bare", remote)
+	git("--git-dir="+remote, "symbolic-ref", "HEAD", "refs/heads/dev")
+	git("remote", "add", "origin", remote)
+	git("push", "-u", "origin", "dev")
+	initialDev := git("rev-parse", "refs/heads/dev")
+	git("update-ref", GreenRef, initialDev)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	dbPath := filepath.Join(t.TempDir(), "state.db")
+	s, err := store.InitFixture(ctx, dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	insertQueuedItemForTrunkTest(t, s, "item-work-1", "Land on dev with delayed heavy proof", "Add change.txt.\n")
+	s.Close()
+
+	cfg, err := settings.Read(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	laneRoot := scratchUnderDurable(t)
+	steps := &delayedHeavyTrunkSteps{
+		trunkBranchTestSteps: &trunkBranchTestSteps{t: t, root: root, store: dbPath, laneRoot: laneRoot, trunkBranch: "dev"},
+		delay:                150 * time.Millisecond,
+	}
+	tpl := filepath.Join("..", "..", "tillr-run", "backends", "brief-template.md")
+	stager := &LaneStager{Root: root, LaneRoot: laneRoot, Store: dbPath, Template: tpl, Now: time.Now, TrunkRef: cfg.TrunkBranch()}
+	p := twoBackends()
+	var report bytes.Buffer
+	l, err := NewLoop(LoopConfig{
+		Root:              root,
+		Store:             dbPath,
+		LaneRoot:          laneRoot,
+		Lanes:             []string{"lane-1"},
+		NoNotify:          true,
+		StorePollInterval: 50 * time.Millisecond,
+		ExitWhenDrained:   true,
+		Policy:            &p,
+		Steps:             steps,
+		Stage:             stager,
+		Now:               time.Now,
+		Report:            &report,
+		PostLanding:       cfg,
+		TrunkBranch:       cfg.TrunkBranch(),
+	})
+	if err != nil {
+		t.Fatalf("NewLoop: %v", err)
+	}
+	l.gatePolicy.LandingStrategy = "after-merge"
+
+	if _, err := l.Run(ctx); err != nil {
+		t.Fatalf("Loop.Run: %v\n%s", err, report.String())
+	}
+	waitAction(t, &l.pushAction)
+
+	devTip := git("rev-parse", "refs/heads/dev")
+	if devTip == initialDev {
+		t.Fatalf("refs/heads/dev did not advance\n%s", report.String())
+	}
+	if got := git("--git-dir="+remote, "rev-parse", "refs/heads/dev"); got != devTip {
+		t.Fatalf("remote dev = %s, want %s\n%s", got, devTip, report.String())
+	}
+}

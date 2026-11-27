@@ -28,7 +28,7 @@ func TestSchemaRollHelperProcess(t *testing.T) {
 	storePath := os.Getenv("SCHEMA_ROLL_STORE")
 	policyJSON := os.Getenv("SCHEMA_ROLL_POLICY")
 
-	db, err := sql.Open("sqlite", "file:"+storePath+"?mode=ro")
+	db, err := sql.Open("sqlite", "file:"+storePath+"?mode=ro&_pragma=busy_timeout(5000)")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -142,7 +142,7 @@ printf '{"record_version":1,"kind":"land.record","id":"land-1","producer":{"syst
 		t.Fatal(err)
 	}
 	defer out.Close()
-	s.cmd = exec.Command(s.exe, "loop", "--root", f.root, "--store", f.store, "--lane-root", f.laneRoot, "--lanes", "2", "--policy", policy, "--run-bin", wrapper, "--item-bin", itemBin, "--brief-template", filepath.Join("..", "..", "tillr-run", "backends", "brief-template.md"), "--rolling=", "--gate", always(t, "gate", 0), "--land", land, "--verdict", always(t, "verdict", 0))
+	s.cmd = exec.Command(s.exe, "loop", "--root", f.root, "--store", f.store, "--lane-root", f.laneRoot, "--lanes", "2", "--policy", policy, "--run-bin", wrapper, "--item-bin", itemBin, "--brief-template", filepath.Join("..", "..", "tillr-run", "backends", "brief-template.md"), "--rolling=", "--fallback-poll", "500ms", "--gate", always(t, "gate", 0), "--land", land, "--verdict", always(t, "verdict", 0))
 	s.cmd.Stdout, s.cmd.Stderr = out, out
 	if err := s.cmd.Start(); err != nil {
 		t.Fatal(err)
