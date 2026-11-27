@@ -627,7 +627,6 @@ type Loop struct {
 	revertTipPoll               time.Duration // optional; tests may shorten the revert gate's trunk poll interval
 	heavyWG                     sync.WaitGroup
 	heavyRunning                bool
-	heavyProofActive            bool // heavyMu; entry is serialized with exec by restartMechanical
 	heavyReuseRed               bool // set at startup after adopting an in-place replacement
 	heavyLandingCounts          []int
 	landLockHolds               []int64
@@ -3767,11 +3766,6 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 					cancelGateWait()
 				}()
 				d, err := procSteps.awaitDetachedGate(gateWaitCtx, l, handle)
-				if err == nil && detachedGateSettled(candidate, d) {
-					if held, ok := ctx.Value(restartMechanicalKey{}).(*restartMechanicalHold); ok {
-						held.allowDuringProof.Store(true)
-					}
-				}
 				return d, err
 			})
 			l.mu.Lock()

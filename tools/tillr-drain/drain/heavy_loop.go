@@ -7,12 +7,16 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/mschulkind-oss/tillr-drain/alarms"
+	"github.com/mschulkind-oss/tillr-drain/fixer"
 	"github.com/mschulkind-oss/tillr-drain/heavy"
+	"github.com/mschulkind-oss/tillr-drain/heavyrun"
 	"github.com/mschulkind-oss/tillr/checkresult"
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/store"
@@ -32,6 +36,7 @@ func (l *Loop) startHeavy(ctx context.Context, tip string) error {
 	if !ok {
 		return Usagef("after-merge needs a heavy judge; the configured steps have none")
 	}
+	procSteps, isProc := l.cfg.Steps.(*ProcessSteps)
 	l.heavyMu.Lock()
 	defer l.heavyMu.Unlock()
 	l.heavyWanted = tip
@@ -52,6 +57,10 @@ func (l *Loop) startHeavy(ctx context.Context, tip string) error {
 	l.heavyWG.Add(1)
 	go func() {
 		defer l.heavyWG.Done()
+		if isProc {
+			l.runDetachedHeavyLoop(heavyCtx, procSteps)
+			return
+		}
 		for {
 			l.heavyMu.Lock()
 			requested := l.heavyWanted
@@ -63,90 +72,9 @@ func (l *Loop) startHeavy(ctx context.Context, tip string) error {
 			}, OnUnrecorded: func(uctx context.Context, sha string) {
 				l.recordUnrecordedTrunkCommit(uctx, sha)
 			}, Report: func(run HeavyRun) {
-				l.reportf("loop: heavy run %s at %s; green base %s\n", run.Result, shortSHA(run.TipSHA), shortSHA(run.BaseSHA))
-				if run.Result == "green" {
-					l.clearUnrecordedTrunkCommit(heavyCtx)
-					l.offerGreenAdvance(heavyCtx, run.TipSHA)
-				}
-				if len(run.ReusedChecks) > 0 {
-					l.reportf("loop: heavy %s reused checks=%s\n", shortSHA(run.TipSHA), strings.Join(run.ReusedChecks, ","))
-				}
-				landings, countErr := heavy.Landings(heavyCtx, l.cfg.Root, l.cfg.Store, run.BaseSHA, run.TipSHA)
-				if countErr != nil {
-					l.reportf("loop: landings per heavy run=unavailable: %v\n", countErr)
-				} else {
-					l.heavyMu.Lock()
-					l.heavyLandingCounts = append(l.heavyLandingCounts, len(landings))
-					l.heavyMu.Unlock()
-					l.reportf("loop: heavy %s landings per heavy run=%d\n", shortSHA(run.TipSHA), len(landings))
-				}
-				for _, check := range run.Checks {
-					if check.OverBudgetMS > 0 {
-						l.reportf("loop: heavy %s over budget: measured %d ms, declared %d ms; keeps %s verdict\n", check.CheckID, check.DurationMS, check.BudgetMS, check.Result)
-					}
-					classified := classifyCheck(checkresult.Observation{Check: check.CheckID, Source: checkresult.HeavyCheckWord, Word: check.Result})
-					if classified.Outcome == checkresult.Fail {
-						l.reportf("loop: heavy %s first red landing %s; %s\n", check.CheckID, shortSHA(check.FirstRedLanding), check.Detail)
-						if check.RevertedBy != "" {
-							l.reportf("loop: heavy %s red from %s: reverted by %s\n", check.CheckID, shortSHA(check.FirstRedLanding), shortSHA(check.RevertedBy))
-						}
-					}
-					if classified.Outcome == checkresult.Unavailable {
-						l.reportf("loop: heavy %s unavailable; %s\n", check.CheckID, check.Detail)
-					}
-				}
+				l.reportHeavyRun(heavyCtx, run)
 			}, Fix: func(ctx context.Context, sha string, checks []HeavyCheck) error {
-				remaining, err := l.linkMatchingOpenFixers(ctx, sha, checks)
-				if err != nil {
-					return err
-				}
-				if len(remaining) == 0 {
-					return nil
-				}
-				checks = remaining
-				ids := []string{}
-				watches := map[string][]string{}
-				notes := []string{}
-				for _, check := range checks {
-					ids = append(ids, check.CheckID)
-					watches[check.CheckID] = check.Reads
-					// An unattributed red's brief says why no landing is named, in the
-					// runner's own words, with whatever output the judge recorded.
-					if check.FirstRedLanding == "" && strings.TrimSpace(check.Detail) != "" {
-						notes = append(notes, "No landing is named for "+check.CheckID+" ("+heavyBrief(check.Detail)+"); start from the tip and run the check there")
-					} else if strings.HasPrefix(check.CheckID, goTestPrefix) && check.Detail != "" {
-						notes = append(notes, check.CheckID+": "+check.Detail)
-					}
-					// The failed check's full output is on disk; the brief names the file and
-					// quotes its end, so the fixer does not rediscover an intermittent failure.
-					if check.LogPath != "" {
-						notes = append(notes, "Full output of "+check.CheckID+" is in "+check.LogPath+"; its failing lines and end: "+heavyBrief(legacyLogTail(check.LogPath)))
-					}
-					// A fixer filed after the automatic revert ended "not possible" says why,
-					// so its worker does not try the same revert again.
-					if check.RevertRefused != "" {
-						notes = append(notes, "Automatic revert of "+shortSHA(check.FirstRedLanding)+" for "+check.CheckID+" was not possible: "+heavyBrief(check.RevertRefused))
-					}
-				}
-				// Attribution names the culprit, but repair permissions cover every
-				// commit since the last proved green through the current tip.
-				green, err := heavyGreen(ctx, l.cfg.Root)
-				if err != nil {
-					return err
-				}
-				tip, err := heavyGitOutput(ctx, l.cfg.Root, "rev-parse", l.trunkRef())
-				if err != nil {
-					return err
-				}
-				paths := l.rangePaths(ctx, green, tip)
-				detail := []string{}
-				for _, check := range checks {
-					if check.FirstRedLanding == "" {
-						detail = append(detail, check.Detail)
-					}
-				}
-				_, err = l.fileTrunkFixerNoted(ctx, sha, ids, GateOutcome{SuspectPaths: paths, CheckWatches: watches, RepairDetail: strings.Join(detail, "; "), CheckLogs: l.heavyCheckLogs(tip, checks)}, strings.Join(notes, ". "))
-				return err
+				return l.fixHeavyChecks(ctx, sha, checks)
 			}}
 			runner.Progress = func(line string) { l.reportf("%s", line) }
 			runner.ReuseRed = l.heavyReuseRed
@@ -182,9 +110,6 @@ func (l *Loop) startHeavy(ctx context.Context, tip string) error {
 				if l.beginHeavyProof(heavyCtx) {
 					out, err = runner.RunAttempt(heavyCtx, requested)
 					hold.Close()
-					l.heavyMu.Lock()
-					l.heavyProofActive = false
-					l.heavyMu.Unlock()
 				} else {
 					hold.Close()
 					err = errRestartPending
@@ -276,9 +201,89 @@ func (l *Loop) beginHeavyProof(ctx context.Context) bool {
 		}
 	}
 	l.heavyMu.Lock()
-	l.heavyProofActive = true
-	l.heavyMu.Unlock()
+	defer l.heavyMu.Unlock()
 	return true
+}
+
+func (l *Loop) reportHeavyRun(ctx context.Context, run HeavyRun) {
+	l.reportf("loop: heavy run %s at %s; green base %s\n", run.Result, shortSHA(run.TipSHA), shortSHA(run.BaseSHA))
+	if run.Result == "green" {
+		l.clearUnrecordedTrunkCommit(ctx)
+		l.offerGreenAdvance(ctx, run.TipSHA)
+	}
+	if len(run.ReusedChecks) > 0 {
+		l.reportf("loop: heavy %s reused checks=%s\n", shortSHA(run.TipSHA), strings.Join(run.ReusedChecks, ","))
+	}
+	landings, countErr := heavy.Landings(ctx, l.cfg.Root, l.cfg.Store, run.BaseSHA, run.TipSHA)
+	if countErr != nil {
+		l.reportf("loop: landings per heavy run=unavailable: %v\n", countErr)
+	} else {
+		l.heavyMu.Lock()
+		l.heavyLandingCounts = append(l.heavyLandingCounts, len(landings))
+		l.heavyMu.Unlock()
+		l.reportf("loop: heavy %s landings per heavy run=%d\n", shortSHA(run.TipSHA), len(landings))
+	}
+	for _, check := range run.Checks {
+		if check.OverBudgetMS > 0 {
+			l.reportf("loop: heavy %s over budget: measured %d ms, declared %d ms; keeps %s verdict\n", check.CheckID, check.DurationMS, check.BudgetMS, check.Result)
+		}
+		classified := classifyCheck(checkresult.Observation{Check: check.CheckID, Source: checkresult.HeavyCheckWord, Word: check.Result})
+		if classified.Outcome == checkresult.Fail {
+			l.reportf("loop: heavy %s first red landing %s; %s\n", check.CheckID, shortSHA(check.FirstRedLanding), check.Detail)
+			if check.RevertedBy != "" {
+				l.reportf("loop: heavy %s red from %s: reverted by %s\n", check.CheckID, shortSHA(check.FirstRedLanding), shortSHA(check.RevertedBy))
+			}
+		}
+		if classified.Outcome == checkresult.Unavailable {
+			l.reportf("loop: heavy %s unavailable; %s\n", check.CheckID, check.Detail)
+		}
+	}
+}
+
+func (l *Loop) fixHeavyChecks(ctx context.Context, sha string, checks []HeavyCheck) error {
+	remaining, err := l.linkMatchingOpenFixers(ctx, sha, checks)
+	if err != nil {
+		return err
+	}
+	if len(remaining) == 0 {
+		return nil
+	}
+	checks = remaining
+	ids := []string{}
+	watches := map[string][]string{}
+	notes := []string{}
+	for _, check := range checks {
+		ids = append(ids, check.CheckID)
+		watches[check.CheckID] = check.Reads
+		if check.FirstRedLanding == "" && strings.TrimSpace(check.Detail) != "" {
+			notes = append(notes, "No landing is named for "+check.CheckID+" ("+heavyBrief(check.Detail)+"); start from the tip and run the check there")
+		} else if strings.HasPrefix(check.CheckID, goTestPrefix) && check.Detail != "" {
+			notes = append(notes, check.CheckID+": "+check.Detail)
+		}
+		if check.LogPath != "" {
+			notes = append(notes, "Full output of "+check.CheckID+" is in "+check.LogPath+"; its failing lines and end: "+heavyBrief(legacyLogTail(check.LogPath)))
+		}
+		if check.RevertRefused != "" {
+			notes = append(notes, "Automatic revert of "+shortSHA(check.FirstRedLanding)+" for "+check.CheckID+" was not possible: "+heavyBrief(check.RevertRefused))
+		}
+	}
+	green, err := heavyGreen(ctx, l.cfg.Root)
+	if err != nil {
+		return err
+	}
+	tip, err := heavyGitOutput(ctx, l.cfg.Root, "rev-parse", l.trunkRef())
+	if err != nil {
+		return err
+	}
+	paths := l.rangePaths(ctx, green, tip)
+	detail := []string{}
+	for _, check := range checks {
+		if check.FirstRedLanding == "" {
+			detail = append(detail, check.Detail)
+		}
+	}
+	_, err = l.fileTrunkFixerNoted(ctx, sha, ids, GateOutcome{SuspectPaths: paths, CheckWatches: watches, RepairDetail: strings.Join(detail, "; "), CheckLogs: l.heavyCheckLogs(tip, checks)}, strings.Join(notes, ". "))
+	return err
 }
 
 func (l *Loop) heavyInFlight() bool {
@@ -489,4 +494,397 @@ func (l *Loop) firstUnrecordedTrunkCommit(ctx context.Context, base, tip string)
 		}
 	}
 	return "", nil
+}
+
+type detachedHeavyHandle struct {
+	dir     string
+	face    heavyrun.HeavyProofFace
+	preDone *heavyrun.HeavyProofDone
+}
+
+func processStepsHeavyCallbacks() heavyrun.HeavyProofCallbacks {
+	return heavyrun.HeavyProofCallbacks{
+		MakeJudge: func(spec heavyrun.HeavyProofSpec) (func(context.Context, string, string) ([]HeavyCheck, error), error) {
+			ps := &ProcessSteps{
+				Root:                   spec.Root,
+				LaneRoot:               spec.LaneRoot,
+				Store:                  spec.Store,
+				HeavyGateBin:           spec.HeavyGateBin,
+				RollingProgram:         spec.RollingProgram,
+				ReplayProgram:          spec.ReplayProgram,
+				GateProgram:            spec.GateProgram,
+				selfExe:                spec.SelfExe,
+				heavyLogSampleInterval: time.Duration(spec.HeavyLogSampleIntervalMS) * time.Millisecond,
+			}
+			return ps.JudgeHeavy, nil
+		},
+		WithWorktreeRegistryLock: withWorktreeRegistryLock,
+		UnlockRegisteredWorktree: unlockRegisteredWorktree,
+	}
+}
+
+func (l *Loop) runDetachedHeavyLoop(heavyCtx context.Context, procSteps *ProcessSteps) {
+	for {
+		l.heavyMu.Lock()
+		requested := l.heavyWanted
+		l.heavyMu.Unlock()
+
+		handle, attached, err := l.startOrAttachDetachedHeavyProof(heavyCtx, procSteps, requested)
+		var done heavyrun.HeavyProofDone
+		if err == nil {
+			if !attached {
+				// Confirm we still want to proceed or wait on the detached supervisor.
+			}
+			done, err = l.awaitDetachedHeavyProof(heavyCtx, procSteps, handle)
+		}
+		if err == nil {
+			err = l.settleDetachedHeavyProof(heavyCtx, handle.dir, done)
+		}
+		if err != nil && heavyCtx.Err() == nil && !errors.Is(err, errRestartPending) {
+			l.reportf("loop: heavy runner fault: %v\n", err)
+			pendingTip := requested
+			if done.Attempt.PendingTip != "" {
+				pendingTip = done.Attempt.PendingTip
+			}
+			if pendingTip != "" {
+				if eventErr := l.recordHeavyFault(heavyCtx, pendingTip, err); eventErr != nil {
+					l.reportf("loop: recording heavy runner fault: %v\n", eventErr)
+				}
+			}
+		}
+
+		l.heavyMu.Lock()
+		attempted := l.heavyWanted
+		if len(done.Attempt.Runs) > 0 {
+			attempted = done.Attempt.Runs[len(done.Attempt.Runs)-1].TipSHA
+		}
+		if err == nil && !done.Attempt.Busy && done.Error == "" && !done.Interrupted {
+			l.heavyAttempted = attempted
+		}
+		if heavyCtx.Err() == nil && !l.isRestartReplaced() && err == nil && !done.Attempt.Busy && done.Error == "" && !done.Interrupted {
+			newest, tipErr := heavy.GitOutput(heavyCtx, l.cfg.Root, "rev-parse", l.trunkRef()+"^{commit}")
+			needMore := (l.heavyWanted != requested && l.heavyWanted != attempted) || (tipErr == nil && newest != "" && newest != attempted)
+			if needMore {
+				l.heavyMu.Unlock()
+				if stop, stopErr := l.restartStopsNextHeavyProof(heavyCtx); stopErr == nil && stop {
+					l.heavyMu.Lock()
+					l.heavyRunning = false
+					l.heavyMu.Unlock()
+					return
+				}
+				continue
+			}
+		}
+		l.heavyRunning = false
+		l.heavyMu.Unlock()
+		return
+	}
+}
+
+func (l *Loop) startOrAttachDetachedHeavyProof(ctx context.Context, procSteps *ProcessSteps, requested string) (detachedHeavyHandle, bool, error) {
+	dir, err := heavyrun.HeavyDirectory(ctx, l.cfg.Root)
+	if err != nil {
+		return detachedHeavyHandle{}, false, err
+	}
+	if d, ok := heavyrun.ReadHeavyProofDone(dir); ok {
+		return detachedHeavyHandle{dir: dir, preDone: &d}, true, nil
+	}
+	if f, ok := heavyrun.ReadHeavyProofFace(dir); ok && heavyrun.HeavyProofRunning(f) {
+		return detachedHeavyHandle{dir: dir, face: f}, true, nil
+	}
+	if !l.beginHeavyProof(ctx) {
+		return detachedHeavyHandle{}, false, errRestartPending
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return detachedHeavyHandle{}, false, Externalf("creating heavy directory %s: %v", dir, err)
+	}
+	for _, name := range []string{
+		heavyrun.HeavyAttemptFaceFile,
+		heavyrun.HeavyAttemptDoneFile,
+		heavyrun.HeavyAttemptSpecFile,
+		heavyrun.HeavyEarlyRequestFile,
+		heavyrun.HeavyEarlyAnswerFile,
+	} {
+		if err := os.Remove(filepath.Join(dir, name)); err != nil && !os.IsNotExist(err) {
+			return detachedHeavyHandle{}, false, Externalf("clearing stale heavy state %s: %v", name, err)
+		}
+	}
+	ownerPID, ownerStartTicks, err := heavyrun.HeavySupervisorIdentity()
+	if err != nil {
+		return detachedHeavyHandle{}, false, Externalf("reading loop process identity: %v", err)
+	}
+	spec := heavyrun.HeavyProofSpec{
+		Root:                     l.cfg.Root,
+		Work:                     filepath.Join(l.cfg.LaneRoot, ".rolling", "worktree"),
+		Trunk:                    l.trunkRef(),
+		Store:                    l.cfg.Store,
+		LaneRoot:                 l.cfg.LaneRoot,
+		RequestedTip:             requested,
+		ReuseRed:                 l.heavyReuseRed,
+		AutoRevert:               l.gatePolicy.AutoRevert,
+		OwnerPID:                 ownerPID,
+		OwnerStartTicks:          ownerStartTicks,
+		HeavyGateBin:             procSteps.HeavyGateBin,
+		RollingProgram:           procSteps.RollingProgram,
+		ReplayProgram:            procSteps.ReplayProgram,
+		GateProgram:              procSteps.GateProgram,
+		SelfExe:                  procSteps.selfExe,
+		HeavyLogSampleIntervalMS: procSteps.heavyLogSampleInterval.Milliseconds(),
+		Dir:                      dir,
+		FaceFile:                 filepath.Join(dir, heavyrun.HeavyAttemptFaceFile),
+		DoneFile:                 filepath.Join(dir, heavyrun.HeavyAttemptDoneFile),
+		EarlyRequestFile:         filepath.Join(dir, heavyrun.HeavyEarlyRequestFile),
+		EarlyAnswerFile:          filepath.Join(dir, heavyrun.HeavyEarlyAnswerFile),
+	}
+	if target, ok := procSteps.priority.NiceTarget(ProcessClassProof); ok {
+		spec.NiceTarget = &target
+	}
+	if err := heavyrun.PublishHeavyJSON(dir, heavyrun.HeavyAttemptSpecFile, spec); err != nil {
+		return detachedHeavyHandle{}, false, Externalf("writing heavy proof spec: %v", err)
+	}
+	specPath := filepath.Join(dir, heavyrun.HeavyAttemptSpecFile)
+	self, err := os.Executable()
+	if err != nil {
+		return detachedHeavyHandle{}, false, Externalf("locating executable for heavy proof supervisor: %v", err)
+	}
+	readyR, readyW, err := os.Pipe()
+	if err != nil {
+		return detachedHeavyHandle{}, false, Externalf("creating heavy proof readiness pipe: %v", err)
+	}
+	cmd := exec.Command(self, "--tillr-heavy-proof", specPath)
+	cmd.Dir = l.cfg.Root
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	if procSteps.priority.Mechanism() == "cgroup" {
+		if err := procSteps.priority.ApplyToCmd(cmd, ProcessClassProof, procSteps.selfExe); err != nil {
+			_ = readyW.Close()
+			_ = readyR.Close()
+			return detachedHeavyHandle{}, false, err
+		}
+	}
+	cmd.ExtraFiles = []*os.File{readyW}
+	if err := cmd.Start(); err != nil {
+		_ = readyW.Close()
+		_ = readyR.Close()
+		return detachedHeavyHandle{}, false, Externalf("starting heavy proof supervisor: %v", err)
+	}
+	_ = readyW.Close()
+	go func() { _ = cmd.Wait() }()
+
+	var buf [1]byte
+	_, _ = readyR.Read(buf[:])
+	_ = readyR.Close()
+
+	if f, ok := heavyrun.ReadHeavyProofFace(dir); ok {
+		return detachedHeavyHandle{dir: dir, face: f}, false, nil
+	}
+	if d, ok := heavyrun.ReadHeavyProofDone(dir); ok {
+		return detachedHeavyHandle{dir: dir, preDone: &d}, false, nil
+	}
+	return detachedHeavyHandle{}, false, Externalf("heavy proof supervisor exited before publishing live face")
+}
+
+func (l *Loop) awaitDetachedHeavyProof(ctx context.Context, procSteps *ProcessSteps, handle detachedHeavyHandle) (heavyrun.HeavyProofDone, error) {
+	if handle.preDone != nil {
+		if ctx.Err() != nil {
+			if l.isRestartReplaced() {
+				return heavyrun.HeavyProofDone{}, errRestartPending
+			}
+			return heavyrun.HeavyProofDone{}, ctx.Err()
+		}
+		return *handle.preDone, nil
+	}
+	ticker := time.NewTicker(25 * time.Millisecond)
+	defer ticker.Stop()
+	lastEarlyReqID := ""
+	for {
+		if l.isRestartReplaced() {
+			return heavyrun.HeavyProofDone{}, errRestartPending
+		}
+		if req, ok := heavyrun.ReadHeavyEarlyRequest(handle.dir); ok && req.RequestID != lastEarlyReqID {
+			if ans, ok := heavyrun.ReadHeavyEarlyAnswer(handle.dir); !ok || ans.RequestID != req.RequestID {
+				l.handleDetachedHeavyEarly(ctx, procSteps, handle.dir, req)
+			}
+			lastEarlyReqID = req.RequestID
+		}
+		if d, ok := heavyrun.ReadHeavyProofDone(handle.dir); ok {
+			return d, nil
+		}
+		if handle.face.PID > 0 && !heavyrun.HeavyProofRunning(handle.face) {
+			if d, ok := heavyrun.ReadHeavyProofDone(handle.dir); ok {
+				return d, nil
+			}
+			return heavyrun.HeavyProofDone{}, Externalf("heavy proof supervisor %d exited without writing %s", handle.face.PID, heavyrun.HeavyAttemptDoneFile)
+		}
+		select {
+		case <-ctx.Done():
+			if l.isRestartReplaced() {
+				return heavyrun.HeavyProofDone{}, errRestartPending
+			}
+			return heavyrun.HeavyProofDone{}, ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+func (l *Loop) handleDetachedHeavyEarly(ctx context.Context, procSteps *ProcessSteps, dir string, req heavyrun.HeavyEarlyRequest) {
+	replayRunner := HeavyRunner{
+		Root:  l.cfg.Root,
+		Work:  filepath.Join(l.cfg.LaneRoot, ".rolling", "worktree-revert-replay"),
+		Trunk: l.trunkRef(),
+		Judge: func(jctx context.Context, checkDir, only string) ([]HeavyCheck, error) {
+			return procSteps.JudgeHeavy(context.WithValue(jctx, heavyrun.HeavyUnownedKey{}, true), checkDir, only)
+		},
+		WithWorktreeRegistryLock: withWorktreeRegistryLock,
+		UnlockRegisteredWorktree: unlockRegisteredWorktree,
+	}
+	outcome, err := l.revertLanding(ctx, req.TipSHA, req.LandingSHA, req.Checks, func(rctx context.Context, sha, id string) (bool, error) {
+		return replayRunner.Replay(rctx, sha, id, "revert-check")
+	})
+	if ctx.Err() != nil && l.isRestartReplaced() {
+		// Leave the request unanswered so the replacement Loop handles it after exec.
+		return
+	}
+	ans := heavyrun.HeavyEarlyAnswer{
+		RequestID:    req.RequestID,
+		Outcome:      outcome,
+		AnsweredAtMS: time.Now().UnixMilli(),
+	}
+	if err != nil {
+		ans.Error = err.Error()
+		ans.CleanupLost = heavyrun.CleanupLost(err)
+	}
+	_ = heavyrun.WriteHeavyEarlyAnswer(dir, ans)
+}
+
+func (l *Loop) settleDetachedHeavyProof(ctx context.Context, dir string, done heavyrun.HeavyProofDone) error {
+	if done.Interrupted && len(done.Attempt.Runs) == 0 {
+		l.clearDetachedHeavyFiles(dir)
+		return context.Canceled
+	}
+	if done.Attempt.Busy {
+		l.clearDetachedHeavyFiles(dir)
+		return nil
+	}
+	sctx, unlock, lockErr := l.lockRestartMechanical(ctx)
+	if lockErr != nil {
+		// Leave heavy-attempt.done.json on disk so the post-exec image settles it.
+		return lockErr
+	}
+	defer unlock()
+
+	hold, busy, holdErr := acquireLoopLock(sctx, l.cfg.Root)
+	if holdErr != nil {
+		return holdErr
+	}
+	if busy {
+		return nil
+	}
+	defer hold.Close()
+
+	fixByTip := map[string]heavyrun.HeavyFixPlan{}
+	for _, fp := range done.FixPlans {
+		fixByTip[fp.TipSHA] = fp
+	}
+
+	var settleErr error
+	for i := range done.Attempt.Runs {
+		run := done.Attempt.Runs[i]
+		fp := fixByTip[run.TipSHA]
+		if fp.UnrecordedCommit != "" {
+			l.recordUnrecordedTrunkCommit(sctx, fp.UnrecordedCommit)
+		}
+		if run.Result == "green" && done.Error == "" {
+			base, err := heavy.Green(sctx, l.cfg.Root)
+			if err != nil {
+				run.Result = "unknown"
+				run.Detail = err.Error()
+				settleErr = err
+			} else {
+				current, curErr := heavy.GitOutput(sctx, l.cfg.Root, "rev-parse", l.trunkRef()+"^{commit}")
+				if curErr != nil {
+					settleErr = Externalf("reading %s before advancing %s: %v", l.trunkRef(), heavy.GreenRef, curErr)
+					run.Result = "unknown"
+					run.Detail = settleErr.Error()
+				} else if onTrunk, ancErr := fixer.TrunkAncestor(sctx, l.cfg.Root, run.TipSHA, current); ancErr != nil {
+					settleErr = Externalf("checking whether proved tip %s is on %s %s: %v", run.TipSHA, l.trunkRef(), current, ancErr)
+					run.Result = "unknown"
+					run.Detail = settleErr.Error()
+				} else if !onTrunk {
+					settleErr = Externalf("proved tip %s left the trunk (trunk is now %s); %s stays", run.TipSHA, current, heavy.GreenRef)
+					run.Result = "unknown"
+					run.Detail = settleErr.Error()
+				} else if run.TipSHA != base {
+					old := base
+					if old == "" {
+						old = strings.Repeat("0", len(run.TipSHA))
+					}
+					passed := []string{}
+					for _, check := range run.Checks {
+						if classifyCheck(checkresult.Observation{Check: check.CheckID, Source: checkresult.HeavyCheckWord, Word: check.Result}).Outcome == checkresult.Pass {
+							passed = append(passed, check.CheckID)
+						}
+					}
+					err = heavyrun.PublishHeavyJSON(dir, "green-"+run.TipSHA+".json", heavy.GreenProof{
+						Commit:   run.TipSHA,
+						ProvedAt: l.nowTimeUTC(),
+						Passed:   passed,
+					})
+					if err == nil {
+						_, err = heavy.GitOutput(sctx, l.cfg.Root, "update-ref", heavy.GreenRef, run.TipSHA, old)
+					}
+					if err != nil {
+						settleErr = Externalf("green compare-and-swap refused: %v", err)
+						run.Result = "unknown"
+						run.Detail = settleErr.Error()
+					}
+				}
+			}
+		}
+		if pe := heavyrun.PublishHeavy(dir, run); pe != nil && settleErr == nil {
+			settleErr = pe
+		}
+		l.reportHeavyRun(sctx, run)
+		for _, sha := range fp.Order {
+			if fixErr := l.fixHeavyChecks(sctx, sha, fp.ByLanding[sha]); fixErr != nil && settleErr == nil {
+				settleErr = fixErr
+			}
+		}
+	}
+	if settleErr == nil && done.Error != "" {
+		settleErr = errors.New(done.Error)
+	}
+	l.clearDetachedHeavyFiles(dir)
+	return settleErr
+}
+
+func (l *Loop) clearDetachedHeavyFiles(dir string) {
+	for _, name := range []string{
+		heavyrun.HeavyAttemptDoneFile,
+		heavyrun.HeavyAttemptFaceFile,
+		heavyrun.HeavyAttemptSpecFile,
+		heavyrun.HeavyEarlyRequestFile,
+		heavyrun.HeavyEarlyAnswerFile,
+	} {
+		_ = os.Remove(filepath.Join(dir, name))
+	}
+}
+
+func (l *Loop) reclaimDetachedHeavyProof(ctx context.Context) {
+	if l.nonLanding || l.isRestartReplaced() || l.cfg.Root == "" || l.heavyInFlight() {
+		return
+	}
+	if _, isProc := l.cfg.Steps.(*ProcessSteps); !isProc {
+		return
+	}
+	dir, err := heavy.Directory(ctx, l.cfg.Root)
+	if err != nil {
+		return
+	}
+	if _, ok := heavyrun.ReadHeavyProofDone(dir); ok {
+		_ = l.startHeavy(ctx, "")
+		return
+	}
+	if face, ok := heavyrun.ReadHeavyProofFace(dir); ok && heavyrun.HeavyProofRunning(face) {
+		_ = l.startHeavy(ctx, face.TipSHA)
+	}
 }

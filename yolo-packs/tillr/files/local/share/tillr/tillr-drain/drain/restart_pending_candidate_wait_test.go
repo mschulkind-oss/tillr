@@ -277,21 +277,26 @@ func TestPendingRestartHoldsConflictedGatedCandidate(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), hangGuard)
 	defer cancel()
 
-	// File a pending restart and hold it behind an active trunk proof, the
-	// exact condition where already-gated candidates still attempt landing
-	// while conflict-repair staging is held by the pending restart.
+	// File a pending restart and hold it behind an active rollAction (the
+	// condition where already-gated candidates still attempt landing while
+	// conflict-repair staging is held by the pending roll/restart).
 	if _, err := restart.File(ctx, f.storePath, restart.RoleDrain, l.cfg.Now()); err != nil {
 		t.Fatal(err)
 	}
-	l.heavyMu.Lock()
-	l.heavyProofActive = true
-	l.heavyMu.Unlock()
-	proofHeld := true
+	rollStarted := make(chan struct{})
+	rollDone := make(chan struct{})
+	rollHeld := true
+	l.rollAction.submit("test-roll", func(string) {
+		close(rollStarted)
+		<-rollDone
+	})
+	<-rollStarted
 	defer func() {
-		if proofHeld {
-			l.heavyMu.Lock()
-			l.heavyProofActive = false
-			l.heavyMu.Unlock()
+		if rollHeld {
+			close(rollDone)
+			if idle := l.rollAction.idle(); idle != nil {
+				<-idle
+			}
 		}
 	}()
 
@@ -373,11 +378,12 @@ func TestPendingRestartHoldsConflictedGatedCandidate(t *testing.T) {
 		t.Errorf("land.landing squash-conflict count after one trunk move = %d, want 2", got)
 	}
 
-	// Clearing the active trunk proof lets the next pass execute the pending restart.
-	l.heavyMu.Lock()
-	l.heavyProofActive = false
-	l.heavyMu.Unlock()
-	proofHeld = false
+	// Releasing rollAction lets the next pass execute the pending restart.
+	close(rollDone)
+	rollHeld = false
+	if idle := l.rollAction.idle(); idle != nil {
+		<-idle
+	}
 	stop, err := l.pass(ctx, &LoopResult{})
 	if err != nil || stop != StopRestarted {
 		t.Fatalf("pass after hold released = %q, %v; want %q, nil", stop, err, StopRestarted)

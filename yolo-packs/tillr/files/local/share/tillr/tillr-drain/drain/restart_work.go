@@ -3,7 +3,6 @@ package drain
 import (
 	"context"
 	"errors"
-	"sync/atomic"
 	"time"
 
 	"github.com/mschulkind-oss/tillr-drain/heavyrun"
@@ -253,7 +252,7 @@ func (l *Loop) armRestartPending(gen uint64) (<-chan struct{}, bool) {
 	if l.restartPendingWait == nil {
 		l.restartPendingWait = make(chan struct{})
 	}
-	if l.restartDefersToSettlement() || l.restartProofActive() {
+	if l.restartDefersToSettlement() {
 		l.restartHoldWaiting = true
 	}
 	return l.restartPendingWait, false
@@ -298,15 +297,13 @@ func (l *Loop) conflictRepairHeld(ctx context.Context) (bool, error) {
 
 // waitForRestartAnswer blocks until any pending restart request that is not
 // deferred by post-landing actions has been answered (replaced or answered
-// without replacing) or deferred by a post-landing action. When allowDuringProof
-// is true, an active trunk proof also lets the caller (a candidate whose gate
-// has already passed or failed) proceed without waiting for the proof to end.
-func (l *Loop) waitForRestartAnswer(ctx context.Context, allowDuringProof bool) error {
+// without replacing) or deferred by a post-landing action.
+func (l *Loop) waitForRestartAnswer(ctx context.Context) error {
 	for {
 		if l.restartReplaced.Load() {
 			return errRestartPending
 		}
-		if l.cfg.Restart == nil || l.restartActionDeferred() || (allowDuringProof && l.restartProofActive()) {
+		if l.cfg.Restart == nil || l.restartActionDeferred() {
 			return nil
 		}
 		gen, waitCh := l.restartWaitState()
@@ -338,10 +335,9 @@ func (l *Loop) waitForRestartAnswer(ctx context.Context, allowDuringProof bool) 
 type runStartAdmissionKey struct{}
 type restartMechanicalKey struct{}
 type restartMechanicalHold struct {
-	loop             *Loop
-	held             bool
-	settling         bool
-	allowDuringProof atomic.Bool
+	loop     *Loop
+	held     bool
+	settling bool
 }
 
 func (h *restartMechanicalHold) acquire() {
@@ -354,9 +350,8 @@ func (h *restartMechanicalHold) acquire() {
 
 func (h *restartMechanicalHold) acquireContext(ctx context.Context) error {
 	for {
-		allowDuringProof := h.allowDuringProof.Load()
 		if h.settling {
-			if err := h.loop.waitForRestartAnswer(ctx, allowDuringProof); err != nil {
+			if err := h.loop.waitForRestartAnswer(ctx); err != nil {
 				return err
 			}
 		} else {
@@ -374,7 +369,7 @@ func (h *restartMechanicalHold) acquireContext(ctx context.Context) error {
 			h.release()
 			return errRestartPending
 		}
-		if h.settling && h.loop.cfg.Restart != nil && !h.loop.restartActionDeferred() && !(h.allowDuringProof.Load() && h.loop.restartProofActive()) {
+		if h.settling && h.loop.cfg.Restart != nil && !h.loop.restartActionDeferred() {
 			if _, waitCh := h.loop.restartWaitState(); waitCh != nil {
 				// A restart became pending between waitForRestartAnswer and RLock.
 				// Release immediately so the restart is not starved, then wait.
@@ -407,38 +402,32 @@ func (h *restartMechanicalHold) release() {
 // Mechanical gate and landing steps finish before exec. A model session nested
 // inside one temporarily gives up this place; its lifetime never bounds restart.
 func (l *Loop) lockRestartMechanical(ctx context.Context) (context.Context, func(), error) {
-	return l.lockRestartStep(ctx, false, false, false)
+	return l.lockRestartStep(ctx, false)
 }
 
 // An already admitted gate can finish through landing, while a pending restart
 // stops new non-detached gates and landings from taking a new read hold until
 // it is answered.
 func (l *Loop) lockRestartSettlement(ctx context.Context) (context.Context, func(), error) {
-	return l.lockRestartStep(ctx, true, false, false)
+	return l.lockRestartStep(ctx, true)
 }
 
 // lockRestartGateStart acquires a settlement hold to prepare a candidate and
-// start its detached gate. While any loop restart request is pending (including
-// while waiting on an active trunk proof or existing holds), new gate starts
-// wait for the restart to be answered so they never starve exec.
+// start its detached gate. While any loop restart request is pending, new gate
+// starts wait for the restart to be answered so they never starve exec.
 func (l *Loop) lockRestartGateStart(ctx context.Context) (context.Context, func(), error) {
-	return l.lockRestartStep(ctx, true, false, false)
+	return l.lockRestartStep(ctx, true)
 }
 
-// lockRestartLanding acquires a settlement hold that may still proceed while a
-// pending restart is waiting on an active trunk proof, so a candidate whose gate
-// has already passed or failed settles without waiting for the proof to end.
-// Once the proof ends, the pending restart still blocks new holds before the
-// next proof or gate.
+// lockRestartLanding acquires a settlement hold for a candidate landing.
 func (l *Loop) lockRestartLanding(ctx context.Context) (context.Context, func(), error) {
-	return l.lockRestartStep(ctx, true, true, false)
+	return l.lockRestartStep(ctx, true)
 }
 
-func (l *Loop) lockRestartStep(ctx context.Context, settling, allowDuringProof, _ bool) (context.Context, func(), error) {
+func (l *Loop) lockRestartStep(ctx context.Context, settling bool) (context.Context, func(), error) {
 	h, nested := ctx.Value(restartMechanicalKey{}).(*restartMechanicalHold)
 	if !nested {
 		h = &restartMechanicalHold{loop: l, settling: settling}
-		h.allowDuringProof.Store(allowDuringProof)
 		if err := h.acquireContext(ctx); err != nil {
 			return ctx, func() {}, err
 		}
@@ -450,16 +439,11 @@ func (l *Loop) lockRestartStep(ctx context.Context, settling, allowDuringProof, 
 	if l.restartReplaced.Load() {
 		return ctx, func() {}, errRestartPending
 	}
-	prevAllow := h.allowDuringProof.Load()
 	h.settling = true
-	if allowDuringProof {
-		h.allowDuringProof.Store(true)
-	}
 	l.restartSettlements.Add(1)
 	return ctx, func() {
 		l.restartSettlements.Add(-1)
 		h.settling = false
-		h.allowDuringProof.Store(prevAllow)
 	}, nil
 }
 
@@ -569,7 +553,7 @@ func restartWork[T any](ctx context.Context, l *Loop, work func(context.Context)
 				// Handoff refused a request filed after initial admission. Wait until
 				// the pending restart is answered, and retry launch only if no
 				// replacement occurred.
-				if err := l.waitForRestartAnswer(ctx, false); err != nil {
+				if err := l.waitForRestartAnswer(ctx); err != nil {
 					return zero, err
 				}
 				done = start()

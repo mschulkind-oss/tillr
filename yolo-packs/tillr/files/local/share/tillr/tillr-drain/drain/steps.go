@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-drain/heavyrun"
 	"github.com/mschulkind-oss/tillr-drain/redcap"
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
@@ -37,6 +38,12 @@ func init() {
 	if len(os.Args) > 1 && os.Args[1] == "--tillr-gate-supervisor" {
 		defer store.FlushSQLiteTraceAtExit()
 		code := superviseDetachedGate(os.Args[2:])
+		store.FlushSQLiteTraceAtExit()
+		os.Exit(code)
+	}
+	if len(os.Args) > 1 && os.Args[1] == "--tillr-heavy-proof" {
+		defer store.FlushSQLiteTraceAtExit()
+		code := heavyrun.SuperviseHeavyProof(os.Args[2:], processStepsHeavyCallbacks())
 		store.FlushSQLiteTraceAtExit()
 		os.Exit(code)
 	}

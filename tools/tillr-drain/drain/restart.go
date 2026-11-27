@@ -289,13 +289,6 @@ func (l *Loop) adoptRestart(ctx context.Context) error {
 	return nil
 }
 
-func (l *Loop) restartProofActive() bool {
-	l.heavyMu.Lock()
-	proofActive := l.heavyProofActive
-	l.heavyMu.Unlock()
-	return proofActive
-}
-
 func (l *Loop) restartActions() []*landingAction {
 	return []*landingAction{&l.rollAction, &l.piRollAction, &l.extRollAction, &l.pushAction}
 }
@@ -318,10 +311,10 @@ func (l *Loop) busyRestartAction() <-chan struct{} {
 	return nil
 }
 
-// restartDeferred keeps the queue working while a tip proof or a post-landing
-// action still owns work that exec would drop. Use the same rule at worker handoff.
+// restartDeferred keeps the queue working while a post-landing action still
+// owns work that exec would drop. Use the same rule at worker handoff.
 func (l *Loop) restartDeferred() bool {
-	return l.restartProofActive() || l.restartActionDeferred()
+	return l.restartActionDeferred()
 }
 
 func (l *Loop) isRestartReplaced() bool {
@@ -339,6 +332,9 @@ func (l *Loop) gateRestartWith(ctx context.Context, result *LoopResult, stopChec
 	defer func() {
 		if err == nil && stop == "" && !l.nonLanding && !l.isRestartReplaced() {
 			err = l.reclaimDetachedGateExaminationsWith(ctx, stopChecked, scope)
+			if err == nil {
+				l.reclaimDetachedHeavyProof(ctx)
+			}
 		}
 	}()
 	if l.cfg.Restart == nil {
@@ -364,24 +360,12 @@ func (l *Loop) gateRestartWith(ctx context.Context, result *LoopResult, stopChec
 		return false, "", err
 	}
 	// Prevent new gates and landings from taking restartMechanical while this
-	// restart is pending (including while deferred only by an active trunk proof),
-	// so already-held locks and the active proof drain instead of starving exec.
+	// restart is pending, so already-held locks drain instead of starving exec.
 	l.markRestartPending()
-	if l.restartProofActive() {
-		l.markRestartWaitingOnHold()
-		return false, "", nil
-	}
 	// Do not queue an exclusive waiter behind another item's gate or landing.
 	// The request stays unanswered and a subsequent pass can take it.
 	if !l.restartMechanical.TryLock() {
 		l.markRestartWaitingOnHold()
-		return false, "", nil
-	}
-	// A proof may have started between the check above and TryLock. Keep the
-	// pending-restart barrier armed while deferred only by that proof.
-	if l.restartProofActive() && !l.restartActionDeferred() {
-		l.markRestartWaitingOnHold()
-		l.restartMechanical.Unlock()
 		return false, "", nil
 	}
 	defer l.clearRestartPending()

@@ -62,6 +62,9 @@ type HeavyRunner struct {
 	UnlockRegisteredWorktree func(ctx context.Context, repo, common, work string) (string, time.Time, bool, error)
 	// OnUnrecorded is called when a trunk commit in base..tip has no landing record.
 	OnUnrecorded func(ctx context.Context, sha string)
+	// DeferSettlement leaves refs/tillr/green update and heavy.json publication to the
+	// caller (used by --tillr-heavy-proof so Loop owns authoritative settlement).
+	DeferSettlement bool
 }
 
 // HeavyReplay judges one check on one commit, in the runner's own checkout and under
@@ -345,7 +348,7 @@ func (r HeavyRunner) RunAttempt(ctx context.Context, requested string) (out Heav
 			} else if !onTrunk {
 				e = Externalf("proved tip %s left the trunk (trunk is now %s); %s stays", tip, current, GreenRef)
 				run.Result = "unknown"
-			} else {
+			} else if !r.DeferSettlement {
 				old := base
 				if old == "" {
 					old = strings.Repeat("0", len(tip))
@@ -372,11 +375,13 @@ func (r HeavyRunner) RunAttempt(ctx context.Context, requested string) (out Heav
 		if e != nil {
 			run.Detail = e.Error()
 		}
-		if pe := PublishHeavy(dir, run); pe != nil {
-			stopRunning()
-			endedOutcome := heavyEndedOutcome(ctx, run.Result, pe)
-			storeProgress.Finish(endedOutcome, heavyEndedFailingChecks(endedOutcome, run.Checks)...)
-			return out, pe
+		if !r.DeferSettlement {
+			if pe := PublishHeavy(dir, run); pe != nil {
+				stopRunning()
+				endedOutcome := heavyEndedOutcome(ctx, run.Result, pe)
+				storeProgress.Finish(endedOutcome, heavyEndedFailingChecks(endedOutcome, run.Checks)...)
+				return out, pe
+			}
 		}
 		stopRunning()
 		out.Runs = append(out.Runs, run)
@@ -390,6 +395,9 @@ func (r HeavyRunner) RunAttempt(ctx context.Context, requested string) (out Heav
 		storeProgress.Finish(endedOutcome, heavyEndedFailingChecks(endedOutcome, run.Checks)...)
 		if e != nil {
 			return out, e
+		}
+		if r.DeferSettlement {
+			return out, nil
 		}
 		newest, e := heavy.GitOutput(ctx, r.Root, "rev-parse", r.Trunk+"^{commit}")
 		if e != nil {

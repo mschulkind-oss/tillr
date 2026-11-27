@@ -288,4 +288,4 @@ Every recorded **owner ruling** and **designer / build-commit decision** governi
 
    **Answer:**
 
-   > _(empty — fill in when decided)_
+   > Owner ruling 2026-11-27 on [`OQ-TPS1`](#OQ-TPS1): **Option A** ("A. let's see how it works in practice"). Build Option A: run the trunk proof and `SearchFirstRed` culprit search in a detached `--tillr-heavy-proof` supervisor bound to `(OwnerPID, OwnerStartTicks)` and re-attached across `syscall.Exec` like `--tillr-gate-supervisor`, removing `restartProofActive()` from `gateRestartWith`.
