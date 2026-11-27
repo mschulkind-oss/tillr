@@ -50,6 +50,10 @@ type HeavyCheck struct {
 	// from the judging program's output for this check.
 	LogRef string `json:"log_ref,omitempty"`
 	Stalls int    `json:"stalls,omitempty"`
+	// Memory and UnboundPath are the gate's own words: "not remembered" with the path
+	// whose content differs from the judged tree. Such a result is not about the tip.
+	Memory      string `json:"memory,omitempty"`
+	UnboundPath string `json:"unbound_path,omitempty"`
 	// GoTimedOut prevents replay of a test that timed out or deadlocked, or its suite.
 	GoTimedOut bool `json:"go_timed_out,omitempty"`
 	// RevertedBy is the trunk commit that reverted FirstRedLanding automatically, and

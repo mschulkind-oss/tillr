@@ -574,6 +574,14 @@ func DecodeHeavyVerdict(raw []byte) ([]HeavyCheck, error) {
 	for i := range env.Payload.Checks {
 		c := &env.Payload.Checks[i]
 		classified := drainmodel.ClassifyCheck(checkresult.Observation{Check: c.CheckID, Source: checkresult.HeavyCheckWord, Word: c.Result})
+		if classified.Outcome == checkresult.Fail && c.UnboundPath != "" {
+			// The gate ran the command in a worktree that no longer matched the tip, so
+			// the failure is not evidence about the tree. The runner stopped trusting
+			// it; record that, with its reason, and file no trunk fixer.
+			c.Result = checkresult.DetailError
+			c.Detail = "stopped by the runner: " + c.UnboundPath + " differs from the judged tree, so the failure is not the tree's"
+			classified = drainmodel.ClassifyCheck(checkresult.Observation{Check: c.CheckID, Source: checkresult.HeavyCheckWord, Word: c.Result})
+		}
 		if (classified.Outcome == checkresult.Fail || (classified.Outcome == checkresult.Unknown && (classified.Detail == checkresult.DetailError || classified.Detail == checkresult.DetailStalled))) && c.LogPath == "" && c.LogRef != "" {
 			whole := strings.TrimSuffix(c.LogRef, ".triage.log")
 			if whole != c.LogRef {

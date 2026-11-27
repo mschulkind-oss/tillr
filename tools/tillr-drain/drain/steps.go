@@ -180,6 +180,11 @@ func (s *ProcessSteps) Run(ctx context.Context, req run.Request) (run.Record, st
 	// The request is written beside the lanes rather than inside one: a file in the lane's
 	// worktree would be untracked work the model's `git add` could commit into its own
 	// candidate, which is the loop's litter becoming the candidate's diff.
+	if s.LaneRoot == "" {
+		// An empty lane root would put the request relative to the working directory, which
+		// for a test is the source tree: the stray file failed the proof's pack-sync-test.
+		return run.Record{}, "", Internalf("writing the run.request: no lane root is set")
+	}
 	requests := filepath.Join(s.LaneRoot, ".requests")
 	if err := os.MkdirAll(requests, 0o755); err != nil {
 		return run.Record{}, "", Externalf("creating the request directory %s: %v", requests, err)
