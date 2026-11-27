@@ -1,7 +1,7 @@
 ---
 title: "The gate — declared checks, judged before the merge and proved after it"
 status: accepted
-stage: DECIDED
+stage: BUILT
 planning-actions: none
 verified: 2026-11-26
 next: "Unbuilt items remain for D-GR51 and D-GR52 (Option B of OQ-GR4 / D-GR45, Option A of OQ-GR5, Option A of OQ-GR6 and Option B of OQ-GR7 are built)."
