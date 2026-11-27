@@ -19,7 +19,8 @@ request; `pause` requests a restart interruption; `lanes`, `status` and `release
 and clean up what a tick left behind. `copied-usage` detects repeated usage pairs;
 `mark-copied-usage` corrects one run whose usage came from an earlier run. Four Pi
 adapter helper faces — `pi-build-agent-dir`, `pi-stop-at-gap`, `pi-compact`, and
-`pi-landing-call-held` — back the Pi adapter and drain compaction.
+`pi-landing-call-held` — back the Pi adapter and drain compaction. `native-agent` backs
+the built-in [`native`](./backends/native/README.md) adapter.
 
 The design that splits this surface into `--help`, this README and the composition
 skill is [`docs/reference/tillr-distribution.md`](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/tillr-distribution.md);

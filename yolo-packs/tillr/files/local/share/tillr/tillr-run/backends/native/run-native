@@ -1,0 +1,95 @@
+#!/bin/sh
+# The native agent adapter: one `tillr-run native-agent` run, from the staged brief
+# to the JSONL stream.
+#
+# Reference: docs/design/tillr-native-agent-backend.md. Preserves the tillr-run
+# process-and-record boundary: parses the shared adapter flags, runs preflight_brief,
+# and execs `tillr-run native-agent` with stdout carrying the JSONL event stream and
+# stderr redirected to `stream.err` beside the brief.
+set -eu
+
+PROG=run-native
+SELF_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+. "$SELF_DIR/../preflight.sh"
+
+backend=
+model=
+effort=
+account=
+brief=../brief.md
+target=
+wall=
+session_override=
+
+usage() {
+    cat <<'USAGE'
+usage: run-native --backend native --model ID [--effort LEVEL]
+                  [--account SLUG] [--brief PATH] [--target PATH]
+                  [--timeout SECONDS] [--session-id UUID]
+
+  --backend     this adapter's name (`native`) or a seat alias (`native-<role>`)
+  --model       the model id from the backend policy at staging
+  --effort      optional reasoning effort tier: minimal|low|medium|high|xhigh|max
+  --account     optional provider account slug
+  --brief       the staged brief; default ../brief.md
+  --target      the named target; default the cwd, and it must BE the cwd
+  --session-id  the stager-minted UUID; default the lane's session-id file
+  --timeout     the wall in seconds (validated here; enforced by tillr-run exec)
+USAGE
+}
+
+while [ $# -gt 0 ]; do
+    case $1 in
+        --backend) [ $# -ge 2 ] || refuse "--backend needs a value"; backend=$2; shift 2 ;;
+        --model) [ $# -ge 2 ] || refuse "--model needs a value"; model=$2; shift 2 ;;
+        --effort) [ $# -ge 2 ] || refuse "--effort needs a value"; effort=$2; shift 2 ;;
+        --account) [ $# -ge 2 ] || refuse "--account needs a value"; account=$2; shift 2 ;;
+        --brief) [ $# -ge 2 ] || refuse "--brief needs a value"; brief=$2; shift 2 ;;
+        --target) [ $# -ge 2 ] || refuse "--target needs a value"; target=$2; shift 2 ;;
+        --timeout) [ $# -ge 2 ] || refuse "--timeout needs a value"; wall=$2; shift 2 ;;
+        --session-id) [ $# -ge 2 ] || refuse "--session-id needs a value"; session_override=$2; shift 2 ;;
+        -h|--help) usage; exit 0 ;;
+        *) refuse "unknown argument '$1'" ;;
+    esac
+done
+
+require_backend "$backend" native
+check_wall "$wall"
+require_opt --model "$model" "the model id comes from the backend policy at staging, and an adapter that supplied its own would put a model id in a tree that names no vendor"
+preflight_brief "$brief"
+target=$(resolve_target "$target")
+
+err=$(lane_path "$brief" stream.err)
+session=$session_override
+if [ -z "$session" ] && [ -r "$(lane_path "$brief" session-id)" ]; then
+    session=$(cat "$(lane_path "$brief" session-id)")
+fi
+
+set -- native-agent --backend "$backend" --model "$model" --brief "$brief" --target "$target"
+if [ -n "$effort" ]; then
+    set -- "$@" --effort "$effort"
+fi
+if [ -n "$account" ]; then
+    set -- "$@" --account "$account"
+fi
+if [ -n "$session" ]; then
+    set -- "$@" --session-id "$session"
+fi
+if [ -n "$wall" ]; then
+    set -- "$@" --timeout "$wall"
+fi
+
+if [ -n "${TILLR_RUN_BIN:-}" ]; then
+    exec "$TILLR_RUN_BIN" "$@" 2>"$err"
+fi
+mod=$(CDPATH= cd -- "$SELF_DIR/../.." && pwd)
+if [ -f "$mod/go.mod" ] && [ "$(basename "$(dirname "$mod")")" = "tools" ] && command -v go >/dev/null 2>&1; then
+    tmp=$(mktemp "${TMPDIR:-/tmp}/tillr-run-XXXXXX")
+    trap 'rm -f "$tmp"' EXIT INT TERM
+    CGO_ENABLED=0 go build -C "$mod" -o "$tmp" .
+    set +e
+    "$tmp" "$@" 2>"$err"
+    rc=$?
+    exit "$rc"
+fi
+exec tillr-run "$@" 2>"$err"

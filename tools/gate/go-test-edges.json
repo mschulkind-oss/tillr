@@ -1009,6 +1009,14 @@
       "tools/tillr-run/backends/"
     ]
   },
+  "github.com/mschulkind-oss/tillr-run/native": {
+    "builds": [
+      "github.com/mschulkind-oss/tillr-run"
+    ],
+    "reads": [
+      "tools/tillr-run/backends/"
+    ]
+  },
   "github.com/mschulkind-oss/tillr-run/run": {
     "builds": [
       "github.com/mschulkind-oss/tillr-run"

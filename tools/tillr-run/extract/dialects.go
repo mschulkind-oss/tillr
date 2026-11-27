@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/mschulkind-oss/tillr-run/run"
 )
 
 var (
@@ -674,4 +676,327 @@ func MuseDialect(streamText string) DialectResult {
 		Unparseable: unparseable,
 		Tokens:      tokensPtr,
 	}
+}
+
+// NativeDialect extracts the 19-key run report and per-turn UsageDetails from
+// the JSONL stream emitted by `tillr-run native-agent`.
+func NativeDialect(streamText string, liveProbe bool) DialectResult {
+	records, unparseable := Records(streamText)
+
+	var (
+		session         string
+		model           string
+		firstAt, lastAt *float64
+		tokens          int64
+		cost            float64
+		sawTokens       bool
+		sawCost         bool
+		window          *WindowInfo
+		ended           *EndedInfo
+		hasParked       bool
+		completedTexts  []string
+		pendingDeltas   []string
+	)
+
+	var (
+		states       []*turnState
+		active       *turnState
+		runStart     *float64
+		runFirstSeen bool
+		runFirstAt   *float64
+	)
+	if len(records) > 0 {
+		runStart = stamp(records[0])
+	}
+	newState := func(at *float64, id string) *turnState {
+		if id == "" {
+			id = fmt.Sprintf("turn-%d", len(states)+1)
+		}
+		st := &turnState{start: at, id: id}
+		states = append(states, st)
+		return st
+	}
+	firstDelta := func(st *turnState, at *float64) {
+		if !runFirstSeen {
+			runFirstSeen = true
+			runFirstAt = at
+		}
+		if !st.firstSeen {
+			st.firstSeen = true
+			st.first = at
+		}
+	}
+
+	for _, record := range records {
+		kind, _ := asString(record["type"])
+		at := stamp(record)
+		if at != nil {
+			if firstAt == nil {
+				v := *at
+				firstAt = &v
+			}
+			v := *at
+			lastAt = &v
+		}
+		if session == "" {
+			for _, key := range []string{"sessionId", "session_id"} {
+				if s, ok := asString(record[key]); ok && s != "" {
+					session = s
+					break
+				}
+			}
+		}
+
+		switch kind {
+		case "session":
+			if session == "" {
+				if s, ok := asString(record["id"]); ok && s != "" {
+					session = s
+				}
+			}
+			if model == "" {
+				if m, ok := asString(record["model"]); ok && m != "" {
+					model = m
+				}
+			}
+		case "message_start":
+			msg := asMap(record["message"])
+			if role, _ := asString(msg["role"]); role == "assistant" {
+				id, _ := asString(msg["id"])
+				active = newState(at, id)
+				pendingDeltas = nil
+			}
+		case "message_update":
+			ev := asMap(record["assistantMessageEvent"])
+			dt, _ := asString(ev["type"])
+			delta, _ := asString(ev["delta"])
+			if (dt == "text_delta" || dt == "thinking_delta") && delta != "" {
+				if active == nil {
+					active = newState(nil, "")
+				}
+				firstDelta(active, at)
+				if dt == "text_delta" {
+					pendingDeltas = append(pendingDeltas, delta)
+				}
+			}
+		case "message_end":
+			msg := asMap(record["message"])
+			if role, _ := asString(msg["role"]); role != "assistant" {
+				continue
+			}
+			if active == nil {
+				id, _ := asString(msg["id"])
+				active = newState(nil, id)
+			}
+			if id, ok := asString(msg["id"]); ok && id != "" {
+				active.id = id
+			}
+			active.end = at
+			if m, ok := asString(msg["model"]); ok && m != "" {
+				if model == "" {
+					model = m
+				}
+			}
+			if txt := piBlocksText(msg); txt != "" {
+				completedTexts = append(completedTexts, txt)
+			} else if len(pendingDeltas) > 0 {
+				completedTexts = append(completedTexts, strings.Join(pendingDeltas, ""))
+			}
+			pendingDeltas = nil
+
+			if usage := asMap(msg["usage"]); usage != nil {
+				var msgModel *string
+				if m, ok := asString(msg["model"]); ok && m != "" {
+					msgModel = &m
+				} else if model != "" {
+					m := model
+					msgModel = &m
+				}
+				c := counters(usage, "pi", msgModel)
+				active.counters = &c
+				if c.Tokens != nil {
+					tokens += *c.Tokens
+					sawTokens = true
+				}
+				if costMap := asMap(usage["cost"]); costMap != nil {
+					if billed, ok := asFloat(costMap["total"]); ok {
+						cost += billed
+						sawCost = true
+					}
+				}
+			}
+			active = nil
+		case "rate_limit_event":
+			window = normalizeWindow(asMap(record["rate_limit_info"]))
+		case "parked":
+			hasParked = true
+		case "loop_detected":
+			if action, _ := asString(record["action"]); action != "recovered" {
+				argsJSON := compactJSON(record["args"])
+				tool, _ := asString(record["toolName"])
+				if tool == "" {
+					tool = "(no tool)"
+				}
+				streak := "None"
+				if st, ok := asFloat(record["streak"]); ok {
+					streak = strconv.FormatInt(int64(st), 10)
+				}
+				ended = &EndedInfo{
+					Cause: "repeating-call",
+					Detail: fmt.Sprintf(
+						"native-agent ended the session because the model repeated one identical call %s times in a row: %s %s",
+						streak, tool, argsJSON,
+					),
+				}
+			}
+		}
+	}
+
+	if len(pendingDeltas) > 0 {
+		completedTexts = append(completedTexts, strings.Join(pendingDeltas, ""))
+	}
+	text := strings.Join(completedTexts, "")
+	if liveProbe && hasParked {
+		text += "\n[land call parked; waiting for the harness to exit]"
+	}
+	if ended != nil {
+		if text != "" && !strings.HasSuffix(text, "\n") {
+			text += "\n"
+		}
+		text += fmt.Sprintf("[%s]\n", ended.Detail)
+	}
+
+	var startedStr, finishedStr string
+	if firstAt != nil {
+		startedStr = MicrosToRFC3339(*firstAt * 1000)
+	}
+	if lastAt != nil {
+		finishedStr = MicrosToRFC3339(*lastAt * 1000)
+	}
+	var tokensPtr *int64
+	if sawTokens {
+		tokensPtr = &tokens
+	}
+	var costPtr *float64
+	if sawCost {
+		costPtr = &cost
+	}
+
+	return DialectResult{
+		Text:         text,
+		Session:      session,
+		Model:        model,
+		Started:      startedStr,
+		Finished:     finishedStr,
+		Events:       len(records),
+		Unparseable:  unparseable,
+		Tokens:       tokensPtr,
+		Cost:         costPtr,
+		Window:       window,
+		Ended:        ended,
+		UsageDetails: buildNativeUsageDetails(states, runStart, runFirstAt),
+	}
+}
+
+func buildNativeUsageDetails(states []*turnState, runStart, runFirstAt *float64) *run.UsageDetails {
+	turns := []run.TurnUsage{}
+	for _, st := range states {
+		var row run.TurnUsage
+		if st.counters != nil {
+			row.ModelUsage = *st.counters
+		}
+		if !hasAnyCounter(row.ModelUsage) {
+			continue
+		}
+		row.ID = st.id
+		if st.start != nil {
+			v := *st.start
+			row.StartedMS = &v
+		}
+		if st.end != nil {
+			v := *st.end
+			row.FinishedMS = &v
+		}
+		if st.first != nil {
+			v := *st.first
+			row.FirstOutputAtMS = &v
+		}
+		if st.start != nil && st.first != nil && *st.first >= *st.start {
+			v := *st.first - *st.start
+			row.FirstOutputMS = &v
+		}
+		if st.first != nil && st.end != nil && *st.end > *st.first && row.Output != nil {
+			tps := float64(*row.Output) * 1000 / (*st.end - *st.first)
+			row.OutputTPS = &tps
+		}
+		turns = append(turns, row)
+	}
+
+	var modelOrder []*string
+	seenNil := false
+	seenNamed := make(map[string]bool)
+	for _, t := range turns {
+		if t.Model == nil {
+			if !seenNil {
+				seenNil = true
+				modelOrder = append(modelOrder, nil)
+			}
+		} else if !seenNamed[*t.Model] {
+			seenNamed[*t.Model] = true
+			m := *t.Model
+			modelOrder = append(modelOrder, &m)
+		}
+	}
+
+	models := make([]run.ModelUsage, 0, len(modelOrder))
+	for _, name := range modelOrder {
+		var rows []run.TurnUsage
+		for _, t := range turns {
+			if (name == nil && t.Model == nil) || (name != nil && t.Model != nil && *name == *t.Model) {
+				rows = append(rows, t)
+			}
+		}
+		models = append(models, summed(rows, name))
+	}
+	if len(models) == 0 {
+		return nil
+	}
+
+	out := &run.UsageDetails{
+		Models: models,
+		Turns:  turns,
+	}
+	if runStart != nil && runFirstAt != nil && *runFirstAt >= *runStart {
+		v := *runFirstAt - *runStart
+		out.FirstOutputMS = &v
+	}
+	if len(turns) > 0 && len(turns) == len(states) {
+		allTPS := true
+		for _, t := range turns {
+			if t.OutputTPS == nil {
+				allTPS = false
+				break
+			}
+		}
+		allOutput := true
+		var totalOutput int64
+		for _, m := range models {
+			if m.Output == nil {
+				allOutput = false
+				break
+			}
+			totalOutput += *m.Output
+		}
+		if allTPS && allOutput {
+			var seconds float64
+			for _, t := range turns {
+				seconds += (*t.FinishedMS - *t.FirstOutputAtMS) / 1000.0
+			}
+			if seconds > 0 {
+				tps := float64(totalOutput) / seconds
+				out.OutputTPS = &tps
+			}
+		}
+	}
+	return out
 }

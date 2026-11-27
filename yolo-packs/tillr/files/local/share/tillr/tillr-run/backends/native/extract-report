@@ -1,0 +1,17 @@
+#!/bin/sh
+set -eu
+here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+mod=$(CDPATH= cd -- "$here/../.." && pwd)
+if [ -n "${TILLR_RUN_BIN:-}" ]; then
+    exec "$TILLR_RUN_BIN" extract-report --dialect native "$@"
+fi
+if [ -f "$mod/go.mod" ] && [ "$(basename "$(dirname "$mod")")" = "tools" ] && command -v go >/dev/null 2>&1; then
+    tmp=$(mktemp "${TMPDIR:-/tmp}/tillr-run-XXXXXX")
+    trap 'rm -f "$tmp"' EXIT INT TERM
+    CGO_ENABLED=0 go build -C "$mod" -o "$tmp" .
+    set +e
+    "$tmp" extract-report --dialect native "$@"
+    rc=$?
+    exit "$rc"
+fi
+exec tillr-run extract-report --dialect native "$@"

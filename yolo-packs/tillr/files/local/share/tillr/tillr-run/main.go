@@ -20,6 +20,7 @@ import (
 
 	"github.com/mschulkind-oss/tillr-run/claude"
 	"github.com/mschulkind-oss/tillr-run/extract"
+	"github.com/mschulkind-oss/tillr-run/native"
 	"github.com/mschulkind-oss/tillr-run/pihelper"
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/buildstamp"
@@ -83,6 +84,8 @@ func dispatch(args []string) int {
 		return pihelper.RunLandingCallHeld(rest, os.Stdout)
 	case "extract-report":
 		return extract.RunCLI(rest, os.Stdin, os.Stdout, os.Stderr)
+	case "native-agent":
+		return native.RunCLI(rest, os.Stdout, os.Stderr)
 	default:
 		return fail(run.Usagef("unknown face %q: want %s", face, faceList))
 	}
@@ -485,7 +488,7 @@ func printRecord(env record.Envelope) int {
 
 // faceList is this binary's faces, in the order the usage lines print them. One home,
 // so the refusal, the unknown-face line and `--help` cannot disagree.
-const faceList = "exec, pause, request, lanes, status, release, mark-copied-usage, copied-usage, claude-landing, claude-quota, pi-build-agent-dir, pi-stop-at-gap, pi-compact, pi-landing-call-held or extract-report"
+const faceList = "exec, pause, request, lanes, status, release, mark-copied-usage, copied-usage, claude-landing, claude-quota, pi-build-agent-dir, pi-stop-at-gap, pi-compact, pi-landing-call-held, extract-report or native-agent"
 
 // errHelp is what parseFlags answers for a `--help`. A face's flags are the layer-1
 // surface (docs/reference/tillr-distribution.md, "Documentation split"), so a help request is an answer

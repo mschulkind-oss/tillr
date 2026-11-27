@@ -310,7 +310,7 @@ func RunCLI(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	const prog = "extract-report"
 	fs := flag.NewFlagSet(prog, flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	dialectName := fs.String("dialect", "", "the backend dialect (pi, claude, agy, muse)")
+	dialectName := fs.String("dialect", "", "the backend dialect (pi, claude, agy, muse, native)")
 	backend := fs.String("backend", "", "the adapter name, from staging")
 	model := fs.String("model", "", "the model id staging supplied")
 	route := fs.String("route", "", "the route staging asked for")
@@ -345,8 +345,10 @@ func RunCLI(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		dialectFn = func(s string, _ bool) DialectResult { return AgyDialect(s, stderr) }
 	case "muse":
 		dialectFn = func(s string, _ bool) DialectResult { return MuseDialect(s) }
+	case "native":
+		dialectFn = NativeDialect
 	default:
-		fmt.Fprintf(stderr, "%s: unknown dialect %q (want pi, claude, agy, muse)\n", prog, *dialectName)
+		fmt.Fprintf(stderr, "%s: unknown dialect %q (want pi, claude, agy, muse, native)\n", prog, *dialectName)
 		return ExitUsage
 	}
 
