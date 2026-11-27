@@ -18,6 +18,7 @@ import (
 type LaneChildrenHooks struct {
 	LoadLaneConditions func(ctx context.Context) error
 	Lanes              func() []string
+	HeldChildrenLanes  func() []string
 	ResolveRunLeftBy   func(ctx context.Context, lane, runID string) string
 	HoldLaneChildren   func(ctx context.Context, lane string, pids []int, leftBy string) error
 	HasLaneCondition   func(lane string) bool
@@ -166,7 +167,24 @@ func RecheckLaneChildren(ctx context.Context, storePath, laneRoot string, h Lane
 			}
 		}
 	}
+	checkLanes := map[string]bool{}
 	for _, lane := range h.Lanes() {
+		checkLanes[lane] = true
+	}
+	for lane := range pids {
+		checkLanes[lane] = true
+	}
+	if h.HeldChildrenLanes != nil {
+		for _, lane := range h.HeldChildrenLanes() {
+			checkLanes[lane] = true
+		}
+	}
+	sortedLanes := make([]string, 0, len(checkLanes))
+	for lane := range checkLanes {
+		sortedLanes = append(sortedLanes, lane)
+	}
+	sort.Strings(sortedLanes)
+	for _, lane := range sortedLanes {
 		if len(pids[lane]) > 0 {
 			leftBy := h.ResolveRunLeftBy(ctx, lane, bestRun[lane])
 			if err := h.HoldLaneChildren(ctx, lane, pids[lane], leftBy); err != nil {

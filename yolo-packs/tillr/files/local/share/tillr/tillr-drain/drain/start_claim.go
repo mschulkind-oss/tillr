@@ -143,7 +143,7 @@ func (l *Loop) claimFastStart(ctx context.Context, v *startView, proposal startS
 		return false, nil, "", Decision{}, err
 	}
 	defer s.Close()
-	if l.cfg.LiveScale && !strings.HasPrefix(d.LaneID, "desk-") {
+	if l.cfg.LiveScale && !strings.HasPrefix(d.LaneID, "desk-") && d.LaneID != d.ItemID {
 		l.laneOfferMu.RLock()
 		defer l.laneOfferMu.RUnlock()
 		if !slices.Contains(l.lanes(), d.LaneID) {

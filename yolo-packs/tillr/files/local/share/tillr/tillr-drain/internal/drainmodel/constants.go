@@ -123,6 +123,12 @@ func IsExpressLane(id string) bool {
 	return strings.HasPrefix(id, "express-")
 }
 
+// IsPoolLaneName reports whether id has the shape of a pool or desk lane name
+// (lane-*, express-*, or desk-*).
+func IsPoolLaneName(id string) bool {
+	return strings.HasPrefix(id, "lane-") || IsExpressLane(id) || strings.HasPrefix(id, "desk-")
+}
+
 // IsRevertItem answers whether a landing's item id is an automatic revert.
 func IsRevertItem(itemID string) bool {
 	return strings.HasPrefix(itemID, RevertItemPrefix)

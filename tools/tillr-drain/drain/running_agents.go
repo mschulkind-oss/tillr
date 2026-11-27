@@ -42,7 +42,7 @@ func collectActiveOrdinaryAgents(r *store.Reader, at time.Time, works, byRun map
 			continue
 		}
 		leasedLanes[row.laneID] = true
-		if isExpressLane(row.laneID) || strings.HasPrefix(row.laneID, "desk-") {
+		if isExpressLane(row.laneID) || strings.HasPrefix(row.laneID, "desk-") || expressByID[row.laneID] {
 			continue
 		}
 		runID := row.runID.String

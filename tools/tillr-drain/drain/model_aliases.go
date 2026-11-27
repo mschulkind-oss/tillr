@@ -265,6 +265,8 @@ func isConflictFixRun(runID string) bool { return drainmodel.IsConflictFixRun(ru
 
 func isExpressLane(id string) bool { return drainmodel.IsExpressLane(id) }
 
+func isPoolLaneName(id string) bool { return drainmodel.IsPoolLaneName(id) }
+
 func IsRevertItem(itemID string) bool { return drainmodel.IsRevertItem(itemID) }
 
 func IsDefectItem(itemID string) bool { return drainmodel.IsDefectItem(itemID) }

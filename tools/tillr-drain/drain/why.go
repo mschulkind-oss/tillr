@@ -266,7 +266,13 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 	if err != nil {
 		return answer, err
 	}
-	leases, err := activeLeases(r, at, offered)
+	leaseLanes := append([]string(nil), offered...)
+	for lane, isBusy := range busy {
+		if isBusy && !documentDesk(lane) {
+			leaseLanes = append(leaseLanes, lane)
+		}
+	}
+	leases, err := activeLeases(r, at, leaseLanes)
 	if err != nil {
 		return answer, err
 	}
@@ -293,6 +299,20 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 				}
 			}
 			seen[lane] = true
+		}
+	}
+	for lane, isBusy := range busy {
+		if !isBusy || seen[lane] || documentDesk(lane) {
+			continue
+		}
+		seen[lane] = true
+		answer.Summary.LanesBusy++
+		if workers[lane] {
+			answer.Summary.LanesWorkers++
+		} else if examining[lane] {
+			answer.Summary.LanesExamining++
+		} else {
+			answer.Summary.LanesReserved++
 		}
 	}
 	// The planner promotes repair work independently of the owner's order.
@@ -683,7 +703,7 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 					}
 				}
 			}
-			if !documentDesk(d.LaneID) && !slices.Contains(configured, d.LaneID) {
+			if !documentDesk(d.LaneID) && !slices.Contains(configured, d.LaneID) && d.LaneID != it.ItemID {
 				// The lane is above the loop's count: the loop keeps serving it until this
 				// work lands or is released, and offers it nothing new (drainingLanes).
 				sep := ": "

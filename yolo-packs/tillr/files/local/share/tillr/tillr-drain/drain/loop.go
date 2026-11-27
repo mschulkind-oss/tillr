@@ -4877,7 +4877,12 @@ func (l *Loop) stageLaneSet(ctx context.Context, lanes []string, startup bool) e
 		return err
 	}
 	var held []string
+	var poolCount int
 	for _, lane := range lanes {
+		if !isPoolLaneName(lane) {
+			continue
+		}
+		poolCount++
 		path := l.lanePath(lane)
 		if err := os.MkdirAll(l.laneDirPath(lane), 0o755); err != nil {
 			return Externalf("creating the lane directory %s: %v", l.laneDirPath(lane), err)
@@ -4940,7 +4945,7 @@ func (l *Loop) stageLaneSet(ctx context.Context, lanes []string, startup bool) e
 			return err
 		}
 	}
-	if startup && len(lanes) > 0 && len(held) == len(lanes) {
+	if startup && poolCount > 0 && len(held) == poolCount {
 		return Externalf("no lane is available at loop start: %s", strings.Join(held, "\n"))
 	}
 	return nil
@@ -5002,6 +5007,11 @@ func (l *Loop) resetLaneToRegistryLocked(ctx context.Context, lane, revision str
 		}
 		_, err := l.git(ctx, l.cfg.Root, "worktree", "remove", "--force", path)
 		return err
+	}
+	if !isPoolLaneName(lane) {
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			return nil
+		}
 	}
 	// A lock a killed git left refuses every write below (index_lock.go).
 	if err := l.clearStaleIndexLock(ctx, lane, ""); err != nil {

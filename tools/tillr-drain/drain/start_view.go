@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"maps"
+	"os"
 	"reflect"
 	"strings"
 	"sync"
@@ -105,12 +106,36 @@ func (l *Loop) bumpLaneEpoch(lane string) {
 // lanes that their store snapshot reports as busy.
 func (l *Loop) idleLaneEpochs() map[string]int {
 	l.mu.Lock()
-	defer l.mu.Unlock()
-	lanes := l.lanes()
+	lanes := append([]string(nil), l.lanes()...)
+	staging := maps.Clone(l.stagingLanes)
+	changes := maps.Clone(l.laneChanges)
+	l.mu.Unlock()
+
+	seen := make(map[string]bool, len(lanes))
 	epochs := make(map[string]int, len(lanes))
+	add := func(lane string, requireWorktree bool) {
+		if seen[lane] || staging[lane] != 0 {
+			return
+		}
+		seen[lane] = true
+		if requireWorktree {
+			if _, err := os.Stat(l.lanePath(lane)); err != nil {
+				return
+			}
+		}
+		epochs[lane] = changes[lane]
+	}
 	for _, lane := range lanes {
-		if l.stagingLanes[lane] == 0 {
-			epochs[lane] = l.laneChanges[lane]
+		add(lane, l.cfg.LaneRoot != "" && !isPoolLaneName(lane))
+	}
+	if l.cfg.LaneRoot != "" {
+		if entries, err := os.ReadDir(l.cfg.LaneRoot); err == nil {
+			for _, entry := range entries {
+				if !entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
+					continue
+				}
+				add(entry.Name(), true)
+			}
 		}
 	}
 	return epochs

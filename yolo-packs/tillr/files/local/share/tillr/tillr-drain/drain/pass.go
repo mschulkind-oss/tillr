@@ -4153,7 +4153,7 @@ func drainingLanes(works map[string]*pendingWork, offered []string) []DrainingLa
 	seen := map[string]bool{}
 	for _, work := range works {
 		lane := work.Decision.LaneID
-		if work.Done || work.LaneReleased || lane == "" || in[lane] || seen[lane] || documentDesk(lane) {
+		if work.Done || work.LaneReleased || lane == "" || in[lane] || seen[lane] || documentDesk(lane) || lane == work.Decision.ItemID {
 			continue
 		}
 		seen[lane] = true

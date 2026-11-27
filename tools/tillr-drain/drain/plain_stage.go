@@ -38,6 +38,12 @@ func (s *LaneStager) readDefinition(ctx context.Context) (definition.Definition,
 // stagePlain renders the definition's template, then creates an ordinary directory.
 // It neither reads a Git base nor derives a fence from the item's paths.
 func (s *LaneStager) stagePlain(ctx context.Context, spec StageSpec, def definition.Definition) error {
+	if err := checkItemID(spec.ItemID); err != nil {
+		return err
+	}
+	if err := checkLaneID(spec.LaneID); err != nil {
+		return err
+	}
 	if err := checkRunID(spec.RunID); err != nil {
 		return err
 	}

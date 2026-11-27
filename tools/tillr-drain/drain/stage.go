@@ -312,6 +312,14 @@ func (s *LaneStager) trunkRef() string {
 // refused before the brief is written over the evidence.
 func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 	endRead := timeHandoffPhase(ctx, "stage_read")
+	if err := checkItemID(spec.ItemID); err != nil {
+		endRead()
+		return err
+	}
+	if err := checkLaneID(spec.LaneID); err != nil {
+		endRead()
+		return err
+	}
 	def, err := s.readDefinition(ctx)
 	if err != nil {
 		endRead()
@@ -818,6 +826,40 @@ func checkRunID(runID string) error {
 	}
 	if runID == "." || runID == ".." || strings.ContainsAny(runID, `/\`) {
 		return Usagef("the run id %q cannot name a directory: a run's records live at <root>/.tillr/loop/<run-id>", runID)
+	}
+	return nil
+}
+
+// isUnsafePathSegment reports whether id cannot safely name a single directory
+// entry under a lane or item root.
+func isUnsafePathSegment(id string) bool {
+	if id == "" || id == "." || id == ".." || strings.HasPrefix(id, ".") {
+		return true
+	}
+	if strings.ContainsAny(id, "/\\\x00") {
+		return true
+	}
+	return filepath.Clean(id) != id || filepath.Base(id) != id
+}
+
+// checkItemID refuses an item id that is not safe as a single path segment or
+// that has the shape of a pool or desk lane name, before staging builds any
+// path from it.
+func checkItemID(itemID string) error {
+	if isUnsafePathSegment(itemID) {
+		return Usagef("item id %q is not a safe single path segment: staging refuses to build a path from it", itemID)
+	}
+	if isPoolLaneName(itemID) {
+		return Usagef("item id %q has the shape of a pool or desk lane name (lane-*, express-*, desk-*): staging refuses to build a path from it", itemID)
+	}
+	return nil
+}
+
+// checkLaneID refuses a lane id that is not safe as a single path segment before
+// staging builds any path from it.
+func checkLaneID(laneID string) error {
+	if isUnsafePathSegment(laneID) {
+		return Usagef("lane id %q is not a safe single path segment: staging refuses to build a path from it", laneID)
 	}
 	return nil
 }

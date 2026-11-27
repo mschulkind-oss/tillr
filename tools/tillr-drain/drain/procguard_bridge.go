@@ -179,10 +179,23 @@ func survivingOutcome(lane, runID, itemID string, res procguard.RetainSurvivingO
 
 func (l *Loop) recheckLaneChildren(ctx context.Context) error {
 	return procguard.RecheckLaneChildren(ctx, l.cfg.Store, l.cfg.LaneRoot, procguard.LaneChildrenHooks{
-		LoadLaneConditions: l.loadLaneConditions, Lanes: l.lanes, ResolveRunLeftBy: l.resolveRunLeftBy,
-		HoldLaneChildren: l.holdLaneChildren, RestoreLane: l.restoreLane,
+		LoadLaneConditions: l.loadLaneConditions, Lanes: l.lanes,
+		HeldChildrenLanes: l.heldChildrenLanes,
+		ResolveRunLeftBy:  l.resolveRunLeftBy,
+		HoldLaneChildren:  l.holdLaneChildren, RestoreLane: l.restoreLane,
 		HasLaneCondition: func(lane string) bool { return l.hasLaneCondition(lane, ReasonLaneChildren) },
 	})
+}
+
+func (l *Loop) heldChildrenLanes() (out []string) {
+	l.laneMu.Lock()
+	defer l.laneMu.Unlock()
+	for lane, c := range l.laneConditions {
+		if c != nil && c.reason == ReasonLaneChildren {
+			out = append(out, lane)
+		}
+	}
+	return out
 }
 
 func (l *Loop) processInLane(p *runFaceOwner, lane string) (bool, error) {
@@ -212,7 +225,7 @@ func (l *Loop) gatherReapEvidence(ctx context.Context, s *store.Store) (reapEvid
 	locator, _ := l.cfg.Steps.(runStreamLocator)
 	return procguard.GatherReapEvidence(ctx, s, procguard.GatherHost[*pendingWork]{
 		StorePath: l.cfg.Store, CurrentSessionID: l.currentSessionID, IsActive: l.isActive,
-		IsRotatedLane: l.isRotatedLane, IsDocumentDesk: documentDesk, ReadPending: readPendingViews,
+		IsRotatedLane: func(lane string) bool { return l.isRotatedLane(lane) || !isPoolLaneName(lane) }, IsDocumentDesk: documentDesk, ReadPending: readPendingViews,
 		TerminalRecord: terminalRecord, HasInterruptedWorkflowSession: l.hasInterruptedWork,
 		RunOutputFiles: locatorFunc(locator),
 	})
