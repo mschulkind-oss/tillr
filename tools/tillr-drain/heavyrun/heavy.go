@@ -609,7 +609,11 @@ func (r HeavyRunner) unlockProofWorktree(ctx context.Context, work string) error
 	if unlock == nil {
 		unlock = unlockRegisteredWorktreeDefault
 	}
-	reason, lockedAt, unlocked, err := unlock(ctx, r.Root, r.Lock.common, work)
+	common := ""
+	if r.Lock != nil {
+		common = r.Lock.common
+	}
+	reason, lockedAt, unlocked, err := unlock(ctx, r.Root, common, work)
 	if err != nil || !unlocked {
 		return err
 	}
@@ -1272,7 +1276,11 @@ func (r HeavyRunner) Replay(ctx context.Context, sha, id, why string) (bool, err
 			return saved, nil
 		}
 	}
-	started := r.Now()
+	now := r.Now
+	if now == nil {
+		now = time.Now
+	}
+	started := now()
 	r.progressf("loop: heavy %s replaying at %s (%s)\n", id, ShortSHA(sha), why)
 	red, logPath, err := r.OneLogged(ctx, sha, id)
 	if err == nil {
@@ -1282,7 +1290,7 @@ func (r HeavyRunner) Replay(ctx context.Context, sha, id, why string) (bool, err
 			}
 		}
 	}
-	took := r.Now().Sub(started).Round(time.Second)
+	took := now().Sub(started).Round(time.Second)
 	switch {
 	case err != nil && ctx.Err() != nil:
 	case err != nil:

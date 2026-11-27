@@ -397,3 +397,30 @@ os.execv(%q,[%q]+args)
 		t.Fatal(err)
 	}
 }
+
+func TestHeavyRunnerReplayWithoutNowOrLock(t *testing.T) {
+	root, tip := heavyRepo(t)
+	called := false
+	runner := HeavyRunner{
+		Root:  root,
+		Work:  filepath.Join(scratchUnderDurable(t), "worktree-replay"),
+		Trunk: "refs/heads/main",
+		Judge: func(_ context.Context, _ string, only string) ([]HeavyCheck, error) {
+			called = true
+			if only != "unit" {
+				t.Fatalf("only = %q, want unit", only)
+			}
+			return []HeavyCheck{{CheckID: "unit", Result: "pass"}}, nil
+		},
+	}
+	red, err := runner.Replay(context.Background(), tip, "unit", "revert-check")
+	if err != nil {
+		t.Fatalf("Replay: %v", err)
+	}
+	if red {
+		t.Fatalf("red = true, want false")
+	}
+	if !called {
+		t.Fatal("Judge was not called")
+	}
+}

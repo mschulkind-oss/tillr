@@ -734,8 +734,13 @@ func (l *Loop) handleDetachedHeavyEarly(ctx context.Context, procSteps *ProcessS
 		Judge: func(jctx context.Context, checkDir, only string) ([]HeavyCheck, error) {
 			return procSteps.JudgeHeavy(context.WithValue(jctx, heavyrun.HeavyUnownedKey{}, true), checkDir, only)
 		},
+		Progress:                 func(line string) { l.reportf("%s", line) },
+		Now:                      l.cfg.Now,
 		WithWorktreeRegistryLock: withWorktreeRegistryLock,
 		UnlockRegisteredWorktree: unlockRegisteredWorktree,
+	}
+	if replayRunner.Now == nil {
+		replayRunner.Now = time.Now
 	}
 	outcome, err := l.revertLanding(ctx, req.TipSHA, req.LandingSHA, req.Checks, func(rctx context.Context, sha, id string) (bool, error) {
 		return replayRunner.Replay(rctx, sha, id, "revert-check")
