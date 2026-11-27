@@ -1,5 +1,5 @@
 #!/bin/sh
-# tillr -- the launcher the tillr pack puts on PATH at ~/.local/bin/tillr.
+# tillr -- the launcher the tillr pack puts on PATH at ~/.local/bin/tillr-view.
 #
 # The toolset itself is a `files` contribution of this pack, delivered whole to
 # ~/.local/share/tillr: Go source, never a compiled artifact. This launcher builds one
@@ -36,6 +36,23 @@ fi
 # never exec each other's binary.
 current=$cache/current-$bin-$(printf %s "$root" | sha256 | cut -c1-16)
 
+# Only the observatory server (`tillr-view serve`, and `TILLR_LAUNCHER_RESOLVE` when
+# `serve` restarts in place) needs the web front end. Read faces that print tables or
+# records skip the front-end build entirely.
+need_web=
+if [ "$mod" = tillr-view ]; then
+	if [ "${1:-}" = serve ] || [ -n "${TILLR_LAUNCHER_RESOLVE:-}" ]; then
+		need_web=1
+	fi
+	if [ "${1:-}" = serve ]; then
+		for arg in "$@"; do
+			case $arg in
+			-h | --help) need_web= ;;
+			esac
+		done
+	fi
+fi
+
 # THE FAST PATH. `current` names the binary the last build produced, and any source newer
 # than it means the tree moved on. A warm cache therefore costs one `stat` per source file
 # and no Go command at all; the digest below is only computed when that check says the
@@ -57,7 +74,7 @@ newer() {
 			*_test.go) ;;
 			*.go | *.toml | *.json | go.mod | go.sum | support-revision) [ "$entry" -nt "$current" ] && return 0 ;;
 			esac
-			if [ "$mod" = tillr-view ]; then
+			if [ -n "$need_web" ]; then
 				case $entry in
 				"$root/tillr-view/web/tests/"*) ;;
 				"$root/tillr-view/web/"*)
@@ -89,8 +106,10 @@ resolve() {
 }
 
 if [ -x "$current" ] && ! newer "$root"; then
-	resolve "$current"
-	exec "$current" "$@"
+	if [ -z "$need_web" ] || [ -e "$current.obs" ] || { [ -e "$current.obs-tried" ] && [ ! -f "$root/tillr-view/web/dist/index.html" ]; }; then
+		resolve "$current"
+		exec "$current" "$@"
+	fi
 fi
 
 # Glob recursion rather than `find`: a jail shims `find` to a refusal, and this launcher
@@ -146,8 +165,9 @@ web_newer() {
 
 web_tags=
 web_rebuilt=
+web_failed=
 obs_marker=$built.obs
-if [ "$mod" = tillr-view ]; then
+if [ -n "$need_web" ]; then
 	web=$root/$mod/web
 	web_built=$web/dist/index.html
 	if [ -d "$web" ]; then
@@ -174,6 +194,8 @@ if [ "$mod" = tillr-view ]; then
 				fi
 				if [ "$need_ci" != failed ] && npm --prefix "$web" run build >&2 && [ -f "$web_built" ]; then
 					web_rebuilt=1
+				else
+					web_failed=1
 				fi
 			elif [ ! -f "$web_built" ]; then
 				echo "$bin: node and npm not found; building without observatory web UI (install node and npm to build it, or pass --web-dist)" >&2
@@ -181,8 +203,19 @@ if [ "$mod" = tillr-view ]; then
 		fi
 		if [ -f "$web_built" ]; then
 			web_tags="-tags observatory"
-		elif command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
-			echo "$bin: observatory front-end build failed; building without observatory web UI (pass --web-dist to serve external assets)" >&2
+			if [ -n "$web_failed" ]; then
+				if [ "${1:-}" = serve ]; then
+					echo "$bin serve: observatory front-end rebuild failed; serve will use the previously built observatory web UI" >&2
+				else
+					echo "$bin: observatory front-end rebuild failed; building with the previously built observatory web UI" >&2
+				fi
+			fi
+		elif [ -n "$web_failed" ]; then
+			if [ "${1:-}" = serve ]; then
+				echo "$bin serve: observatory front-end build failed; serve will run without the observatory web UI (pass --web-dist to serve external assets)" >&2
+			else
+				echo "$bin: observatory front-end build failed; building without the observatory web UI (pass --web-dist to serve external assets)" >&2
+			fi
 		fi
 	fi
 	if [ -n "$web_tags" ] && [ ! -e "$obs_marker" ]; then
@@ -224,5 +257,16 @@ fi
 # The symlink is what the next invocation's fast path reads. It is written after the
 # binary exists, so a reader never follows it to a half-built file.
 ln -sfn "$built" "$current"
+if [ "$mod" = tillr-view ]; then
+	if [ -e "$obs_marker" ]; then
+		: >"$current.obs"
+		rm -f "$current.obs-tried"
+	elif [ -n "$need_web" ]; then
+		rm -f "$current.obs"
+		: >"$current.obs-tried"
+	else
+		rm -f "$current.obs" "$current.obs-tried"
+	fi
+fi
 resolve "$built"
 exec "$built" "$@"
