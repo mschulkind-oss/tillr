@@ -51,6 +51,16 @@ func AppendBusyFact(tx *store.Tx, sessionID string, fact StoreBusyFact, fallback
 	return err
 }
 
+// AppendBusyFacts appends all pending StoreBusyFact events inside tx.
+func AppendBusyFacts(tx *store.Tx, sessionID string, pending []StoreBusyFact, fallbackAt time.Time) error {
+	for _, fact := range pending {
+		if err := AppendBusyFact(tx, sessionID, fact, fallbackAt); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // WriteTxWithBusyFacts runs fn inside a store write transaction, flushing any
 // queued busy facts in the same transaction and restoring them on error.
 func WriteTxWithBusyFacts(
@@ -81,12 +91,7 @@ func WriteTxWithBusyFacts(
 		if now != nil {
 			fallback = now().UTC()
 		}
-		for _, fact := range pending {
-			if err := AppendBusyFact(tx, id, fact, fallback); err != nil {
-				return err
-			}
-		}
-		return nil
+		return AppendBusyFacts(tx, id, pending, fallback)
 	})
 	if err != nil && len(pending) > 0 && restorePending != nil {
 		restorePending(pending)

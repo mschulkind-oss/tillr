@@ -1496,6 +1496,7 @@ func (l *Loop) passPlansMode(ctx context.Context, at time.Time, generation *stri
 				l.reportf("%s", line)
 			}
 		}()
+		pendingBusy := l.takeBusyWrites()
 		err = s.WriteTx(ctx, func(tx *store.Tx) error {
 			var before, after int64
 			if err := tx.QueryRow("SELECT COALESCE(MAX(seq), 0) FROM events").Scan(&before); err != nil {
@@ -1515,8 +1516,14 @@ func (l *Loop) passPlansMode(ctx context.Context, at time.Time, generation *stri
 			if reapedAny && nextGeneration == "" {
 				nextGeneration, err = allocateGeneration(tx)
 			}
-			return err
+			if err != nil {
+				return err
+			}
+			return l.appendBusyWrites(tx, pendingBusy)
 		})
+		if err != nil && len(pendingBusy) > 0 {
+			l.restoreBusyWrites(pendingBusy)
+		}
 		if err == nil && ev.ReapedSingle != nil {
 			reapedSingle = *ev.ReapedSingle
 		}

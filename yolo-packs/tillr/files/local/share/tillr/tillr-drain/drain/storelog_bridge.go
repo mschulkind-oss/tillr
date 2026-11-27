@@ -132,6 +132,10 @@ func (l *Loop) writeTx(ctx context.Context, s *store.Store, fn func(*store.Tx) e
 	return storelog.WriteTxWithBusyFacts(ctx, s, l.takeBusyWrites, l.restoreBusyWrites, l.currentSessionID, l.cfg.Now, fn)
 }
 
+func (l *Loop) appendBusyWrites(tx *store.Tx, pending []StoreBusyFact) error {
+	return storelog.AppendBusyFacts(tx, l.currentSessionID(), pending, l.cfg.Now())
+}
+
 // Forwarding wrappers for wal_keeper.go.
 func openWALKeeper(ctx context.Context, path string) (*store.CheckpointOwner, error) {
 	return storelog.OpenWALKeeper(ctx, path)
