@@ -25,6 +25,7 @@ const (
 	judgeRequestKind             = "drain.judge.request"
 	judgeReceiptFile             = "judge.json"
 	judgeLandedKind              = "drain.judge.landed"
+	evalOutputFile               = "eval.output"
 )
 
 var (
@@ -1070,7 +1071,7 @@ func (l *Loop) stageJudge(ctx context.Context, c Candidate, receipt *JudgeReceip
 	if err != nil {
 		return err
 	}
-	output := filepath.Join(dir, "eval.output")
+	output := filepath.Join(dir, evalOutputFile)
 	candDir := filepath.Join(dir, "cand")
 	brief := fmt.Sprintf(`# Judge candidate
 
@@ -1366,9 +1367,9 @@ func (l *Loop) restoreJudgeInputs(c Candidate, r *JudgeReceipt) error {
 }
 
 func (l *Loop) judgeEvalOutputPath(laneID, runID string) string {
-	scratchPath := filepath.Join(run.DurableDir(l.laneDirPath(laneID), runID), "eval.output")
+	scratchPath := filepath.Join(run.DurableDir(l.laneDirPath(laneID), runID), evalOutputFile)
 	if _, err := os.Stat(scratchPath); os.IsNotExist(err) {
-		runPath := filepath.Join(RunDir(l.cfg.Root, runID), "eval.output")
+		runPath := filepath.Join(RunDir(l.cfg.Root, runID), evalOutputFile)
 		if _, rErr := os.Stat(runPath); rErr == nil {
 			return runPath
 		}

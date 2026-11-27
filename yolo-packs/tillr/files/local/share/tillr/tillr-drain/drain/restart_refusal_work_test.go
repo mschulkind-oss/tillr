@@ -40,14 +40,11 @@ func TestRefusedAndCurrentRestartRetainInflightWorkAndItsResult(t *testing.T) {
 				request := h.request(t, 1)[0]
 				ctx, cancel := context.WithTimeout(context.Background(), hangGuard)
 				if kind == "heavy" {
-					if handled, stop, err := h.l.gateRestart(ctx, result); handled || stop != "" || err != nil {
-						t.Fatalf("restart did not defer at the active proof: %v, %s, %v", handled, stop, err)
+					if handled, stop, err := h.l.gateRestart(ctx, result); !handled || stop != "" || err != nil {
+						t.Fatalf("restart during active proof = %v, %q, %v; want handled without replacement", handled, stop, err)
 					}
 					close(held.release)
 					h.l.heavyWG.Wait()
-					if handled, stop, err := h.l.gateRestart(ctx, result); !handled || stop != "" || err != nil {
-						t.Fatalf("restart handling after the checkpoint=%v, %s, %v", handled, stop, err)
-					}
 				}
 				a, err := restart.AwaitAnswer(ctx, h.f.storePath, request.ID, time.Millisecond)
 				cancel()

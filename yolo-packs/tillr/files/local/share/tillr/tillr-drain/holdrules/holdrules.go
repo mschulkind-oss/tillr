@@ -69,6 +69,7 @@ var Rules = map[string]Rule{
 	"tooling-defect":       {"waits on work", "queue", "the tooling defect item to land or close"},
 	"triage-no-block":      {"waits on work", "queue", "triage on the design seat"},
 	"conflict-design":      {"waits on work", "queue", "design"},
+	"split-call-design":    {"waits on work", "queue", "design"},
 	"design-under-comment": {"waits on work", "queue", "the comment item"},
 	"conflict-owner":       {"needs you", "queue", "owner"},
 	"conflict-answered":    {"ready", "queue", "the next pass"},

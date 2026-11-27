@@ -88,7 +88,8 @@ var generalHolds = map[string]string{
 	ReasonPiExtensionsBuildFailed: "",
 	ReasonObstacleOwner:           "", ReasonObstacleTooling: "",
 	ReasonObstacleSeat: "", ReasonObstacleDefinition: "",
-	ReasonIcebox: "",
+	ReasonIcebox: "", ReasonAwaitingOQQM2: "", ReasonAwaitingOQQM3: "",
+	ReasonSplitCallDesign: "",
 }
 
 func hasPrerequisite(d definition.Definition, name string) bool {

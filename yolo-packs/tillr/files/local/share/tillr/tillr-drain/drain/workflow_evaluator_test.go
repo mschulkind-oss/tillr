@@ -534,7 +534,8 @@ func TestWorkflowEvaluatorSingleVerdictReader(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	readers := 0
+	literals := 0
+	constRefs := map[string]int{}
 	for _, path := range paths {
 		if strings.HasSuffix(path, "_test.go") {
 			continue
@@ -543,10 +544,18 @@ func TestWorkflowEvaluatorSingleVerdictReader(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		readers += strings.Count(string(raw), `"eval.output"`)
+		s := string(raw)
+		literals += strings.Count(s, `"eval.output"`)
+		if n := strings.Count(s, "evalOutputFile"); n > 0 {
+			constRefs[path] = n
+		}
 	}
-	// One path is written into the judge brief; the other is the existing intake read.
-	if readers != 2 {
-		t.Fatalf("eval.output references %d, want only the judge's two references", readers)
+	if literals != 1 {
+		t.Fatalf("eval.output literal references %d, want only evalOutputFile constant", literals)
+	}
+	// judge.go defines evalOutputFile, writes it into the judge brief, and resolves it in
+	// judgeEvalOutputPath; ended_item_lane.go only lists it in preservedScratchFiles.
+	if len(constRefs) != 2 || constRefs["judge.go"] != 4 || constRefs["ended_item_lane.go"] != 1 {
+		t.Fatalf("evalOutputFile references = %v, want only judge.go (4) and ended_item_lane.go (1)", constRefs)
 	}
 }

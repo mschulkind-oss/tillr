@@ -47,7 +47,7 @@ const (
 var preservedScratchFiles = []string{
 	graphExitFile,
 	landingOfferFile,
-	"eval.output",
+	evalOutputFile,
 	commentRepliesFile,
 }
 

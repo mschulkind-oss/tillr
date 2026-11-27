@@ -43,15 +43,12 @@ func TestHeavyReplacementKeepsProofAndReplayResults(t *testing.T) {
 			}
 			awaitRestartTest(t, entered, "live "+hold)
 			request := h.request(t, 1)[0]
-			_, stop, err := h.l.gateRestart(ctx, &LoopResult{})
+			handled, stop, err := h.l.gateRestart(ctx, &LoopResult{})
+			if err != nil || !handled || stop != StopRestarted || h.execed == nil {
+				t.Fatalf("replacement during live %s = %v, %q, %v (execed=%v); want immediate replacement", hold, handled, stop, err, h.execed)
+			}
 			close(release)
 			h.l.heavyWG.Wait()
-			if err != nil || stop != "" || h.execed != nil {
-				t.Fatalf("replacement discarded live %s: %s, %v, %v", hold, stop, err, h.execed)
-			}
-			if _, stop, err := h.l.gateRestart(ctx, &LoopResult{}); err != nil || stop != StopRestarted {
-				t.Fatalf("replacement after checkpoint=%s, %v", stop, err)
-			}
 			wantOld := []string{":" + tip, "unit:" + base, "unit:" + tip}
 			if !reflect.DeepEqual(calls, wantOld) {
 				t.Fatalf("old image calls=%v want=%v", calls, wantOld)
@@ -142,8 +139,8 @@ func TestRedProofFinishesAttributionBeforePendingRestartAndNextLoopReusesReplays
 	awaitRestartTest(t, enteredBaseReplay, "first replay at green base")
 
 	req := h.request(t, 1)[0]
-	if handled, stop, err := h.l.gateRestart(ctx, &LoopResult{}); handled || stop != "" || err != nil || h.execed != nil {
-		t.Fatalf("gateRestart during live replay = %v, %q, %v (execed=%v); want deferred", handled, stop, err, h.execed)
+	if handled, stop, err := h.l.gateRestart(ctx, &LoopResult{}); !handled || stop != StopRestarted || err != nil || h.execed == nil {
+		t.Fatalf("gateRestart during live replay = %v, %q, %v (execed=%v); want immediate replacement", handled, stop, err, h.execed)
 	}
 
 	close(releaseBaseReplay)
@@ -167,10 +164,6 @@ func TestRedProofFinishesAttributionBeforePendingRestartAndNextLoopReusesReplays
 	wantEnded := HeavyProgressFact{TipSHA: c3, Phase: "ended", Outcome: "red", FailingChecks: "unit"}
 	if last := events[len(events)-1].Fact; last != wantEnded {
 		t.Fatalf("ended progress event = %+v, want %+v", last, wantEnded)
-	}
-
-	if handled, stop, err := h.l.gateRestart(ctx, &LoopResult{}); !handled || stop != StopRestarted || err != nil || h.execed == nil {
-		t.Fatalf("gateRestart after red proof finished = %v, %q, %v (execed=%v); want replaced", handled, stop, err, h.execed)
 	}
 
 	// A new commit lands and the replacement loop proves it with a different failure detail
