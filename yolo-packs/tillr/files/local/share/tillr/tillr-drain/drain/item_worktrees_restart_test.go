@@ -329,7 +329,7 @@ func TestItemWorktreesSweepLeavesItemDirectoryInPlace(t *testing.T) {
 	runGit(t, f.root, "worktree", "add", "-q", "-b", LaneBranch(f.laneRoot, "item-unowned"), unownedWT, base)
 
 	// Mark item-ended as closed with a prior run and dirty work; reclaimEndedItemLanes
-	// saves its dirty work and calls restoreReclaimedLane, leaving the directory in place.
+	// saves its dirty work and collects the ended item's worktree.
 	if err := stager.Stage(ctx, StageSpec{
 		LaneID:     "item-ended",
 		ItemID:     "item-ended",
@@ -364,10 +364,16 @@ func TestItemWorktreesSweepLeavesItemDirectoryInPlace(t *testing.T) {
 		t.Fatalf("reclaimEndedItemLanes: %v", err)
 	}
 
-	// Active and unowned item directories (and their worktrees/scratch) stay untouched.
-	for _, p := range []string{openWT, filepath.Join(openWT, "tools", "item-open", "wip.txt"), filepath.Join(openScratch, "cache.bin"), unownedWT, endedWT} {
+	// Active item directories (and their worktrees/scratch) stay untouched.
+	for _, p := range []string{openWT, filepath.Join(openWT, "tools", "item-open", "wip.txt"), filepath.Join(openScratch, "cache.bin")} {
 		if _, err := os.Stat(p); err != nil {
 			t.Fatalf("sweep removed expected item path %s: %v", p, err)
+		}
+	}
+	// Unowned (no items row) and ended item worktrees are collected.
+	for _, p := range []string{unownedWT, endedWT} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Fatalf("sweep left ended/removed item worktree %s in place: stat err=%v", p, err)
 		}
 	}
 }
