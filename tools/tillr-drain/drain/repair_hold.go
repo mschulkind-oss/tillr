@@ -158,7 +158,10 @@ func (l *Loop) handoffRepairWithStage(ctx context.Context, original Candidate, d
 		if _, err := run.ClaimLease(ctx, tx, *decision.RunRequest, decision.LaneID, at); err != nil {
 			return err
 		}
-		work := pendingWork{Decision: decision, Owner: owner, BaseSHA: base, ParentRunID: original.RunID, LoopID: l.sessionID}
+		l.mu.Lock()
+		l.stageLaunch.MarkLaunched(decision.RunRequest.RunID)
+		l.mu.Unlock()
+		work := pendingWork{Decision: decision, Owner: owner, BaseSHA: base, ParentRunID: original.RunID, LoopID: l.sessionID, Staged: true}
 		if err := appendEffect(tx, dispatchStartedKind, decision.RunRequest.RunID, work, at); err != nil {
 			return err
 		}

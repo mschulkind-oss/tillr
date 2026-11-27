@@ -54,7 +54,7 @@ func isIdleTelemetryEvent(kind, objectType string) bool {
 func (l *Loop) hasStageFaults() bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return len(l.stageFaults) > 0
+	return l.stageLaunch.HasFaults()
 }
 
 func (l *Loop) heldReasonsSnapshot() map[string]string {

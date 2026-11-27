@@ -116,6 +116,8 @@ func (l *Loop) runTriggerNotifyLoop(ctx context.Context, initialSub *notify.Subs
 				// Reconnected after a disconnect: immediately run the fallback
 				// poll query so events committed during the gap do not wait 15 s.
 				signalWake(tn.wake)
+				l.signalStageWake()
+				l.signalLaunchWake()
 				l.signalExamineWake()
 				l.signalGateWake()
 				l.signalLandWake()
@@ -135,6 +137,10 @@ func (l *Loop) runTriggerNotifyLoop(ctx context.Context, initialSub *notify.Subs
 			}
 			signalWake(tn.wake)
 			switch frame.Topic {
+			case notify.TopicRunAssigned:
+				l.signalStageWake()
+			case notify.TopicRunStaged:
+				l.signalLaunchWake()
 			case notify.TopicRunExited:
 				l.signalExamineWake()
 			case notify.TopicCandidateReady, notify.TopicGateFinished:
@@ -142,6 +148,8 @@ func (l *Loop) runTriggerNotifyLoop(ctx context.Context, initialSub *notify.Subs
 			case notify.TopicGatePassed, notify.TopicTrunkMoved, notify.TopicProofGreen:
 				l.signalLandWake()
 			case notify.TopicResync:
+				l.signalStageWake()
+				l.signalLaunchWake()
 				l.signalExamineWake()
 				l.signalGateWake()
 				l.signalLandWake()

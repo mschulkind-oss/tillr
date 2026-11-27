@@ -20,6 +20,7 @@ const (
 	ExaminationClaimedKind  = "drain.examination-claimed"
 	ExaminationReleasedKind = "drain.examination-released"
 	DispatchStartedKind     = "drain.started"
+	DispatchStagedKind      = "drain.staged"
 	CandidateReadyKind      = "drain.candidate"
 	CandidateRetirementKind = "drain.retirement"
 	CandidatePreparedKind   = "drain.prepared-candidate"
@@ -39,6 +40,7 @@ func init() {
 		ExaminationClaimedKind,
 		ExaminationReleasedKind,
 		DispatchStartedKind,
+		DispatchStagedKind,
 		CandidateReadyKind,
 		CandidateRetirementKind,
 		CandidatePreparedKind,

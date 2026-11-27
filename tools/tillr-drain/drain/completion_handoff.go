@@ -28,9 +28,9 @@ func (l *Loop) planStillActive(p plannedApplication) bool {
 	d := p.decision
 	// A parallel group can replace its primary run before its shared boundary
 	// closes. Its item remains active even though the current pending ID changed.
-	return l.activeItems[d.ItemID] != "" || l.examiningItems[d.ItemID] > 0 || l.gateLand.HasItem(d.ItemID) ||
-		l.active[p.parentRunID] || l.examiningRuns[p.parentRunID] || l.gateLand.HasRun(p.parentRunID) ||
-		((d.Action == ActionSettle || d.Action == ActionJudge) && d.RunRequest != nil && (l.active[d.RunRequest.RunID] || l.examiningRuns[d.RunRequest.RunID] || l.gateLand.HasRun(d.RunRequest.RunID)))
+	return l.activeItems[d.ItemID] != "" || l.stageLaunch.HasItem(d.ItemID) || l.examiningItems[d.ItemID] > 0 || l.gateLand.HasItem(d.ItemID) ||
+		l.active[p.parentRunID] || l.stageLaunch.HasRun(p.parentRunID) || l.examiningRuns[p.parentRunID] || l.gateLand.HasRun(p.parentRunID) ||
+		((d.Action == ActionSettle || d.Action == ActionJudge) && d.RunRequest != nil && (l.active[d.RunRequest.RunID] || l.stageLaunch.HasRun(d.RunRequest.RunID) || l.examiningRuns[d.RunRequest.RunID] || l.gateLand.HasRun(d.RunRequest.RunID)))
 }
 
 // The pass may stop consuming notifications before shutdown joins examinations.

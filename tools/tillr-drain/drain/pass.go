@@ -46,6 +46,7 @@ type pendingWork struct {
 	LoopID         string         `json:"loop_id,omitempty"`
 	Examining      bool           `json:"examining,omitempty"`
 	Ready          bool           `json:"ready,omitempty"`
+	Staged         bool           `json:"staged,omitempty"`
 	Gated          bool           `json:"-"`
 	JudgeLanded    bool           `json:"-"`
 	ParentRunID    string         `json:"parent_run_id,omitempty"`
@@ -79,6 +80,8 @@ type pendingWork struct {
 	ConflictHeadSHA      string    `json:"-"`
 	ConflictTrunkSHA     string    `json:"-"`
 	ConflictPaths        []string  `json:"-"`
+	StagedWorktree       string    `json:"-"`
+	StagedRequestPath    string    `json:"-"`
 	examinationStartedAt time.Time `json:"-"`
 }
 
@@ -92,7 +95,7 @@ func readPending(r *store.Reader) (map[string]*pendingWork, error) {
 // the write lock past a landing's busy timeout on 2026-11-19 (whole_log_test.go).
 // TestEveryFoldReadsTheKindsItSelects holds this list to the fold's cases.
 var pendingHistoryKinds = []string{
-	dispatchStartedKind, nodeAdvancedKind, graphChangedKind,
+	dispatchStartedKind, dispatchStagedKind, nodeAdvancedKind, graphChangedKind,
 	GateVerdictKind,
 	"land.landing",
 	run.ResumeKind,
@@ -534,6 +537,22 @@ func foldPendingHistoryWithMeta(r *store.Reader, seq int64, s *pendingHistorySta
 		case candidateStagedKind:
 			if work := byRun[*e.ObjectID]; work != nil {
 				work.NeedsStage = false
+			}
+		case dispatchStagedKind:
+			if work := byRun[*e.ObjectID]; work != nil {
+				var staged dispatchStaged
+				if err := json.Unmarshal(e.Payload, &staged); err != nil {
+					return err
+				}
+				work.Staged = true
+				if staged.BaseSHA != "" {
+					work.BaseSHA = staged.BaseSHA
+				}
+				if staged.Decision.RunRequest != nil {
+					work.Decision = staged.Decision
+				}
+				work.StagedWorktree = staged.WorktreePath
+				work.StagedRequestPath = staged.RequestPath
 			}
 		case designQuotaRefusedKind:
 			if work := byRun[*e.ObjectID]; work != nil {
@@ -3457,7 +3476,7 @@ plans:
 			// state caused, or a cancellation with no infrastructure fault behind
 			// it, replans; an infrastructure fault would only repeat and count again.
 			l.mu.Lock()
-			canReplan := l.laneRefusedNow || len(l.stageFaults) == 0
+			canReplan := l.laneRefusedNow || !l.stageLaunch.HasFaults()
 			l.mu.Unlock()
 			if canReplan && replans < len(l.lanes())+1 {
 				replans++
@@ -3687,81 +3706,23 @@ func (l *Loop) applyReadyPlan(ctx context.Context, p plannedApplication, mainSHA
 		base := *mainSHA
 		if work != nil {
 			base = work.BaseSHA
-		}
-		if work != nil {
 			d = work.Decision
 		}
-		startCtx, startHandoff := l.beginStartHandoff(ctx, d)
 		if v := l.startView.Load(); v != nil {
-			endNote := timeHandoffPhase(startCtx, "note_start_claimed")
 			v.noteStartClaimed(d, work)
-			endNote()
 		}
-		start := time.Now()
-		l.mu.Lock()
-		l.laneRefusedNow = false
-		l.mu.Unlock()
-		staged, refused, err := l.prepareClaimedStage(startCtx, &d, &base, result)
-		if refused {
-			return false, false, err
-		}
-		if err != nil {
-			if stoppedByOperator(ctx, err) {
-				_ = l.cancelStaging(context.WithoutCancel(ctx), d)
-			}
-			result.StopItemID, result.StopStep = d.ItemID, "stage"
-			return false, false, err
-		}
-		if len(staged) > 0 {
-			endParallel := timeHandoffPhase(startCtx, "stage_parallel")
-			parallel, pErr := l.stageParallel(startCtx, staged[0], base)
-			endParallel()
-			if pErr != nil {
-				if stoppedByOperator(ctx, pErr) || ctx.Err() != nil {
-					_ = l.cancelStaging(context.WithoutCancel(ctx), d)
-					result.StopItemID, result.StopStep = d.ItemID, "stage"
-					return false, false, pErr
-				}
-				if holdErr := l.holdStageFailed(ctx, d, "stage parallel", pErr); holdErr != nil {
-					_ = l.cancelStaging(context.WithoutCancel(ctx), d)
-					result.StopItemID, result.StopStep = d.ItemID, "stage"
-					return false, false, holdErr
-				}
-				staged = nil
-			} else {
-				staged[0] = parallel
-			}
-		}
-		timing.StageMS += time.Since(start).Milliseconds()
-		if len(staged) == 0 {
-			if err := l.cancelStaging(ctx, d); err != nil {
-				result.StopItemID, result.StopStep = d.ItemID, "cancel staging"
-				return false, false, err
-			}
-			return true, false, nil
-		}
-		endStop := timeHandoffPhase(startCtx, "check_stop_requested")
-		stopErr := l.checkStopRequested(startCtx)
-		endStop()
-		if stopErr != nil {
-			if cancelErr := l.cancelStaging(context.WithoutCancel(ctx), d); cancelErr != nil {
-				return false, false, cancelErr
-			}
-			return false, false, stopErr
-		}
-		if pending, err := l.runDispatchHeld(startCtx); err != nil {
-			if cancelErr := l.cancelStaging(context.WithoutCancel(ctx), d); cancelErr != nil {
-				return false, false, cancelErr
-			}
-			return false, false, err
-		} else if pending {
-			if cancelErr := l.cancelStaging(context.WithoutCancel(ctx), d); cancelErr != nil {
-				return false, false, cancelErr
+		if l.isStageCoordinatorActive() {
+			if l.notifyEnabled() {
+				l.signalStageWake()
 			}
 			return false, false, nil
 		}
-		startHandoff.setDecision(staged[0])
-		l.launchRun(withStartHandoff(ctx, startHandoff), staged[0], at, watch, result)
+		cancelled, stageErr := l.stageAndLaunchInline(ctx, d, base, at, watch, result)
+		if stageErr != nil {
+			result.StopItemID, result.StopStep = d.ItemID, "stage"
+			return false, false, stageErr
+		}
+		return cancelled, false, nil
 	case ActionSettle, ActionJudge:
 		if err := l.checkStopRequested(ctx); err != nil {
 			if releaseErr := l.releaseExamination(context.WithoutCancel(ctx), d); releaseErr != nil {

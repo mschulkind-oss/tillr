@@ -48,6 +48,7 @@ const (
 	examinationClaimedKind  = runhistory.ExaminationClaimedKind
 	examinationReleasedKind = runhistory.ExaminationReleasedKind
 	dispatchStartedKind     = runhistory.DispatchStartedKind
+	dispatchStagedKind      = runhistory.DispatchStagedKind
 	candidateReadyKind      = runhistory.CandidateReadyKind
 	candidateRetirementKind = runhistory.CandidateRetirementKind
 	candidatePreparedKind   = runhistory.CandidatePreparedKind

@@ -406,7 +406,10 @@ func (l *Loop) replaceFailedDesigner(ctx context.Context, old Decision, rec run.
 				return err
 			}
 		}
-		return appendEffect(tx, dispatchStartedKind, req.RunID, &pendingWork{Decision: next, BaseSHA: spec.BaseSHA, Owner: owner, ParentRunID: rec.RunID, LoopID: l.sessionID}, l.cfg.Now().UTC())
+		l.mu.Lock()
+		l.stageLaunch.MarkLaunched(req.RunID)
+		l.mu.Unlock()
+		return appendEffect(tx, dispatchStartedKind, req.RunID, &pendingWork{Decision: next, BaseSHA: spec.BaseSHA, Owner: owner, ParentRunID: rec.RunID, LoopID: l.sessionID, Staged: true}, l.cfg.Now().UTC())
 	})
 	s.Close()
 	if err != nil || held {

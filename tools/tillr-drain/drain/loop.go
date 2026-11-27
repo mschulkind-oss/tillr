@@ -21,6 +21,7 @@ import (
 
 	"github.com/mschulkind-oss/tillr-drain/holdrules"
 	"github.com/mschulkind-oss/tillr-drain/internal/gateland"
+	"github.com/mschulkind-oss/tillr-drain/internal/stagelaunch"
 	"github.com/mschulkind-oss/tillr-drain/restart"
 	"github.com/mschulkind-oss/tillr-drain/spend"
 	"github.com/mschulkind-oss/tillr-drain/workflow"
@@ -667,11 +668,6 @@ type Loop struct {
 	// between attempts when it cannot dispatch anything, and it is not a stop condition:
 	// the pile is the only throttle.
 	infraStreak int
-	// stageFaults belongs to the pass boundary: it consumes these failures once
-	// their staging claims have been retracted. Only an idle, non-dispatching
-	// pass converts them to stageBackoff, which ends when backOff returns.
-	stageFaults  map[string]struct{} // faulting run IDs, including claims still retracting
-	stageBackoff bool
 	// laneConditions is each lane a lane-owned staging refusal took out of rotation this
 	// session (lane_rotation.go), and laneRefusedNow says the current staging refused its
 	// lane, so the pass offers the item another. laneMu guards rotation state;
@@ -779,6 +775,7 @@ type Loop struct {
 	activeBrackets           map[string]bool
 	examiningRuns            map[string]bool
 	examiningItems           map[string]int
+	stageLaunch              stagelaunch.State
 	gateLand                 gateland.State
 	triageMu                 sync.Mutex
 	triageWG                 sync.WaitGroup
@@ -823,14 +820,20 @@ type Loop struct {
 func (l *Loop) isActive(runID string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return l.active[runID] || l.examiningRuns[runID] || l.gateLand.HasRun(runID)
+	return l.active[runID] || l.stageLaunch.HasRun(runID) || l.examiningRuns[runID] || l.gateLand.HasRun(runID)
 }
 
 func (l *Loop) activeCount() int {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	seen := make(map[string]struct{}, len(l.active)+len(l.examiningRuns)+l.gateLand.RunCount())
+	seen := make(map[string]struct{}, len(l.active)+l.stageLaunch.RunCount()+len(l.examiningRuns)+l.gateLand.RunCount())
 	for id := range l.active {
+		seen[id] = struct{}{}
+	}
+	for id := range l.stageLaunch.Stage.Runs {
+		seen[id] = struct{}{}
+	}
+	for id := range l.stageLaunch.Launch.Runs {
 		seen[id] = struct{}{}
 	}
 	for id := range l.examiningRuns {
@@ -980,6 +983,7 @@ func NewLoop(cfg LoopConfig) (*Loop, error) {
 		triageSlots:      map[string]bool{},
 		triageWake:       make(chan struct{}, 1),
 	}
+	l.stageLaunch.Ensure()
 	if cfg.PolicyRef != "" {
 		p, raw, hash, err := readPolicyContent(cfg.PolicyRef)
 		if err != nil {
@@ -1213,10 +1217,14 @@ func (l *Loop) Run(ctx context.Context) (result LoopResult, err error) {
 	case <-ctx.Done():
 	}
 	defer l.startTriggerNotify(ctx)()
+	stopStage := func() {}
+	stopLaunch := func() {}
 	stopExamine := func() {}
 	stopGate := func() {}
 	stopLand := func() {}
 	if !l.pollOnly && l.ownerMigrationItem == "" {
+		stopStage = l.startStageCoordinator(ctx, &result)
+		stopLaunch = l.startLaunchCoordinator(ctx, &result)
 		stopExamine = l.startExamineCoordinator(ctx, &result)
 		if !l.nonLanding {
 			stopGate = l.startGateCoordinator(ctx, &result)
@@ -1228,8 +1236,10 @@ func (l *Loop) Run(ctx context.Context) (result LoopResult, err error) {
 		stopStarts = l.startBackgroundCoordinator(ctx, view, &result)
 	}
 	err = l.runPasses(ctx, &result, !l.pollOnly, view)
-	// Join staging, examination, gate, and land coordinators before copying the result or ending operator-requested runs.
+	// Join staging, launch, examination, gate, and land coordinators before copying the result or ending operator-requested runs.
 	stopStarts()
+	stopStage()
+	stopLaunch()
 	stopExamine()
 	stopGate()
 	stopLand()
@@ -1254,7 +1264,7 @@ func (l *Loop) runPasses(ctx context.Context, result *LoopResult, pendingOnly bo
 		l.mu.Lock()
 		dispatched := result.Dispatched
 		if !pendingOnly {
-			l.stageFaults = nil
+			l.stageLaunch.ClearFaults()
 		}
 		l.mu.Unlock()
 		passStart := time.Now()
@@ -1300,14 +1310,14 @@ func (l *Loop) runPasses(ctx context.Context, result *LoopResult, pendingOnly bo
 		// the pile answered "nothing dispatchable", the loop has a real answer and does not
 		// wait at all.
 		l.mu.Lock()
-		if len(l.stageFaults) == 0 {
+		if !l.stageLaunch.HasFaults() {
 			l.mu.Unlock()
 			continue
 		}
 		// Do not count the failed staging claim itself as a live worker. Let
 		// staging finish retracting it before deciding whether the loop is idle.
 		retracting := false
-		for id := range l.stageFaults {
+		for id := range l.stageLaunch.Faults {
 			if l.active[id] {
 				retracting = true
 				break
@@ -1318,8 +1328,8 @@ func (l *Loop) runPasses(ctx context.Context, result *LoopResult, pendingOnly bo
 			continue
 		}
 		backOff := result.Dispatched == dispatched && l.infraStreak > 0 && len(l.active) == 0 && len(l.examiningRuns) == 0 && !l.gateLand.AnyRunning()
-		l.stageFaults = nil
-		l.stageBackoff = backOff
+		l.stageLaunch.ClearFaults()
+		l.stageLaunch.Backoff = backOff
 		l.mu.Unlock()
 		if !backOff {
 			if pendingOnly {
@@ -1330,7 +1340,7 @@ func (l *Loop) runPasses(ctx context.Context, result *LoopResult, pendingOnly bo
 		backOffStart := time.Now()
 		waited, err := l.backOff(ctx)
 		l.mu.Lock()
-		l.stageBackoff = false
+		l.stageLaunch.Backoff = false
 		l.mu.Unlock()
 		if err != nil && ctx.Err() == nil {
 			if store.IsBusy(err) {
@@ -2010,7 +2020,9 @@ func (l *Loop) beginLaneStaging(lane string) func() {
 func (l *Loop) stageLane(ctx context.Context, spec StageSpec) error {
 	end := l.beginLaneStaging(spec.LaneID)
 	defer end()
-	return l.cfg.Stage.Stage(ctx, spec)
+	return stagelaunch.RetryGitConfigLock(ctx, waitFor, func() error {
+		return l.cfg.Stage.Stage(ctx, spec)
+	})
 }
 
 func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSHA string, result *LoopResult) ([]Decision, error) {
@@ -2460,10 +2472,7 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 		}
 		if !IsItemContent(err) {
 			l.mu.Lock()
-			if l.stageFaults == nil {
-				l.stageFaults = make(map[string]struct{})
-			}
-			l.stageFaults[request.RunID] = struct{}{}
+			l.stageLaunch.RecordFault(request.RunID)
 			result.InfraFailures++
 			l.infraStreak++
 			streak := l.infraStreak
