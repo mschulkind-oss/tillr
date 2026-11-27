@@ -3816,18 +3816,6 @@ func (l *Loop) verifyStep(ctx context.Context, prepared *Candidate, result *Loop
 				return "", false, err
 			}
 		}
-		var unlock func()
-		if isProc && procSteps.hasSettledDetachedGate(candidate) {
-			ctx, unlock, err = l.lockRestartLanding(ctx)
-		} else if isProc {
-			ctx, unlock, err = l.lockRestartGateStart(ctx)
-		} else {
-			ctx, unlock, err = l.lockRestartSettlement(ctx)
-		}
-		if err != nil {
-			return "", false, err
-		}
-		defer unlock()
 		// A design answer amends the block for the next worker, but still gets the
 		// generated mirror before the gate binds a verdict to the prepared tree.
 		retireBlock := candidate.BlockConflict == nil && item.ProseRewriteOriginal(candidate.ItemID) == ""
@@ -3844,18 +3832,6 @@ func (l *Loop) verifyStep(ctx context.Context, prepared *Candidate, result *Loop
 		if err != nil {
 			return "", false, err
 		}
-		var unlock func()
-		if isProc && procSteps.hasSettledDetachedGate(candidate) {
-			ctx, unlock, err = l.lockRestartLanding(ctx)
-		} else if isProc {
-			ctx, unlock, err = l.lockRestartGateStart(ctx)
-		} else {
-			ctx, unlock, err = l.lockRestartSettlement(ctx)
-		}
-		if err != nil {
-			return "", false, err
-		}
-		defer unlock()
 		if candidate.BlockConflict == nil {
 			var accepted bool
 			candidate, accepted, err = l.judgeCandidate(ctx, candidate, result)
@@ -3908,7 +3884,23 @@ func (l *Loop) verifyStep(ctx context.Context, prepared *Candidate, result *Loop
 	var gate GateOutcome
 	var stalledGateCount int
 	if isProc {
-		handle, startErr := procSteps.startOrAttachDetachedGate(gateCtx, candidate)
+		// Hold restartMechanical only across detached-gate child cmd.Start (D-SN2).
+		var startUnlock func()
+		var startCtx context.Context
+		var lockErr error
+		if procSteps.hasSettledDetachedGate(candidate) {
+			startCtx, startUnlock, lockErr = l.lockRestartLanding(gateCtx)
+		} else {
+			startCtx, startUnlock, lockErr = l.lockRestartGateStart(gateCtx)
+		}
+		var handle detachedGateHandle
+		var startErr error
+		if lockErr != nil {
+			startErr = lockErr
+		} else {
+			handle, startErr = procSteps.startOrAttachDetachedGate(startCtx, candidate)
+			startUnlock()
+		}
 		if startErr != nil {
 			l.mu.Lock()
 			stalledGateCount = l.gatesInFlight
@@ -3964,6 +3956,16 @@ func (l *Loop) verifyStep(ctx context.Context, prepared *Candidate, result *Loop
 			}
 		}
 	} else {
+		// Enforce pending-restart admission without holding restartMechanical
+		// across gate execution (D-SN2).
+		if lockErr := l.checkRestartAdmission(gateCtx, true); lockErr != nil {
+			l.mu.Lock()
+			stalledGateCount = l.gatesInFlight
+			l.gatesInFlight--
+			l.mu.Unlock()
+			endGate()
+			return "", false, lockErr
+		}
 		gate, err = l.cfg.Steps.Gate(gateCtx, candidate)
 		endGate()
 		l.mu.Lock()
@@ -4173,7 +4175,9 @@ func (l *Loop) verifyStep(ctx context.Context, prepared *Candidate, result *Loop
 	if err != nil {
 		return "", false, err
 	}
-	if err := appendJudgment(ctx, l.cfg.Store, candidateGatedKind, "run", candidate.RunID, candidate, l.cfg.Now()); err != nil {
+	if err := l.withRestartCommit(ctx, func(txCtx context.Context) error {
+		return appendJudgment(txCtx, l.cfg.Store, candidateGatedKind, "run", candidate.RunID, candidate, l.cfg.Now())
+	}); err != nil {
 		return "", false, err
 	}
 	if candidate.laneReleasedForReplay() {
@@ -4230,11 +4234,6 @@ func (l *Loop) landCandidate(ctx context.Context, candidate Candidate, result *L
 		}
 	}
 	defer finishPreLand()
-	ctx, unlock, lockErr := l.lockRestartLanding(ctx)
-	if lockErr != nil {
-		return "", false, lockErr
-	}
-	defer unlock()
 	if isForkRebaseItem(candidate.ItemID) {
 		// A newer release must not replace the request between validating this
 		// piece and recording its delivery receipt.
@@ -4311,6 +4310,11 @@ func (l *Loop) landCandidate(ctx context.Context, candidate Candidate, result *L
 	}
 	if IsRemoteSyncItem(candidate.ItemID) {
 		return l.landRemoteSync(ctx, candidate, result)
+	}
+	// Enforce pending-restart admission without holding restartMechanical across
+	// tillr-land execution (D-SN2).
+	if lockErr := l.checkRestartAdmission(ctx, true); lockErr != nil {
+		return "", false, lockErr
 	}
 	landStart := time.Now()
 	finishPreLand()
@@ -4392,7 +4396,12 @@ func (l *Loop) landCandidate(ctx context.Context, candidate Candidate, result *L
 	if partial, err := l.settlePartialDelivery(ctx, candidate, landed.TrunkAfter); err != nil || partial {
 		return "", partial, err
 	}
-	if err := l.recordLandingCallLanded(ctx, judgeWriterRun(candidate), landed.TrunkAfter); err != nil {
+	if err := l.withRestartCommit(ctx, func(txCtx context.Context) error {
+		if err := l.recordLandingCallLanded(txCtx, judgeWriterRun(candidate), landed.TrunkAfter); err != nil {
+			return err
+		}
+		return nil
+	}); err != nil {
 		return "", false, err
 	}
 	if err := l.deliverCommentReplies(ctx, candidate); err != nil {
@@ -4428,11 +4437,15 @@ func (l *Loop) landCandidate(ctx context.Context, candidate Candidate, result *L
 			}
 		}
 		candidate.Judge = &receipt
-		if err := appendJudgment(ctx, l.cfg.Store, judgeLandedKind, "run", candidate.RunID, candidate, l.cfg.Now()); err != nil {
-			return "", false, err
-		}
 	}
-	if err := l.completeItem(ctx, candidate); err != nil {
+	if err := l.withRestartCommit(ctx, func(txCtx context.Context) error {
+		if candidate.Judge != nil {
+			if err := appendJudgment(txCtx, l.cfg.Store, judgeLandedKind, "run", candidate.RunID, candidate, l.cfg.Now()); err != nil {
+				return err
+			}
+		}
+		return l.completeItem(txCtx, candidate)
+	}); err != nil {
 		return "", false, err
 	}
 	if IsFlakyRepairItem(candidate.ItemID) {

@@ -399,29 +399,69 @@ func (h *restartMechanicalHold) release() {
 	}
 }
 
-// Mechanical gate and landing steps finish before exec. A model session nested
-// inside one temporarily gives up this place; its lifetime never bounds restart.
+// lockRestartMechanical acquires a brief restartMechanical read hold around an
+// individual store WriteTx transition or child cmd.Start so syscall.Exec never
+// crosses a commit or spawn boundary. Callers never hold it across worktree
+// staging, Git scans, examination, gate execution, or tillr-land (D-SN2).
 func (l *Loop) lockRestartMechanical(ctx context.Context) (context.Context, func(), error) {
 	return l.lockRestartStep(ctx, false)
 }
 
-// An already admitted gate can finish through landing, while a pending restart
-// stops new non-detached gates and landings from taking a new read hold until
-// it is answered.
+// lockRestartSettlement acquires a brief settling read hold while a pending
+// restart waits for active transition holds to drain. Callers release it before
+// running Git, gate, or land work (D-SN2).
 func (l *Loop) lockRestartSettlement(ctx context.Context) (context.Context, func(), error) {
 	return l.lockRestartStep(ctx, true)
 }
 
-// lockRestartGateStart acquires a settlement hold to prepare a candidate and
-// start its detached gate. While any loop restart request is pending, new gate
-// starts wait for the restart to be answered so they never starve exec.
+// lockRestartGateStart acquires a brief settling hold to admit and start a
+// detached gate child (cmd.Start). While a loop restart is pending, new gate
+// starts wait for the restart to be answered so they never starve exec; the
+// hold is released immediately after start returns (D-SN2).
 func (l *Loop) lockRestartGateStart(ctx context.Context) (context.Context, func(), error) {
 	return l.lockRestartStep(ctx, true)
 }
 
-// lockRestartLanding acquires a settlement hold for a candidate landing.
+// lockRestartLanding acquires a brief settling hold to admit a candidate
+// landing before invoking tillr-land, releasing it before execution (D-SN2).
 func (l *Loop) lockRestartLanding(ctx context.Context) (context.Context, func(), error) {
 	return l.lockRestartStep(ctx, true)
+}
+
+// checkRestartAdmission enforces pending-restart admission and immediately
+// releases restartMechanical so long work (Git, gate, tillr-land) runs outside
+// the barrier (D-SN2).
+func (l *Loop) checkRestartAdmission(ctx context.Context, settling bool) error {
+	if l.cfg.Restart == nil {
+		return nil
+	}
+	_, unlock, err := l.lockRestartStep(ctx, settling)
+	if err != nil {
+		return err
+	}
+	unlock()
+	return nil
+}
+
+// withRestartCommit runs a short store WriteTx or ref transition under a brief
+// restartMechanical read hold, aborting with errRestartPending if the loop has
+// already been replaced by syscall.Exec (D-SN2).
+func (l *Loop) withRestartCommit(ctx context.Context, fn func(context.Context) error) error {
+	if l.cfg.Restart == nil {
+		return fn(ctx)
+	}
+	if held, ok := ctx.Value(restartMechanicalKey{}).(*restartMechanicalHold); ok && held.held {
+		if l.restartReplaced.Load() {
+			return errRestartPending
+		}
+		return fn(ctx)
+	}
+	l.restartMechanical.RLock()
+	defer l.restartMechanical.RUnlock()
+	if l.restartReplaced.Load() {
+		return errRestartPending
+	}
+	return fn(ctx)
 }
 
 func (l *Loop) lockRestartStep(ctx context.Context, settling bool) (context.Context, func(), error) {

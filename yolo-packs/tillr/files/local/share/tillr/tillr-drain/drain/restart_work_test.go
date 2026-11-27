@@ -3,6 +3,8 @@ package drain
 import (
 	"context"
 	"errors"
+	"io"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -567,4 +569,107 @@ func TestPendingRestartDoesNotWaitOnActiveTrunkProof(t *testing.T) {
 			t.Fatal("beginHeavyProof started a new trunk proof while a restart was pending behind a running gate")
 		}
 	})
+}
+
+func TestRestartMechanicalNotHeldDuringGateOrLandExecution(t *testing.T) {
+	for _, phase := range []string{"gate", "land"} {
+		t.Run(phase, func(t *testing.T) {
+			t.Setenv("TILLR_LOOP_STORE", "")
+			f := newRefusalLoopFixtureWithLanes(t, 2, "item-a")
+			holdWALKeeper(t, f.storePath)
+
+			steps := &restartWhileSettlingSteps{
+				landed: make(chan struct{}),
+				phase:  phase,
+				settlingStartSteps: &settlingStartSteps{
+					fixture:  f,
+					now:      time.Now,
+					settling: make(chan struct{}),
+					release:  make(chan struct{}),
+					started:  make(chan string, 1),
+				},
+			}
+			l := f.loop(t, steps, settlingStartStager{f.laneRoot})
+			l.cfg.QuestionsCmd = []string{"sh", "-c", `printf '%s' '{"index":{"documents":[]}}'`}
+			l.cfg.Report = io.Discard
+			l.cfg.StorePollInterval = 50 * time.Millisecond
+
+			exe := filepath.Join(t.TempDir(), "tillr-drain")
+			if err := writeForkSafe(exe, []byte("replacement"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			execed := make(chan struct{}, 1)
+			l.cfg.Restart = &RestartConfig{
+				Executable: exe,
+				Check:      func(context.Context, string) error { return nil },
+				Exec: func(string, []string, []string) error {
+					select {
+					case execed <- struct{}{}:
+					default:
+					}
+					return nil
+				},
+			}
+
+			ctx, cancel := context.WithTimeout(context.Background(), hangGuard)
+			done := make(chan struct{})
+			var result LoopResult
+			var loopErr error
+			go func() {
+				defer close(done)
+				result, loopErr = l.Run(ctx)
+			}()
+			releaseClosed := false
+			closeRelease := func() {
+				if !releaseClosed {
+					releaseClosed = true
+					close(steps.release)
+				}
+			}
+			defer func() {
+				closeRelease()
+				cancel()
+				select {
+				case <-done:
+				case <-time.After(hangGuard):
+					t.Error("loop did not stop after cancellation")
+				}
+			}()
+
+			select {
+			case <-steps.settling:
+			case <-done:
+				t.Fatalf("loop stopped before %s entry: %+v, %v", phase, result, loopErr)
+			case <-ctx.Done():
+				t.Fatalf("item-a did not enter %s", phase)
+			}
+
+			// D-SN2: restartMechanical must not be held during gate or land execution.
+			if !l.restartMechanical.TryLock() {
+				t.Fatalf("restartMechanical is held during %s execution", phase)
+			}
+			l.restartMechanical.Unlock()
+
+			// Filing a pending restart while gate/land is blocked must replace the
+			// loop without waiting for steps.release.
+			if _, err := restart.File(ctx, f.storePath, restart.RoleDrain, time.Now()); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-execed:
+			case <-done:
+				t.Fatalf("loop exited without exec during %s: %+v, %v", phase, result, loopErr)
+			case <-ctx.Done():
+				t.Fatalf("pending restart waited on in-flight %s execution", phase)
+			}
+			select {
+			case <-done:
+			case <-ctx.Done():
+				t.Fatalf("loop did not return StopRestarted after exec during %s", phase)
+			}
+			if loopErr != nil || result.Stop != StopRestarted {
+				t.Fatalf("loop result = (%+v, %v), want StopRestarted", result, loopErr)
+			}
+		})
+	}
 }

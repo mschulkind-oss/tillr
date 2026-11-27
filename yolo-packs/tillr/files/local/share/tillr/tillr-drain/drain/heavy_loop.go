@@ -773,12 +773,11 @@ func (l *Loop) settleDetachedHeavyProof(ctx context.Context, dir string, done he
 		l.clearDetachedHeavyFiles(dir)
 		return nil
 	}
-	sctx, unlock, lockErr := l.lockRestartMechanical(ctx)
-	if lockErr != nil {
+	if lockErr := l.checkRestartAdmission(ctx, false); lockErr != nil {
 		// Leave heavy-attempt.done.json on disk so the post-exec image settles it.
 		return lockErr
 	}
-	defer unlock()
+	sctx := ctx
 
 	hold, busy, holdErr := acquireLoopLock(sctx, l.cfg.Root)
 	if holdErr != nil {
@@ -832,14 +831,17 @@ func (l *Loop) settleDetachedHeavyProof(ctx context.Context, dir string, done he
 							passed = append(passed, check.CheckID)
 						}
 					}
-					err = heavyrun.PublishHeavyJSON(dir, "green-"+run.TipSHA+".json", heavy.GreenProof{
-						Commit:   run.TipSHA,
-						ProvedAt: l.nowTimeUTC(),
-						Passed:   passed,
+					err = l.withRestartCommit(sctx, func(txCtx context.Context) error {
+						if err := heavyrun.PublishHeavyJSON(dir, "green-"+run.TipSHA+".json", heavy.GreenProof{
+							Commit:   run.TipSHA,
+							ProvedAt: l.nowTimeUTC(),
+							Passed:   passed,
+						}); err != nil {
+							return err
+						}
+						_, err := heavy.GitOutput(txCtx, l.cfg.Root, "update-ref", heavy.GreenRef, run.TipSHA, old)
+						return err
 					})
-					if err == nil {
-						_, err = heavy.GitOutput(sctx, l.cfg.Root, "update-ref", heavy.GreenRef, run.TipSHA, old)
-					}
 					if err != nil {
 						settleErr = Externalf("green compare-and-swap refused: %v", err)
 						run.Result = "unknown"
@@ -858,7 +860,9 @@ func (l *Loop) settleDetachedHeavyProof(ctx context.Context, dir string, done he
 		}
 		l.reportHeavyRun(sctx, run)
 		for _, sha := range fp.Order {
-			if fixErr := l.fixHeavyChecks(sctx, sha, fp.ByLanding[sha]); fixErr != nil && settleErr == nil {
+			if fixErr := l.withRestartCommit(sctx, func(txCtx context.Context) error {
+				return l.fixHeavyChecks(txCtx, sha, fp.ByLanding[sha])
+			}); fixErr != nil && settleErr == nil {
 				settleErr = fixErr
 			}
 		}

@@ -3,7 +3,6 @@ package drain
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -223,19 +222,22 @@ func testWorkerStartWhileRestartWaits(t *testing.T, phase string, delayReplaceme
 			return nil
 		},
 		Exec: func(string, []string, []string) error {
-			select {
-			case <-steps.landed:
-				return nil
-			default:
-				return fmt.Errorf("exec attempted before settlement finished (%s)", phase)
-			}
+			return nil
 		}}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	var result LoopResult
 	var loopErr error
 	go func() { defer close(done); result, loopErr = l.Run(ctx) }()
+	releaseClosed := false
+	closeRelease := func() {
+		if !releaseClosed {
+			releaseClosed = true
+			close(steps.release)
+		}
+	}
 	defer func() {
+		closeRelease()
 		cancel()
 		select {
 		case <-done:
@@ -250,12 +252,25 @@ func testWorkerStartWhileRestartWaits(t *testing.T, phase string, delayReplaceme
 	case <-time.After(hangGuard):
 		t.Fatalf("item-a did not enter %s", phase)
 	}
+	// Under D-SN2, gate and land execution do not hold restartMechanical;
+	// hold a brief transition lock to verify a pending restart still blocks
+	// new worker starts while a short WriteTx / cmd.Start hold drains.
+	_, releaseTransition, err := l.lockRestartSettlement(ctx)
+	if err != nil {
+		t.Fatalf("lockRestartSettlement during %s: %v", phase, err)
+	}
+	transitionReleased := false
+	defer func() {
+		if !transitionReleased {
+			releaseTransition()
+		}
+	}()
 	req, err := restart.File(ctx, f.storePath, restart.RoleDrain, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if handled, stop, err := l.gateRestart(ctx, &LoopResult{}); handled || stop != "" || err != nil {
-		t.Fatalf("replacement acted during %s: %v, %q, %v", phase, handled, stop, err)
+		t.Fatalf("replacement acted while transition hold active during %s: %v, %q, %v", phase, handled, stop, err)
 	}
 	fileStartWhileSettling(t, l, time.Now())
 	if _, err := l.pass(ctx, &LoopResult{}); err != nil {
@@ -266,8 +281,15 @@ func testWorkerStartWhileRestartWaits(t *testing.T, phase string, delayReplaceme
 		t.Fatalf("worker started on %s while restart was pending during %s", lane, phase)
 	default:
 	}
-	close(steps.release)
-	<-done
+	// Releasing the short transition hold lets the loop replace immediately
+	// without waiting for the in-flight gate or land step to finish (D-SN2).
+	releaseTransition()
+	transitionReleased = true
+	select {
+	case <-done:
+	case <-time.After(hangGuard):
+		t.Fatalf("loop did not replace after transition hold released during %s", phase)
+	}
 	if loopErr != nil || result.Stop != StopRestarted {
 		t.Fatalf("loop stopped without replacing: %+v, %v", result, loopErr)
 	}
@@ -276,6 +298,7 @@ func testWorkerStartWhileRestartWaits(t *testing.T, phase string, delayReplaceme
 		t.Fatalf("worker started on %s before replacement %s finished", lane, req.ID)
 	default:
 	}
+	closeRelease()
 }
 
 func TestAlreadyCurrentAnswerLeavesTheLoopRunning(t *testing.T) {
