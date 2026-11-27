@@ -207,12 +207,13 @@ type Candidate struct {
 	// EvidenceKey, when set, is the returned ending's evidence key in place of the one its
 	// step derives: a seat obstacle keys its return by the backend it leaves, so climbing
 	// to the next backend is never read as an identical repeat (seat_escalation.go).
-	EvidenceKey   string         `json:"-"`
-	BlockConflict *item.Conflict `json:"block_conflict,omitempty"`
-	ItemID        string         `json:"item_id"`
-	LaneID        string         `json:"lane_id"`
-	RunID         string         `json:"run_id"`
-	TickID        string         `json:"tick_id,omitempty"`
+	EvidenceKey   string          `json:"-"`
+	BlockConflict *item.Conflict  `json:"block_conflict,omitempty"`
+	SplitCall     *item.SplitCall `json:"split_call,omitempty"`
+	ItemID        string          `json:"item_id"`
+	LaneID        string          `json:"lane_id"`
+	RunID         string          `json:"run_id"`
+	TickID        string          `json:"tick_id,omitempty"`
 	// Worktree is the checkout the candidate's change lives in. For an ordinary lane it
 	// is the lane worktree; for a fork-series item it is the fork checkout the item's
 	// fence names, because that is where the run committed and where the gate's own
@@ -2005,7 +2006,7 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 			Policy:           l.currentPolicy(),
 			LaneID:           decision.LaneID, ItemID: request.ItemID, RunID: request.RunID,
 			Backend: request.Backend, BaseSHA: mainSHA, WorkingDir: request.WorkingDir,
-			TimeoutMS: request.TimeoutMS, BlockConflict: decision.BlockConflict,
+			TimeoutMS: request.TimeoutMS, BlockConflict: decision.BlockConflict, SplitCall: decision.SplitCall,
 			Returned: decision.Returned, RepeatedCall: decision.RepeatedCall,
 			RetryCandidate: decision.RetryCandidate,
 			UnreadFooter:   decision.UnreadFooter,
@@ -2765,7 +2766,7 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 	// pi ended the session because the model kept repeating one identical call. That
 	// conversation is not continued and the ending is not judged: the item starts again
 	// fresh, fails over, or is held for the operator (repeating_call.go).
-	if record.EndCause == run.EndRepeatingCall && !offered && decision.BlockConflict == nil && decision.DeskDocument == "" {
+	if record.EndCause == run.EndRepeatingCall && !offered && decision.BlockConflict == nil && decision.DeskDocument == "" && decision.SplitCall == nil {
 		return l.settleRepeatingCall(ctx, decision, record, lane)
 	}
 	// A usage refusal says nothing about the conflict. Release it for the next
@@ -2782,6 +2783,14 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 				return laneOutcome{err: err}
 			}
 			return laneOutcome{stop: l.abandon(ctx, lane, request.RunID, l.headOf(ctx, lane))}
+		}
+	}
+	if decision.SplitCall != nil {
+		if _, _, _, refused := refusedWindow(record); refused {
+			if err := l.recordBackendWindow(ctx, record); err != nil {
+				return laneOutcome{err: err}
+			}
+			return laneOutcome{stop: l.abandon(ctx, lane, request.RunID, l.headOf(ctx, lane), "split-call design run refused by backend quota")}
 		}
 	}
 	class := ClassifyAttempt(record, log)
@@ -2821,6 +2830,9 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 	l.mu.Lock()
 	l.infraStreak = 0
 	l.mu.Unlock()
+	if decision.SplitCall != nil {
+		return l.settleSplitCallRun(ctx, decision, request, record, lane, log, at)
+	}
 	if IsTrunkFixer(request.ItemID) {
 		if resolved, err := l.resolveKeptProvedFixer(ctx, request.ItemID); err != nil {
 			return laneOutcome{err: err}
@@ -3101,7 +3113,7 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 	candidate := Candidate{
 		ItemID: request.ItemID, LaneID: lane, RunID: request.RunID, TickID: tick,
 		Worktree: target, BaseRef: baseRef, BaseSHA: baseSHA, HeadSHA: headSHA,
-		Request: &request, Seat: decision.Seat, Workflow: decision.workflowRef(), BlockConflict: decision.BlockConflict,
+		Request: &request, Seat: decision.Seat, Workflow: decision.workflowRef(), BlockConflict: decision.BlockConflict, SplitCall: decision.SplitCall,
 	}
 	if err := l.attachWorkflowJudge(ctx, decision, &candidate); err != nil {
 		return laneOutcome{err: err}

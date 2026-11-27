@@ -177,6 +177,9 @@ type StageSpec struct {
 	PreviousReport     string
 	PreviousReportText string
 	BlockConflict      *item.Conflict
+	SplitCall          *item.SplitCall
+	SplitCallWords     string
+	SplitCallFindings  string
 	LaneID             string
 	ItemID             string
 	RunID              string
@@ -362,7 +365,7 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 		recorded.AllowedPaths = blockConflictPaths(recorded, *spec.BlockConflict)
 	}
 	delivery := recorded.Delivery
-	if spec.BlockConflict != nil || (spec.Node != nil && classificationNode(*spec.Node)) {
+	if spec.BlockConflict != nil || spec.SplitCall != nil || (spec.Node != nil && classificationNode(*spec.Node)) {
 		delivery = deliveryDecision{}
 	}
 	fork := checkoutForDelivery(s.Root, spec.LaneID, delivery)
@@ -474,6 +477,25 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 		endBrief()
 		return Internalf("resolving the run's scratch directory under %s: %v", laneDir, err)
 	}
+	requestWords, err := requestWordsFor(ctx, s.Store, spec.ItemID)
+	if err != nil {
+		return err
+	}
+	if spec.SplitCall != nil {
+		if spec.SplitCallWords == "" && requestWords != nil {
+			spec.SplitCallWords = string(requestWords)
+		}
+		if spec.SplitCallFindings == "" {
+			findings, ferr := readSplitCallFindings(ctx, s.Store, spec.SplitCall.RunID)
+			if ferr != nil {
+				return ferr
+			}
+			spec.SplitCallFindings = findings
+		}
+		if err := os.MkdirAll(durableDir, 0o755); err != nil {
+			return Externalf("creating split-call scratch directory %s: %v", durableDir, err)
+		}
+	}
 	values, err := briefValuesFor(recorded, spec, target, targetKind, baseSHA, durableDir, now().UTC())
 	if err != nil {
 		return err
@@ -494,11 +516,7 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 			}
 		}
 	}
-	requestWords, err := requestWordsFor(ctx, s.Store, spec.ItemID)
-	if err != nil {
-		return err
-	}
-	if requestWords != nil && spec.Conflict == nil && spec.BlockConflict == nil {
+	if requestWords != nil && spec.Conflict == nil && spec.BlockConflict == nil && spec.SplitCall == nil {
 		for i := range values {
 			if values[i].placeholder == "TASK" {
 				values[i].text = requestTask(recorded)
@@ -602,7 +620,7 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 				return err
 			}
 		}
-	} else if spec.EndingCapability == run.EndingCallSuspends && !spec.Isolated && !isFork && spec.BlockConflict == nil && !item.IsCommentItem(spec.ItemID) &&
+	} else if spec.EndingCapability == run.EndingCallSuspends && !spec.Isolated && !isFork && spec.BlockConflict == nil && spec.SplitCall == nil && !item.IsCommentItem(spec.ItemID) &&
 		((spec.Node == nil && (recorded.Seat == "" || recorded.Seat == "build")) ||
 			(spec.Node != nil && spec.Node.Kind == "agent" && spec.Node.Seat == "build" && spec.Node.Access == "write")) {
 		capability = run.EndingCallSuspends
@@ -758,6 +776,9 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 	}
 	if spec.BlockConflict != nil {
 		files = append(files, stagedFile{"conflict.json", mustJSON(spec.BlockConflict) + "\n"})
+	}
+	if spec.SplitCall != nil {
+		files = append(files, stagedFile{"split-call.json", mustJSON(spec.SplitCall) + "\n"})
 	}
 	if isFork {
 		files = append(files,
@@ -1553,7 +1574,7 @@ const DesignProvenanceRule = "A decision the designer or operator made (includin
 
 // stagedSeat answers the seat that a staged run acts on.
 func stagedSeat(recorded stagedItem, spec StageSpec) string {
-	if spec.BlockConflict != nil {
+	if spec.BlockConflict != nil || spec.SplitCall != nil {
 		return "design"
 	}
 	if spec.Node != nil {
@@ -1663,6 +1684,12 @@ func briefValuesFor(recorded stagedItem, spec StageSpec, target, targetKind, bas
 			question = ""
 		}
 		settled += " For a real owner decision, state the question as a sentence ending in a question mark and give at least two bulleted or numbered alternatives under an Options heading in the report." + question + " A stale lane base is a staging fault, not an owner decision; report the missing base fact without inventing options."
+	}
+	if spec.SplitCall != nil {
+		task = splitCallBriefTask(*spec.SplitCall, durableDir)
+		criteria = splitCallBriefCriteria(recorded)
+		facts = splitCallBriefFacts(*spec.SplitCall, spec.SplitCallWords, spec.SplitCallFindings)
+		settled = splitCallBriefSettled(durableDir)
 	}
 	seat := stagedSeat(recorded, spec)
 	if carriesDesignDocumentRule(seat) {

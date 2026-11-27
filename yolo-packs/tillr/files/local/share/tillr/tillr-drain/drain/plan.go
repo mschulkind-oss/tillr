@@ -135,25 +135,26 @@ type Decision struct {
 	// replacement uses its shared lane. It is drain-owned, never a run field.
 	BuildRestartFrom string `json:"build_restart_from,omitempty"`
 	// Designer is the row read when the session choice was made, not a later reread.
-	DeskDocument      string         `json:"desk_document,omitempty"`
-	Designer          *lastDesigner  `json:"-"`
-	DesignerSessionID string         `json:"designer_session_id,omitempty"`
-	DesignerReason    string         `json:"designer_reason,omitempty"`
-	NodeStartRunID    string         `json:"node_start_run_id,omitempty"`
-	WorkflowRestart   bool           `json:"workflow_restart,omitempty"`
-	UnreadFooter      string         `json:"unread_footer,omitempty"`
-	NodeInfraFailures int            `json:"node_infra_failures,omitempty"`
-	WorkflowRelease   bool           `json:"workflow_release,omitempty"`
-	FreshNodeStage    bool           `json:"fresh_node_stage,omitempty"`
-	Workflow          *Workflow      `json:"workflow,omitempty"`
-	SelectedWorkflow  string         `json:"selected_workflow,omitempty"`
-	WorkflowSource    string         `json:"workflow_source,omitempty"`
-	NodeIndex         int            `json:"node_index,omitempty"`
-	NodeBaseSHA       string         `json:"node_base_sha,omitempty"`
-	PreviousReport    string         `json:"previous_report,omitempty"`
-	ConflictID        string         `json:"conflict_id,omitempty"`
-	BlockConflict     *item.Conflict `json:"block_conflict,omitempty"`
-	Inputs            *RunInputs     `json:"inputs,omitempty"`
+	DeskDocument      string          `json:"desk_document,omitempty"`
+	Designer          *lastDesigner   `json:"-"`
+	DesignerSessionID string          `json:"designer_session_id,omitempty"`
+	DesignerReason    string          `json:"designer_reason,omitempty"`
+	NodeStartRunID    string          `json:"node_start_run_id,omitempty"`
+	WorkflowRestart   bool            `json:"workflow_restart,omitempty"`
+	UnreadFooter      string          `json:"unread_footer,omitempty"`
+	NodeInfraFailures int             `json:"node_infra_failures,omitempty"`
+	WorkflowRelease   bool            `json:"workflow_release,omitempty"`
+	FreshNodeStage    bool            `json:"fresh_node_stage,omitempty"`
+	Workflow          *Workflow       `json:"workflow,omitempty"`
+	SelectedWorkflow  string          `json:"selected_workflow,omitempty"`
+	WorkflowSource    string          `json:"workflow_source,omitempty"`
+	NodeIndex         int             `json:"node_index,omitempty"`
+	NodeBaseSHA       string          `json:"node_base_sha,omitempty"`
+	PreviousReport    string          `json:"previous_report,omitempty"`
+	ConflictID        string          `json:"conflict_id,omitempty"`
+	BlockConflict     *item.Conflict  `json:"block_conflict,omitempty"`
+	SplitCall         *item.SplitCall `json:"split_call,omitempty"`
+	Inputs            *RunInputs      `json:"inputs,omitempty"`
 
 	// ReusedNodes are the read-only nodes a retry keeps from attempt ReusedAttempt: they
 	// passed there, no write node had run, so the new attempt starts at the first node not
@@ -508,6 +509,15 @@ func planWithDetails(r *store.Reader, tick Pass, policy *Policy, questions Quest
 			return nil, readFailure(err)
 		}
 	}
+	splitCalls, noSplitCalls, err := readSplitCallsForPlanner(r)
+	if err != nil {
+		return nil, readFailure(err)
+	}
+	for itemID, call := range noSplitCalls {
+		if call.DesignRunID != "" && latest[itemID] == call.DesignRunID && call.RunID != "" {
+			latest[itemID] = call.RunID
+		}
+	}
 	waits := map[string]item.WaitingOn{}
 	for _, row := range items {
 		if row.State != def.Blocked {
@@ -616,11 +626,13 @@ func planWithDetails(r *store.Reader, tick Pass, policy *Policy, questions Quest
 		p := &planner{
 			definition:   &def,
 			commentHolds: commentHolds, documentRoot: root,
-			conflicts: conflicts,
-			shut:      shut,
-			quotaShut: quotaShut,
-			forks:     append([]plannedFork(nil), forks...),
-			tick:      tick, policy: policy, held: lanes, deskOwners: owners, itemStates: states, history: history,
+			conflicts:    conflicts,
+			splitCalls:   splitCalls,
+			noSplitCalls: noSplitCalls,
+			shut:         shut,
+			quotaShut:    quotaShut,
+			forks:        append([]plannedFork(nil), forks...),
+			tick:         tick, policy: policy, held: lanes, deskOwners: owners, itemStates: states, history: history,
 			priors: attemptPriors, retries: retries, classes: classes, latest: latest, latestFinished: latestFinished,
 			obstacleHolds: obstacleHolds, releasedObstacles: releasedObstacles, questions: questions,
 			waits: waits, escalated: escalated, maskedWorkers: maskedWorkers,
@@ -663,6 +675,9 @@ func (p *planner) reserveWorkerLanes(items []itemRow, released map[string]bool) 
 			continue
 		}
 		if c, ok := p.conflicts[row.ItemID]; ok && c.Status != "answered" {
+			continue
+		}
+		if _, ok := p.splitCalls[row.ItemID]; ok {
 			continue
 		}
 		if lane := p.returnedJudgeLane(row.ItemID, p.returnedEnding(row.ItemID)); lane != "" && !released[lane] && (row.Express || !isExpressLane(lane)) {
@@ -1216,18 +1231,24 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 			if err != nil {
 				return nil, nil, err
 			}
-		} else if hold, ok := unmappedSeatHold(policy, item, p.nextAttempt(item.ItemID)); ok && !p.finished(item.State) {
-			decision = hold
 		} else {
+			_, hasSplit := p.splitCalls[item.ItemID]
+			if hold, ok := unmappedSeatHold(policy, item, p.nextAttempt(item.ItemID)); !hasSplit && ok && !p.finished(item.State) {
+				decision = hold
+				goto decisionReady
+			}
 			var (
 				w                *Workflow
 				selected, source string
 				loadErr          error
 			)
-			if p.preRead != nil {
-				w, selected, source, loadErr = selectWorkflowFromStored(p.preRead.workflowSelections[item.ItemID], root, item, tick.WorkflowDefaults, policy)
-			} else {
-				w, selected, source, loadErr = selectWorkflow(r, root, item, tick.WorkflowDefaults, policy)
+			_, hasSplit = p.splitCalls[item.ItemID]
+			if !hasSplit || !p.lands() || item.State != def.Ready {
+				if p.preRead != nil {
+					w, selected, source, loadErr = selectWorkflowFromStored(p.preRead.workflowSelections[item.ItemID], root, item, tick.WorkflowDefaults, policy)
+				} else {
+					w, selected, source, loadErr = selectWorkflow(r, root, item, tick.WorkflowDefaults, policy)
+				}
 			}
 			if loadErr == nil && def.Completes == "landing" {
 				w = planDelivery(w, selected, item, known)
@@ -1341,7 +1362,7 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 						decision.WorkerSessionReason = "workflow-restarted"
 					}
 				}
-				if decision.BlockConflict == nil {
+				if decision.BlockConflict == nil && decision.SplitCall == nil {
 					decision.SelectedWorkflow, decision.WorkflowSource = selected, source
 				}
 				if len(reused) > 0 && decision.Action == ActionRetry {
@@ -1349,7 +1370,7 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 				} else if len(reused) > 0 {
 					resumeNode = 0
 				}
-				if w != nil && decision.RunRequest != nil && decision.BlockConflict == nil {
+				if w != nil && decision.RunRequest != nil && decision.BlockConflict == nil && decision.SplitCall == nil {
 					decision.Workflow = w
 					decision.NodeIndex = resumeNode
 					if c := decision.RetryCandidate; c != nil && c.Available {
@@ -1386,6 +1407,7 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 			}
 			identifyDecision(&decision)
 		}
+	decisionReady:
 		if decision.RunRequest != nil {
 			request := *decision.RunRequest
 			stampDecisionRequest(decision, &request)
@@ -1461,6 +1483,8 @@ type planner struct {
 	quotaShut            map[string]bool
 	infrastructureClosed map[string]backendOutcome
 	conflicts            map[string]item.Conflict
+	splitCalls           map[string]item.SplitCall
+	noSplitCalls         map[string]item.SplitCall
 	inputs               map[string]*RunInputs
 	inputDecisions       map[string]Decision
 	inputDecisionsLoaded map[string]bool
@@ -1576,6 +1600,9 @@ func (p *planner) decide(item itemRow, edges []itemEdge) Decision {
 	}
 	if hasConflict && conflict.Status != "closed" && conflict.Status != "answered" {
 		return p.conflictDecision(item, conflict)
+	}
+	if sc, ok := p.splitCalls[item.ItemID]; ok && p.lands() && item.State == p.rules().Ready && !p.dependencyBlocked(edges) {
+		return p.splitCallDecision(item, sc)
 	}
 	// Resolve the last run's disposition and any operator retry before testing resources.
 	attempt := p.attempt(item)
@@ -2260,7 +2287,13 @@ func (p *planner) returnedEnding(itemID string) *ReturnedEnding {
 		// The candidate was discarded: no session, lane or work of it carries over.
 		return &ReturnedEnding{RunID: latest, Cause: cause, Detail: detail, Restart: true}
 	}
-	return &ReturnedEnding{RunID: latest, Cause: cause, Detail: detail, Checks: e.Checks, WorkerSession: e.WorkerSession, Replan: e.Replan}
+	ws := e.WorkerSession
+	if cause == RefusalVerifyNotDone && !e.Replan && ws == nil {
+		if call, ok := p.noSplitCalls[itemID]; ok && call.RunID == latest {
+			ws = reconstructSplitCallWorkerSession(p.inputDecisionReader, call)
+		}
+	}
+	return &ReturnedEnding{RunID: latest, Cause: cause, Detail: detail, Checks: e.Checks, WorkerSession: ws, Replan: e.Replan}
 }
 
 // retry is one item's operator authorization, resolved against the store: which run it

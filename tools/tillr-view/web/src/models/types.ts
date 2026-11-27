@@ -653,6 +653,30 @@ export interface StateMoveView {
   actor: string;
 }
 
+export interface SplitSignalView {
+  signal: string;
+  files?: number;
+  added_lines?: number;
+  file_limit?: number;
+  added_line_limit?: number;
+}
+
+export interface SplitCallView {
+  call_id: number;
+  caller: string;
+  run_id: string;
+  donor_ref?: string;
+  donor_sha?: string;
+  base_sha?: string;
+  signals: SplitSignalView[];
+  status: string;
+  design_run_id?: string;
+  no_split_reason?: string;
+  last_rejection_reason?: string;
+  created_at?: string;
+  answered_at?: string;
+}
+
 export interface VerifyRefusalView {
   event_seq: number;
   at_ms: number;
@@ -670,6 +694,7 @@ export interface VerifyRefusalView {
     file_limit: number;
     added_line_limit: number;
   };
+  split_call?: SplitCallView;
   next_run_id: string | null;
   next_attempt: number | null;
   next_step: string | null;

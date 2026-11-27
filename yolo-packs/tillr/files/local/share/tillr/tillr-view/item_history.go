@@ -229,6 +229,30 @@ type verdictComparisonView struct {
 	HasUnexaminedPaths   bool   `json:"has_unexamined_paths"`
 }
 
+type splitSignalView struct {
+	Signal         string `json:"signal"`
+	Files          int64  `json:"files,omitempty"`
+	AddedLines     int64  `json:"added_lines,omitempty"`
+	FileLimit      int64  `json:"file_limit,omitempty"`
+	AddedLineLimit int64  `json:"added_line_limit,omitempty"`
+}
+
+type splitCallView struct {
+	CallID              int64             `json:"call_id"`
+	Caller              string            `json:"caller"`
+	RunID               string            `json:"run_id"`
+	DonorRef            string            `json:"donor_ref,omitempty"`
+	DonorSHA            string            `json:"donor_sha,omitempty"`
+	BaseSHA             string            `json:"base_sha,omitempty"`
+	Signals             []splitSignalView `json:"signals"`
+	Status              string            `json:"status"`
+	DesignRunID         string            `json:"design_run_id,omitempty"`
+	NoSplitReason       string            `json:"no_split_reason,omitempty"`
+	LastRejectionReason string            `json:"last_rejection_reason,omitempty"`
+	CreatedAt           string            `json:"created_at,omitempty"`
+	AnsweredAt          string            `json:"answered_at,omitempty"`
+}
+
 // verifyRefusalView is one planned verify refusal or other classified review refusal
 // and the step that ran after it. NextStep is
 // the workflow node (`work`, `plan`, `work/piece-one`) of the next run the drain started for
@@ -254,6 +278,7 @@ type verifyRefusalView struct {
 	EarlierFindingFates []earlierFindingFateView `json:"earlier_finding_fates,omitempty"`
 	Examined            *verdictExaminedView     `json:"examined,omitempty"`
 	VerdictComparison   *verdictComparisonView   `json:"verdict_comparison,omitempty"`
+	SplitCall           *splitCallView           `json:"split_call,omitempty"`
 }
 
 func readVerifyRefusals(r *store.Reader, itemID string) ([]verifyRefusalView, error) {
@@ -373,6 +398,10 @@ func readVerifyRefusals(r *store.Reader, itemID string) ([]verifyRefusalView, er
 	if err != nil {
 		return nil, err
 	}
+	splitCalls, err := readSplitCallsByRun(r, itemID)
+	if err != nil {
+		return nil, err
+	}
 	var prevWithSize *verifyRefusalView
 	for _, v := range refusals {
 		if prevWithSize != nil && v.CandidateSize != nil {
@@ -394,6 +423,10 @@ func readVerifyRefusals(r *store.Reader, itemID string) ([]verifyRefusalView, er
 		if v.CandidateSize != nil {
 			cp := v
 			prevWithSize = &cp
+		}
+		if sc, ok := splitCalls[v.RunID]; ok {
+			call := sc
+			v.SplitCall = &call
 		}
 		if n, ok := nodes[v.RunID]; ok {
 			attempt := n.Attempt
@@ -426,6 +459,45 @@ func readVerifyRefusals(r *store.Reader, itemID string) ([]verifyRefusalView, er
 		out = append(out, v)
 	}
 	return out, nil
+}
+
+func readSplitCallsByRun(r *store.Reader, itemID string) (map[string]splitCallView, error) {
+	out := map[string]splitCallView{}
+	rows, err := r.Query(
+		`SELECT call_id, caller, run_id, donor_ref, donor_sha, base_sha, signals, status, design_run_id, no_split_reason, last_rejection_reason, created_at, answered_at
+		 FROM split_calls WHERE item_id = ? ORDER BY call_id ASC`,
+		itemID,
+	)
+	if isMissingTable(err) {
+		return out, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var sc splitCallView
+		var rawSignals []byte
+		if err := rows.Scan(
+			&sc.CallID, &sc.Caller, &sc.RunID, &sc.DonorRef, &sc.DonorSHA, &sc.BaseSHA,
+			&rawSignals, &sc.Status, &sc.DesignRunID, &sc.NoSplitReason, &sc.LastRejectionReason,
+			&sc.CreatedAt, &sc.AnsweredAt,
+		); err != nil {
+			return nil, err
+		}
+		if len(rawSignals) > 0 {
+			if err := json.Unmarshal(rawSignals, &sc.Signals); err != nil {
+				return nil, err
+			}
+		}
+		if sc.Signals == nil {
+			sc.Signals = []splitSignalView{}
+		}
+		if sc.RunID != "" {
+			out[sc.RunID] = sc
+		}
+	}
+	return out, rows.Err()
 }
 
 func nodeRunsByRun(r *store.Reader, itemID string) (map[string]laneNode, error) {

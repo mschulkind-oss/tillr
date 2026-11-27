@@ -12,6 +12,7 @@ import (
 	"github.com/mschulkind-oss/tillr-drain/internal/storelog"
 	"github.com/mschulkind-oss/tillr-drain/patchmoves"
 
+	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -238,17 +239,6 @@ func (l *Loop) recordRefusal(ctx context.Context, candidate Candidate, step stri
 			payload.VerifyFeedback = candidate.verifyFeedback
 			if candidate.VerifyReplan {
 				payload.Replan = true
-			} else {
-				// The next run is the build step, on the candidate the verifier read:
-				// keep that head reachable and name the step that will repair it.
-				if err := l.pinCandidateHead(ctx, candidate); err != nil {
-					return err
-				}
-				var err error
-				payload.WorkerSession, err = l.verifyBuildSession(ctx, candidate)
-				if err != nil {
-					return err
-				}
 			}
 		case RefusalPlanOutput:
 			var err error
@@ -292,6 +282,8 @@ func (l *Loop) recordRefusal(ctx context.Context, candidate Candidate, step stri
 	if !repeated {
 		payload.BaseSHA, payload.HeadSHA = candidate.BaseSHA, candidate.HeadSHA
 	}
+	at := l.cfg.Now().UTC()
+	var splitCall *item.SplitCall
 	if step == RefusalVerifyNotDone {
 		size, err := l.measureCandidateSize(ctx, candidate)
 		if err != nil {
@@ -312,9 +304,30 @@ func (l *Loop) recordRefusal(ctx context.Context, candidate Candidate, step stri
 		if err != nil {
 			return err
 		}
+		splitCall, err = l.verifierSplitCall(ctx, candidate, payload.CandidateSize, repeatedFinding, at)
+		if err != nil {
+			return err
+		}
+		if splitCall != nil {
+			// Pin the refused candidate head as the donor (even when VerifyReplan is true)
+			// and leave WorkerSession nil so abandon releases the lane cleanly.
+			if err := l.pinCandidateHead(ctx, candidate); err != nil {
+				return err
+			}
+		} else if !candidate.VerifyReplan {
+			// The next run is the build step, on the candidate the verifier read:
+			// keep that head reachable and name the step that will repair it.
+			if err := l.pinCandidateHead(ctx, candidate); err != nil {
+				return err
+			}
+			var err error
+			payload.WorkerSession, err = l.verifyBuildSession(ctx, candidate)
+			if err != nil {
+				return err
+			}
+		}
 	}
 	payload.RefusalCauses = computeRefusalCauses(payload)
-	at := l.cfg.Now().UTC()
 	evidence := l.readRefusalEvidence(candidate.RunID, payload)
 	return appendJudgmentThen(ctx, l.cfg.Store, RefusalKind, "run", candidate.RunID, payload, at, func(tx *store.Tx) error {
 		if repeatedFinding != "" {
@@ -322,6 +335,11 @@ func (l *Loop) recordRefusal(ctx context.Context, candidate Candidate, step stri
 		}
 		if repeated {
 			return nil
+		}
+		if splitCall != nil {
+			if _, err := item.RecordSplitCall(ctx, tx, *splitCall); err != nil {
+				return err
+			}
 		}
 		return l.answerLandingRefusal(tx, candidate, payload, evidence, at)
 	})

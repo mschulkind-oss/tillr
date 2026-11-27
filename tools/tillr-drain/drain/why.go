@@ -186,6 +186,10 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 	if err != nil {
 		return answer, err
 	}
+	_, noSplitCalls, err := readSplitCallsForPlanner(r)
+	if err != nil {
+		return answer, readFailure(err)
+	}
 	edges, err := readEdges(r)
 	if err != nil {
 		return answer, err
@@ -474,6 +478,13 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 				ParentTitle: titles[m.ParentID],
 				PartLabel:   m.Label,
 				Required:    req,
+			}
+		}
+		if d.Reason == ReasonSplitCallDesign {
+			row.Why = splitCallWhyText(d.SplitCall)
+			row.tableReason = row.Why
+			if d.Action != ActionHold && d.From != "running" && d.From != "candidate" {
+				row.Mover = "the design seat"
 			}
 		}
 		if d.Reason == ReasonGateReplay && examinerDead {
@@ -990,7 +1001,7 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 				// Planning waits still use their existing design-seat action below.
 			} else {
 				actor := "drain"
-				if d.Reason == ReasonConflictDesign || d.Reason == ReasonDeskCapacity || d.Reason == ReasonDocumentDeskBusy {
+				if d.Reason == ReasonConflictDesign || d.Reason == ReasonDeskCapacity || d.Reason == ReasonDocumentDeskBusy || d.Reason == ReasonSplitCallDesign {
 					actor = "design seat"
 				}
 				if row.Mover == "plan" || row.Mover == "design" || strings.Contains(row.Mover, "design seat") {
@@ -1138,6 +1149,21 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 		if steps := refusals[it.ItemID]; len(steps) > 0 {
 			row.Refusals = steps
 			row.Why += "; refusals: " + refusalStepsWords(steps)
+		}
+		if ns, ok := noSplitCalls[it.ItemID]; ok && ns.NoSplit != nil && ns.NoSplit.Reason != "" && d.Reason != ReasonSplitCallDesign {
+			note := "no split: " + collapseSingleLine(ns.NoSplit.Reason)
+			if row.tableReason != "" {
+				row.tableReason += "; " + note
+			} else if row.Reason != "" {
+				row.tableReason = row.Reason + "; " + note
+			} else {
+				row.tableReason = note
+			}
+			if row.Why != "" {
+				row.Why += "; " + note
+			} else {
+				row.Why = note
+			}
 		}
 		linkedAlerts, err := watchlinks.LinkedAlertsForItem(r, it.ItemID)
 		if err != nil {
@@ -1306,6 +1332,8 @@ func whyPresentation(d Decision) (class, where, mover string) {
 	case ReasonConflictOwner:
 		return "needs you", where, "the owner"
 	case ReasonConflictDesign:
+		return "waits on work", where, "design"
+	case ReasonSplitCallDesign:
 		return "waits on work", where, "design"
 	default:
 		// A reason with a recorded rule and no case above is shown by that rule. Only a

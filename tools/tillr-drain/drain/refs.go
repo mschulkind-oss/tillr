@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/mschulkind-oss/tillr-drain/heavy"
+	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -414,13 +415,31 @@ func planRefSweep(r *store.Reader, refs []RefDisposition, operators map[string][
 	if err != nil {
 		return nil, err
 	}
+	splitDonors := map[string]bool{}
+	donorRefs, err := item.ReadSplitDonorRefs(r)
+	if err != nil {
+		return nil, err
+	}
+	for _, dr := range donorRefs {
+		protect := dr.Status == item.SplitCallStatusPending ||
+			(dr.Status == item.SplitCallStatusSplit && states[dr.ItemID] != "" && !finishedState(declared.Parsed, states[dr.ItemID]))
+		if !protect {
+			continue
+		}
+		if dr.RunID != "" {
+			splitDonors[dr.RunID] = true
+		}
+		if strings.HasPrefix(dr.DonorRef, "refs/tillr/runs/") {
+			splitDonors[strings.TrimPrefix(dr.DonorRef, "refs/tillr/runs/")] = true
+		}
+	}
 	// Keep the newest eight obsolete examined pins for each retryable item, plus
 	// every active/retained attempt. Finished items have no count-based exemption.
 	byItem := map[string][]string{}
 	for _, ref := range refs {
 		if strings.HasPrefix(ref.Ref, "refs/tillr/runs/") {
 			id := strings.TrimPrefix(ref.Ref, "refs/tillr/runs/")
-			if run, ok := runs[id]; ok && examined[id] && !needed[id] && !live[id] {
+			if run, ok := runs[id]; ok && examined[id] && !needed[id] && !live[id] && !splitDonors[id] {
 				byItem[run.item] = append(byItem[run.item], id)
 			}
 		}
@@ -476,6 +495,8 @@ func planRefSweep(r *store.Reader, refs []RefDisposition, operators map[string][
 				// A retry superseded this candidate (retry_supersede.go). The pin is the only
 				// copy the loop keeps of it, and the supersession promised it is never deleted.
 				ref.Reason = "candidate superseded by a retry; retained"
+			case splitDonors[id]:
+				ref.Reason = "split donor pin; pending call or open split parent"
 			case live[id] || liveItems[run.item]:
 				ref.Reason = "live lane may need this item's attempt history"
 			case !known:

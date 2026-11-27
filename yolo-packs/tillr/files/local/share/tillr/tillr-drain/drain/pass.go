@@ -2420,6 +2420,10 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 				if err := item.RecordConflict(tx, c, at); err != nil {
 					return err
 				}
+			} else if d.SplitCall != nil && d.RunRequest != nil {
+				sc := *d.SplitCall
+				sc.DesignRunID = d.RunRequest.RunID
+				d.SplitCall = &sc
 			} else if d.ConflictID != "" {
 				conflicts, err := item.ReadConflicts(tx.Reader())
 				if err != nil {

@@ -141,3 +141,41 @@ test("item history lists each verify refusal in time order with the next step", 
   expect(rows[0].textContent).toContain("Next step: work");
   expect(rows[1].textContent).toContain("Next step: plan");
 });
+
+test("verify refusals render pending split calls and no-split answers with measured signals and donor", () => {
+  render(<VerifyRefusals refusals={[
+    {
+      ...refusals[0],
+      split_call: {
+        call_id: 1,
+        caller: "verifier",
+        run_id: "verify-1",
+        donor_ref: "refs/tillr/runs/verify-1",
+        donor_sha: "deadbeef1",
+        signals: [{ signal: "S1", files: 30, added_lines: 1500, file_limit: 27, added_line_limit: 1200 }],
+        status: "no-split",
+        design_run_id: "design-1",
+        no_split_reason: "one shared invariant prevents splitting",
+      },
+    },
+    {
+      ...refusals[1],
+      split_call: {
+        call_id: 2,
+        caller: "verifier",
+        run_id: "verify-2",
+        donor_ref: "refs/tillr/runs/verify-2",
+        donor_sha: "deadbeef2",
+        signals: [{ signal: "S1", files: 35, added_lines: 1800, file_limit: 27, added_line_limit: 1200 }],
+        status: "pending",
+      },
+    },
+  ]} />);
+  const section = screen.getByRole("region", { name: "Verify refusals" });
+  expect(section.textContent).toContain("Split call by verifier · status: no-split");
+  expect(section.textContent).toContain("No split: one shared invariant prevents splitting");
+  expect(within(section).getByRole("link", { name: "design-1" })).toBeTruthy();
+  expect(section.textContent).toContain("Split call by verifier · status: pending · waiting on the design seat");
+  expect(section.textContent).toContain("Donor: refs/tillr/runs/verify-2 (deadbeef2)");
+  expect(section.textContent).toContain("S1: 35 files (limit 27) · 1800 added lines (limit 1200)");
+});

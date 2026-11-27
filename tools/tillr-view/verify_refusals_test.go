@@ -141,3 +141,66 @@ func TestVerifyRefusalsEmptyIsAList(t *testing.T) {
 		t.Fatalf("want none: %v", rows)
 	}
 }
+
+func TestVerifyRefusalsIncludePendingSplitCallAndNoSplitAnswer(t *testing.T) {
+	h := newServeHarness(t)
+	h.exec(`CREATE TABLE IF NOT EXISTS split_calls (
+		call_id INTEGER PRIMARY KEY AUTOINCREMENT,
+		item_id TEXT NOT NULL,
+		caller TEXT NOT NULL,
+		run_id TEXT NOT NULL,
+		donor_ref TEXT NOT NULL DEFAULT '',
+		donor_sha TEXT NOT NULL DEFAULT '',
+		base_sha TEXT NOT NULL DEFAULT '',
+		signals TEXT NOT NULL,
+		status TEXT NOT NULL,
+		design_run_id TEXT NOT NULL DEFAULT '',
+		no_split_reason TEXT NOT NULL DEFAULT '',
+		last_rejection_reason TEXT NOT NULL DEFAULT '',
+		created_at TEXT NOT NULL,
+		answered_at TEXT NOT NULL DEFAULT ''
+	);`)
+	h.exec(`INSERT INTO events (ts,kind,object_type,object_id,payload) VALUES
+		(2000,'drain.refusal','run','verify-1','{"item_id":"item-seed-06","step":"verify-not-done","detail":"c1: too big"}'),
+		(5000,'drain.refusal','run','verify-2','{"item_id":"item-seed-06","step":"verify-not-done","detail":"c1: still big"}');
+		INSERT INTO split_calls (item_id,caller,run_id,donor_ref,donor_sha,base_sha,signals,status,design_run_id,no_split_reason,created_at,answered_at) VALUES
+		('item-seed-06','verifier','verify-1','refs/tillr/runs/verify-1','sha-donor-1','sha-base-1','[{"signal":"S1","files":30,"added_lines":1500,"file_limit":27,"added_line_limit":1200}]','no-split','design-1','one shared invariant prevents splitting','2026-11-27T01:00:00Z','2026-11-27T01:05:00Z'),
+		('item-seed-06','verifier','verify-2','refs/tillr/runs/verify-2','sha-donor-2','sha-base-2','[{"signal":"S1","files":32,"added_lines":1600,"file_limit":27,"added_line_limit":1200}]','pending','','','2026-11-27T02:00:00Z','');`)
+
+	rows := verifyRefusalsFor(t, h, "item-seed-06")
+	if len(rows) != 2 {
+		t.Fatalf("want 2 verify refusals, got %d: %v", len(rows), rows)
+	}
+
+	first, ok := rows[0].(map[string]any)["split_call"].(map[string]any)
+	if !ok {
+		t.Fatalf("verify_refusals[0].split_call missing: %v", rows[0])
+	}
+	if first["status"] != "no-split" || first["no_split_reason"] != "one shared invariant prevents splitting" || first["design_run_id"] != "design-1" {
+		t.Errorf("unexpected no-split split_call: %v", first)
+	}
+
+	second, ok := rows[1].(map[string]any)["split_call"].(map[string]any)
+	if !ok {
+		t.Fatalf("verify_refusals[1].split_call missing: %v", rows[1])
+	}
+	wantFields := map[string]any{
+		"caller":    "verifier",
+		"status":    "pending",
+		"donor_ref": "refs/tillr/runs/verify-2",
+		"donor_sha": "sha-donor-2",
+	}
+	for k, want := range wantFields {
+		if second[k] != want {
+			t.Errorf("split_call.%s = %v, want %v", k, second[k], want)
+		}
+	}
+	sigs, ok := second["signals"].([]any)
+	if !ok || len(sigs) != 1 {
+		t.Fatalf("split_call.signals = %v, want 1 signal", second["signals"])
+	}
+	sig := sigs[0].(map[string]any)
+	if sig["signal"] != "S1" || sig["files"] != float64(32) || sig["file_limit"] != float64(27) || sig["added_lines"] != float64(1600) || sig["added_line_limit"] != float64(1200) {
+		t.Errorf("unexpected signal: %v", sig)
+	}
+}

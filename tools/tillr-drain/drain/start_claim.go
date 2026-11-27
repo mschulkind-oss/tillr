@@ -359,6 +359,10 @@ func (l *Loop) recordFastStart(ctx context.Context, tx *store.Tx, d Decision, ba
 		if err := item.RecordConflict(tx, c, at); err != nil {
 			return nil, err
 		}
+	} else if d.SplitCall != nil && d.RunRequest != nil {
+		sc := *d.SplitCall
+		sc.DesignRunID = d.RunRequest.RunID
+		d.SplitCall = &sc
 	} else if d.ConflictID != "" || (d.Action == ActionRetry && d.SupersedesRunID != "") {
 		conflicts, err := item.ReadConflicts(tx.Reader())
 		if err != nil {

@@ -1,7 +1,7 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { navigate } from "../models/route";
 import { useItemDocQuery, useItemQuery, useRunArtifactQuery, useRunExchangesQuery, useRunGateQuery, useRunQuery, useRunTimelineQuery, useRunTranscriptQuery } from "../models/queries";
-import type { DispatchView, EarlierFindingFateView, ItemData, ItemView, LinkedAlertView, TimelineData, VerdictComparisonView, VerdictExaminedView, VerdictFindingView, VerifyRefusalView } from "../models/types";
+import type { DispatchView, EarlierFindingFateView, ItemData, ItemView, LinkedAlertView, SplitCallView, TimelineData, VerdictComparisonView, VerdictExaminedView, VerdictFindingView, VerifyRefusalView } from "../models/types";
 import { alertGlyphState, alertsFilterUrl } from "./AlertsPage";
 import { assembleSpans } from "../models/spans";
 import { ItemDetailPane } from "./ItemDetailPane";
@@ -66,6 +66,24 @@ function EarlierFindingFateList({ fates }: { fates?: EarlierFindingFateView[] })
   </ul>;
 }
 
+function SplitCallSummary({ call }: { call?: SplitCallView }) {
+  if (!call) return null;
+  return <div className="split-call-summary">
+    <div>
+      Split call by {call.caller} · status: {call.status}
+      {call.status === "pending" ? " · waiting on the design seat" : null}
+      {call.design_run_id ? <>{" · design run "}<EntityLink kind="run" id={call.design_run_id} /></> : null}
+    </div>
+    {call.donor_ref || call.donor_sha ? <div>Donor: {call.donor_ref || "ref not recorded"}{call.donor_sha ? ` (${call.donor_sha})` : ""}</div> : null}
+    {call.signals.length > 0 ? <ul>
+      {call.signals.map((sig, i) => <li key={`${sig.signal}-${i}`}>
+        {sig.signal}: {sig.files ?? 0} files (limit {sig.file_limit ?? 0}) · {sig.added_lines ?? 0} added lines (limit {sig.added_line_limit ?? 0})
+      </li>)}
+    </ul> : null}
+    {call.status === "no-split" || call.no_split_reason ? <div>No split: {call.no_split_reason || "reason not recorded"}</div> : null}
+    {call.last_rejection_reason ? <div>Last split rejection: {call.last_rejection_reason}</div> : null}
+  </div>;
+}
 export function VerifyRefusals({ refusals }: { refusals: VerifyRefusalView[] }) {
   if (!refusals.length) return null;
   return <section aria-label="Verify refusals"><h2>Verify refusals</h2><ol>
@@ -75,6 +93,7 @@ export function VerifyRefusals({ refusals }: { refusals: VerifyRefusalView[] }) 
       {r.candidate_size ? <div>Candidate size: {r.candidate_size.files} files (limit {r.candidate_size.file_limit}) · {r.candidate_size.added_lines} added lines (limit {r.candidate_size.added_line_limit})</div> : null}
       <ComparisonSummary comparison={r.verdict_comparison} />
       <ExaminedSummary examined={r.examined} />
+      <SplitCallSummary call={r.split_call} />
       <pre className="refusal-detail">{r.detail}</pre>
       <FindingList findings={r.findings} />
       <EarlierFindingFateList fates={r.earlier_finding_fates} />
@@ -110,6 +129,7 @@ export function ItemTimeline({ item }: { item: ItemData }) {
     </> })),
     ...(item.verify_refusals ?? []).map(r => ({ at: r.at_ms, key: `verify-refusal-${r.event_seq}`, body: <>
       Verify refused · run <EntityLink kind="run" id={r.run_id} /> · {r.detail} · <NextStep refusal={r} />
+      {r.split_call ? <> · split call ({r.split_call.status}){r.split_call.no_split_reason ? `: no split — ${r.split_call.no_split_reason}` : ""}</> : null}
     </> })),
     ...item.verdicts.map((v, i) => ({ at: Date.parse(v.recorded_at), key: `verdict-${i}`, body: <>
       Verdict {v.criterion_id} · {v.verdict} · {v.reason || "reason not recorded"} · {v.actor || "actor not recorded"} ({v.actor_kind || "kind not recorded"}) · evidence: {v.evidence?.length ? v.evidence.join(", ") : "not recorded"}

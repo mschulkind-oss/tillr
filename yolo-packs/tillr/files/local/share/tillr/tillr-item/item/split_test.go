@@ -144,3 +144,158 @@ func TestReadSplitMissingTable(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func openSplitTestStore(t *testing.T) (*store.Store, string) {
+	t.Helper()
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "state.db")
+	s, err := store.Open(ctx, dbPath, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	err = s.WriteTx(ctx, func(tx *store.Tx) error {
+		_, err := tx.Exec(
+			`INSERT INTO items (item_id, title, state, updated_at) VALUES ('item-1', 'Test item', 'in-queue', 1000)`,
+		)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s, "item-1"
+}
+
+func TestSplitCallLifecycleAndNoSplitS1Tracking(t *testing.T) {
+	ctx := context.Background()
+	s, itemID := openSplitTestStore(t)
+	t0 := time.Date(2026, 11, 27, 12, 0, 0, 0, time.UTC)
+
+	var recorded SplitCall
+	err := s.WriteTx(ctx, func(tx *store.Tx) error {
+		var err error
+		recorded, err = RecordSplitCall(ctx, tx, SplitCall{
+			Caller:    SplitCallerVerifier,
+			Timestamp: t0,
+			ItemID:    itemID,
+			RunID:     "run-1",
+			DonorRef:  "refs/tillr/runs/run-1",
+			DonorSHA:  "aaaa1111",
+			BaseSHA:   "00001111",
+			Signals: []SplitSignal{{
+				Signal:         SplitSignalS1,
+				Files:          30,
+				AddedLines:     500,
+				FileLimit:      27,
+				AddedLineLimit: 1200,
+			}},
+		})
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recorded.Status != SplitCallStatusPending || recorded.CallID == 0 {
+		t.Fatalf("got %+v, want pending with non-zero CallID", recorded)
+	}
+
+	// Second call while pending merges signals into the existing pending call.
+	err = s.WriteTx(ctx, func(tx *store.Tx) error {
+		_, err := RecordSplitCall(ctx, tx, SplitCall{
+			Caller:    "planner",
+			Timestamp: t0.Add(time.Minute),
+			ItemID:    itemID,
+			RunID:     "run-2",
+			Signals: []SplitSignal{{
+				Signal:         "S5",
+				Files:          30,
+				AddedLines:     500,
+				FileLimit:      27,
+				AddedLineLimit: 1200,
+			}},
+		})
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var pending *SplitCall
+	if err := s.ReadTx(ctx, func(r *store.Reader) error {
+		var err error
+		pending, err = PendingSplitCall(r, itemID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if pending == nil || len(pending.Signals) != 2 || pending.Signals[0].Signal != SplitSignalS1 || pending.Signals[1].Signal != "S5" {
+		t.Fatalf("pending = %+v, want merged S1 and S5 signals", pending)
+	}
+
+	// Malformed statement rejection is recorded on the pending call.
+	if err := s.WriteTx(ctx, func(tx *store.Tx) error {
+		return RecordSplitRejection(ctx, tx, itemID, "design-1", "a split needs at least two parts")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ReadTx(ctx, func(r *store.Reader) error {
+		var err error
+		pending, err = PendingSplitCall(r, itemID)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if pending.LastRejectionReason != "a split needs at least two parts" || pending.DesignRunID != "design-1" {
+		t.Fatalf("rejection not recorded: %+v", pending)
+	}
+
+	// Answering "no split" clears pending and records answered S1 readings.
+	if err := s.WriteTx(ctx, func(tx *store.Tx) error {
+		_, err := AnswerSplitNoSplit(ctx, tx, itemID, "design-2", "shared invariant across files", t0.Add(2*time.Minute))
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.ReadTx(ctx, func(r *store.Reader) error {
+		p, err := PendingSplitCall(r, itemID)
+		if err != nil || p != nil {
+			t.Fatalf("expected no pending call after no-split, got %+v, %v", p, err)
+		}
+		calls, err := ReadSplitCalls(r, itemID)
+		if err != nil || len(calls) != 1 {
+			t.Fatalf("calls = %+v, %v", calls, err)
+		}
+		if calls[0].Status != SplitCallStatusNoSplit || calls[0].NoSplit == nil || calls[0].NoSplit.Reason != "shared invariant across files" || calls[0].LastRejectionReason != "" {
+			t.Fatalf("unexpected answered call: %+v", calls[0])
+		}
+		for _, tc := range []struct {
+			name string
+			sig  SplitSignal
+			want bool
+		}{
+			{"equal", SplitSignal{Signal: SplitSignalS1, Files: 30, AddedLines: 500}, true},
+			{"smaller", SplitSignal{Signal: SplitSignalS1, Files: 28, AddedLines: 400}, true},
+			{"more-files", SplitSignal{Signal: SplitSignalS1, Files: 31, AddedLines: 500}, false},
+			{"more-lines", SplitSignal{Signal: SplitSignalS1, Files: 30, AddedLines: 501}, false},
+		} {
+			got, err := S1AnsweredNoSplit(r, itemID, tc.sig)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tc.want {
+				t.Errorf("%s: S1AnsweredNoSplit = %v, want %v", tc.name, got, tc.want)
+			}
+		}
+		donors, err := ReadSplitDonorRefs(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(donors) != 0 {
+			t.Fatalf("no-split call should not protect donor ref, got %+v", donors)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}

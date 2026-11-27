@@ -594,6 +594,9 @@ func FileSplit(ctx context.Context, tx *store.Tx, parent string, statement Split
 	if _, err := tx.Exec(`INSERT INTO item_splits(parent_id, statement) VALUES (?,?)`, parent, raw); err != nil {
 		return nil, err
 	}
+	if err := markSplitCallSplit(ctx, tx, parent, "", at); err != nil {
+		return nil, err
+	}
 	return ids, nil
 }
 
@@ -698,7 +701,339 @@ func checkSplitMove(d definition.Definition, id string, wait *WaitingOn, to stri
 	return nil
 }
 
+const (
+	SplitCallKind   = "item.split-call"
+	SplitAnswerKind = "item.split-answer"
+
+	SplitCallerVerifier = "verifier"
+
+	SplitCallStatusPending = "pending"
+	SplitCallStatusSplit   = "split"
+	SplitCallStatusNoSplit = "no-split"
+
+	SplitSignalS1 = "S1"
+)
+
+type SplitSignal struct {
+	Signal         string `json:"signal"`
+	Files          int64  `json:"files,omitempty"`
+	AddedLines     int64  `json:"added_lines,omitempty"`
+	FileLimit      int64  `json:"file_limit,omitempty"`
+	AddedLineLimit int64  `json:"added_line_limit,omitempty"`
+}
+
+type SplitNoSplit struct {
+	Reason  string        `json:"reason"`
+	Signals []SplitSignal `json:"signals,omitempty"`
+}
+
+type SplitCall struct {
+	CallID              int64         `json:"call_id,omitempty"`
+	Caller              string        `json:"caller"`
+	Timestamp           time.Time     `json:"timestamp"`
+	ItemID              string        `json:"item_id"`
+	RunID               string        `json:"run_id"`
+	DonorRef            string        `json:"donor_ref,omitempty"`
+	DonorSHA            string        `json:"donor_sha,omitempty"`
+	BaseSHA             string        `json:"base_sha,omitempty"`
+	Signals             []SplitSignal `json:"signals"`
+	Status              string        `json:"status"`
+	DesignRunID         string        `json:"design_run_id,omitempty"`
+	NoSplit             *SplitNoSplit `json:"no_split,omitempty"`
+	LastRejectionReason string        `json:"last_rejection_reason,omitempty"`
+	AnsweredAt          *time.Time    `json:"answered_at,omitempty"`
+}
+
+type SplitDonorRef struct {
+	ItemID   string
+	RunID    string
+	DonorRef string
+	Status   string
+}
+
+func RecordSplitCall(ctx context.Context, tx *store.Tx, call SplitCall) (SplitCall, error) {
+	if call.ItemID == "" {
+		return SplitCall{}, Rejectionf("split-call", "", "split call needs an item_id")
+	}
+	if call.Caller == "" {
+		return SplitCall{}, Rejectionf("split-call", call.ItemID, "split call needs a caller")
+	}
+	if len(call.Signals) == 0 {
+		return SplitCall{}, Rejectionf("split-call", call.ItemID, "split call needs at least one measured signal")
+	}
+	if call.Timestamp.IsZero() {
+		call.Timestamp = time.Now().UTC()
+	} else {
+		call.Timestamp = call.Timestamp.UTC()
+	}
+	existing, err := PendingSplitCall(tx.Reader(), call.ItemID)
+	if err != nil {
+		return SplitCall{}, err
+	}
+	if existing != nil {
+		for _, sig := range call.Signals {
+			if !slices.Contains(existing.Signals, sig) {
+				existing.Signals = append(existing.Signals, sig)
+			}
+		}
+		rawSignals, err := json.Marshal(existing.Signals)
+		if err != nil {
+			return SplitCall{}, err
+		}
+		if _, err := tx.Exec(`UPDATE split_calls SET signals=? WHERE call_id=?`, rawSignals, existing.CallID); err != nil {
+			return SplitCall{}, err
+		}
+		body, err := json.Marshal(existing)
+		if err != nil {
+			return SplitCall{}, err
+		}
+		if _, err := tx.Append(event.Event{Kind: SplitCallKind, ObjectType: "item", ObjectID: &existing.ItemID, Payload: body, At: call.Timestamp}); err != nil {
+			return SplitCall{}, err
+		}
+		return *existing, nil
+	}
+	call.Status = SplitCallStatusPending
+	rawSignals, err := json.Marshal(call.Signals)
+	if err != nil {
+		return SplitCall{}, err
+	}
+	res, err := tx.Exec(
+		`INSERT INTO split_calls(item_id, caller, run_id, donor_ref, donor_sha, base_sha, signals, status, design_run_id, no_split_reason, last_rejection_reason, created_at, answered_at)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		call.ItemID, call.Caller, call.RunID, call.DonorRef, call.DonorSHA, call.BaseSHA,
+		rawSignals, call.Status, call.DesignRunID, "", call.LastRejectionReason,
+		call.Timestamp.Format(time.RFC3339Nano), "",
+	)
+	if err != nil {
+		return SplitCall{}, err
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return SplitCall{}, err
+	}
+	call.CallID = id
+	body, err := json.Marshal(call)
+	if err != nil {
+		return SplitCall{}, err
+	}
+	if _, err := tx.Append(event.Event{Kind: SplitCallKind, ObjectType: "item", ObjectID: &call.ItemID, Payload: body, At: call.Timestamp}); err != nil {
+		return SplitCall{}, err
+	}
+	return call, nil
+}
+
+func scanSplitCall(scan func(dest ...any) error) (SplitCall, error) {
+	var c SplitCall
+	var rawSignals []byte
+	var noSplitReason, createdAt, answeredAt string
+	if err := scan(
+		&c.CallID, &c.ItemID, &c.Caller, &c.RunID, &c.DonorRef, &c.DonorSHA, &c.BaseSHA,
+		&rawSignals, &c.Status, &c.DesignRunID, &noSplitReason, &c.LastRejectionReason,
+		&createdAt, &answeredAt,
+	); err != nil {
+		return SplitCall{}, err
+	}
+	if err := json.Unmarshal(rawSignals, &c.Signals); err != nil {
+		return SplitCall{}, err
+	}
+	if createdAt != "" {
+		t, err := time.Parse(time.RFC3339Nano, createdAt)
+		if err != nil {
+			return SplitCall{}, err
+		}
+		c.Timestamp = t
+	}
+	if answeredAt != "" {
+		t, err := time.Parse(time.RFC3339Nano, answeredAt)
+		if err != nil {
+			return SplitCall{}, err
+		}
+		c.AnsweredAt = &t
+	}
+	if c.Status == SplitCallStatusNoSplit || noSplitReason != "" {
+		c.NoSplit = &SplitNoSplit{Reason: noSplitReason, Signals: slices.Clone(c.Signals)}
+	}
+	return c, nil
+}
+
+func PendingSplitCall(r *store.Reader, itemID string) (*SplitCall, error) {
+	row := r.QueryRow(
+		`SELECT call_id, item_id, caller, run_id, donor_ref, donor_sha, base_sha, signals, status, design_run_id, no_split_reason, last_rejection_reason, created_at, answered_at
+		 FROM split_calls WHERE item_id=? AND status=? ORDER BY call_id DESC LIMIT 1`,
+		itemID, SplitCallStatusPending,
+	)
+	c, err := scanSplitCall(row.Scan)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &c, nil
+}
+
+func ReadSplitCalls(r *store.Reader, itemID string) ([]SplitCall, error) {
+	rows, err := r.Query(
+		`SELECT call_id, item_id, caller, run_id, donor_ref, donor_sha, base_sha, signals, status, design_run_id, no_split_reason, last_rejection_reason, created_at, answered_at
+		 FROM split_calls WHERE item_id=? ORDER BY call_id ASC`,
+		itemID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var calls []SplitCall
+	for rows.Next() {
+		c, err := scanSplitCall(rows.Scan)
+		if err != nil {
+			return nil, err
+		}
+		calls = append(calls, c)
+	}
+	return calls, rows.Err()
+}
+
+func AnswerSplitNoSplit(ctx context.Context, tx *store.Tx, itemID, designRunID, reason string, at time.Time) (SplitCall, error) {
+	if strings.TrimSpace(reason) == "" {
+		return SplitCall{}, Rejectionf("split-no-split", itemID, "no-split answer requires a reason")
+	}
+	pending, err := PendingSplitCall(tx.Reader(), itemID)
+	if err != nil {
+		return SplitCall{}, err
+	}
+	if pending == nil {
+		return SplitCall{}, Rejectionf("split-no-call", itemID, "item %q has no pending split call", itemID)
+	}
+	if at.IsZero() {
+		at = time.Now().UTC()
+	} else {
+		at = at.UTC()
+	}
+	answered := at.Format(time.RFC3339Nano)
+	if _, err := tx.Exec(
+		`UPDATE split_calls SET status=?, design_run_id=?, no_split_reason=?, last_rejection_reason='', answered_at=? WHERE call_id=?`,
+		SplitCallStatusNoSplit, designRunID, reason, answered, pending.CallID,
+	); err != nil {
+		return SplitCall{}, err
+	}
+	pending.Status = SplitCallStatusNoSplit
+	pending.DesignRunID = designRunID
+	pending.LastRejectionReason = ""
+	pending.AnsweredAt = &at
+	pending.NoSplit = &SplitNoSplit{Reason: reason, Signals: slices.Clone(pending.Signals)}
+	body, err := json.Marshal(pending)
+	if err != nil {
+		return SplitCall{}, err
+	}
+	if _, err := tx.Append(event.Event{Kind: SplitAnswerKind, ObjectType: "item", ObjectID: &pending.ItemID, Payload: body, At: at}); err != nil {
+		return SplitCall{}, err
+	}
+	return *pending, nil
+}
+
+func markSplitCallSplit(ctx context.Context, tx *store.Tx, itemID, designRunID string, at time.Time) error {
+	pending, err := PendingSplitCall(tx.Reader(), itemID)
+	if err != nil || pending == nil {
+		return err
+	}
+	if at.IsZero() {
+		at = time.Now().UTC()
+	} else {
+		at = at.UTC()
+	}
+	if _, err := tx.Exec(
+		`UPDATE split_calls SET status=?, design_run_id=?, last_rejection_reason='', answered_at=? WHERE call_id=?`,
+		SplitCallStatusSplit, designRunID, at.Format(time.RFC3339Nano), pending.CallID,
+	); err != nil {
+		return err
+	}
+	pending.Status = SplitCallStatusSplit
+	pending.DesignRunID = designRunID
+	pending.LastRejectionReason = ""
+	pending.AnsweredAt = &at
+	body, err := json.Marshal(pending)
+	if err != nil {
+		return err
+	}
+	_, err = tx.Append(event.Event{Kind: SplitAnswerKind, ObjectType: "item", ObjectID: &pending.ItemID, Payload: body, At: at})
+	return err
+}
+
+func RecordSplitRejection(ctx context.Context, tx *store.Tx, itemID, designRunID, reason string) error {
+	pending, err := PendingSplitCall(tx.Reader(), itemID)
+	if err != nil || pending == nil {
+		return err
+	}
+	if designRunID == "" {
+		designRunID = pending.DesignRunID
+	}
+	_, err = tx.Exec(
+		`UPDATE split_calls SET last_rejection_reason=?, design_run_id=? WHERE call_id=?`,
+		reason, designRunID, pending.CallID,
+	)
+	return err
+}
+
+func S1AnsweredNoSplit(r *store.Reader, itemID string, sig SplitSignal) (bool, error) {
+	rows, err := r.Query(
+		`SELECT signals FROM split_calls WHERE item_id=? AND status=?`,
+		itemID, SplitCallStatusNoSplit,
+	)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var raw []byte
+		if err := rows.Scan(&raw); err != nil {
+			return false, err
+		}
+		var signals []SplitSignal
+		if err := json.Unmarshal(raw, &signals); err != nil {
+			return false, err
+		}
+		for _, prev := range signals {
+			if prev.Signal == SplitSignalS1 && prev.Files >= sig.Files && prev.AddedLines >= sig.AddedLines {
+				return true, nil
+			}
+		}
+	}
+	return false, rows.Err()
+}
+
+func ReadSplitDonorRefs(r *store.Reader) ([]SplitDonorRef, error) {
+	var exists bool
+	if err := r.QueryRow(`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='split_calls')`).Scan(&exists); err != nil {
+		return nil, err
+	}
+	if !exists {
+		return nil, nil
+	}
+	rows, err := r.Query(
+		`SELECT item_id, run_id, donor_ref, status FROM split_calls WHERE status IN (?,?)`,
+		SplitCallStatusPending, SplitCallStatusSplit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var refs []SplitDonorRef
+	for rows.Next() {
+		var ref SplitDonorRef
+		if err := rows.Scan(&ref.ItemID, &ref.RunID, &ref.DonorRef, &ref.Status); err != nil {
+			return nil, err
+		}
+		refs = append(refs, ref)
+	}
+	return refs, rows.Err()
+}
+
 func init() {
+	for _, kind := range []string{SplitCallKind, SplitAnswerKind} {
+		if err := event.Register(kind, Utility); err != nil {
+			panic(err)
+		}
+	}
 	if err := store.RegisterDDL("item-splits", `CREATE TABLE IF NOT EXISTS item_splits (
 		parent_id TEXT PRIMARY KEY REFERENCES items(item_id), statement BLOB NOT NULL
 	)`); err != nil {
@@ -723,6 +1058,26 @@ func init() {
 		panic(err)
 	}
 	if err := event.Register(SplitGapKind, Utility); err != nil {
+		panic(err)
+	}
+	if err := store.RegisterDDL("item-split-calls", `CREATE TABLE IF NOT EXISTS split_calls (
+		call_id INTEGER PRIMARY KEY AUTOINCREMENT,
+		item_id TEXT NOT NULL REFERENCES items(item_id),
+		caller TEXT NOT NULL,
+		run_id TEXT NOT NULL,
+		donor_ref TEXT NOT NULL DEFAULT '',
+		donor_sha TEXT NOT NULL DEFAULT '',
+		base_sha TEXT NOT NULL DEFAULT '',
+		signals BLOB NOT NULL,
+		status TEXT NOT NULL,
+		design_run_id TEXT NOT NULL DEFAULT '',
+		no_split_reason TEXT NOT NULL DEFAULT '',
+		last_rejection_reason TEXT NOT NULL DEFAULT '',
+		created_at TEXT NOT NULL,
+		answered_at TEXT NOT NULL DEFAULT ''
+	);
+	CREATE INDEX IF NOT EXISTS split_calls_item_status_idx ON split_calls(item_id, status);
+	CREATE INDEX IF NOT EXISTS split_calls_donor_idx ON split_calls(donor_ref) WHERE donor_ref != '';`); err != nil {
 		panic(err)
 	}
 }
