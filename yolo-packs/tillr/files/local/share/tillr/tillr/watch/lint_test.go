@@ -1237,3 +1237,56 @@ func TestLintTriagePolicyConstraints(t *testing.T) {
 	}
 	assertHasLintCode(t, findings, CodeWatchLintSeatUnmapped, `escalate["triage"]`)
 }
+
+func TestLintWorkflowJoinKind(t *testing.T) {
+	root := t.TempDir()
+	policyPath := writeLintFile(t, root, "policy.json", minimalPolicyJSON)
+	wfDir := filepath.Join(root, "workflows")
+	writeLintFile(t, root, "workflows/parallel@v1.json", `{
+  "name": "parallel",
+  "version": 1,
+  "stages": [
+    { "id": "a", "kind": "agent", "seat": "build", "access": "write", "write_scope": ["docs/"] },
+    { "id": "b", "kind": "agent", "seat": "build", "access": "write", "write_scope": ["tests/"] },
+    { "id": "join", "kind": "join", "access": "write" }
+  ],
+  "edges": [
+    { "from_node": "a", "to_node": "join" },
+    { "from_node": "b", "to_node": "join" }
+  ],
+  "exit": { "requires_nodes": ["join"], "requires_candidate": "commit_required" }
+}`)
+	findings, err := Lint(context.Background(), LintOptions{
+		Root:           root,
+		WorkflowsPath:  wfDir,
+		PolicyPaths:    []string{policyPath},
+		NoShippedRules: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertNoLintCode(t, findings, CodeWatchLintWorkflowSchema)
+
+	badRoot := t.TempDir()
+	badPolicy := writeLintFile(t, badRoot, "policy.json", minimalPolicyJSON)
+	badDir := filepath.Join(badRoot, "workflows")
+	writeLintFile(t, badRoot, "workflows/bad-join@v1.json", `{
+  "name": "bad-join",
+  "version": 1,
+  "stages": [
+    { "id": "join", "kind": "join", "seat": "build", "access": "read_only" }
+  ],
+  "edges": [],
+  "exit": { "requires_nodes": ["join"] }
+}`)
+	badFindings, err := Lint(context.Background(), LintOptions{
+		Root:           badRoot,
+		WorkflowsPath:  badDir,
+		PolicyPaths:    []string{badPolicy},
+		NoShippedRules: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertHasLintCode(t, badFindings, CodeWatchLintWorkflowSchema, "join requires access write")
+}

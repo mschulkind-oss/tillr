@@ -275,8 +275,8 @@ func loadAndValidateWorkflowFile(absRoot, wfDir, path string, cmds map[string]li
 			seats[s.Seat] = true
 		}
 
-		if s.Kind != "agent" && s.Kind != "command" && s.Kind != "workflow" {
-			fc.add(path, CodeWatchLintWorkflowSchema, fmt.Sprintf("workflow-kind: stage %q: expected agent, command or workflow", s.ID))
+		if s.Kind != "agent" && s.Kind != "command" && s.Kind != "workflow" && s.Kind != "join" {
+			fc.add(path, CodeWatchLintWorkflowSchema, fmt.Sprintf("workflow-kind: stage %q: expected agent, command, workflow or join", s.ID))
 			continue
 		}
 		if s.Repeat != "" {
@@ -308,6 +308,11 @@ func loadAndValidateWorkflowFile(absRoot, wfDir, path string, cmds map[string]li
 				fc.add(path, CodeWatchLintWorkflowSchema, fmt.Sprintf("workflow-kind: stage %q: command needs command_ref and no seat", s.ID))
 			} else {
 				validateCommandStage(path, s, w.Args, cmds, cmdErr, fc)
+			}
+		}
+		if s.Kind == "join" {
+			if s.CommandRef != "" || s.Flags != nil || s.Seat != "" || s.Access != "write" {
+				fc.add(path, CodeWatchLintWorkflowSchema, fmt.Sprintf("workflow-kind: stage %q: join requires access write and no seat or command_ref", s.ID))
 			}
 		}
 		if s.Kind == "agent" {

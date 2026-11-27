@@ -19,6 +19,7 @@ import (
 	"github.com/mschulkind-oss/tillr-drain/internal/worktreebudget"
 	"github.com/mschulkind-oss/tillr-drain/obstacles"
 	"github.com/mschulkind-oss/tillr-drain/ownercriteria"
+	"github.com/mschulkind-oss/tillr-drain/workflow"
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/checkresult"
@@ -1963,12 +1964,17 @@ func stampDecisionRequest(d Decision, req *run.Request) {
 	}
 	if d.Workflow != nil && d.NodeIndex >= 0 && d.NodeIndex < len(d.Workflow.Stages) {
 		stage := d.Workflow.Stages[d.NodeIndex]
-		if stage.Kind == "command" {
+		if stage.Kind == "command" || stage.Kind == "join" {
 			req.Seat = ""
 		} else if d.Seat != "" {
 			req.Seat = d.Seat
 		} else {
 			req.Seat = stage.Seat
+		}
+		if workflow.HasConcurrentWriter(d.Workflow, stage.ID) {
+			req.WorkingDir = "nodes/" + nodeKey(stage.ID) + "/worktree"
+		} else if strings.HasPrefix(req.WorkingDir, "nodes/") {
+			req.WorkingDir = WorktreeDir
 		}
 		req.NodeID = stage.ID
 		req.Node = stage.ID

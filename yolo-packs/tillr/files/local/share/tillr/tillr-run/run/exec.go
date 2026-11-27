@@ -278,7 +278,12 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 	laneDir := filepath.Join(root, laneID)
 	workDir := filepath.Join(laneDir, req.WorkingDir)
 	artifactDir := laneDir
-	if req.ReadOnlyGroup != "" {
+	durableBaseDir := laneDir
+	if strings.HasPrefix(req.WorkingDir, "nodes/") {
+		nodeDir := filepath.Dir(workDir)
+		artifactDir = nodeDir
+		durableBaseDir = nodeDir
+	} else if req.ReadOnlyGroup != "" {
 		artifactDir = NodeDir(laneDir, req.RunID)
 	}
 	if err := os.MkdirAll(artifactDir, 0755); err != nil {
@@ -289,7 +294,7 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 	}
 	// The run's scratch is its own and it exists before the process does, because a child
 	// that has to create it races its sibling for the same tree and one of them loses.
-	durableDir := ScratchDir(laneDir, req.RunID)
+	durableDir := ScratchDir(durableBaseDir, req.RunID)
 	if err := os.MkdirAll(durableDir, 0o755); err != nil {
 		return record.Envelope{}, Internalf("creating the run's scratch directory %q: %v", durableDir, err)
 	}

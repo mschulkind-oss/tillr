@@ -323,6 +323,7 @@ func replaceProposalGraph(w *Workflow, target string, inner *Workflow) (*Workflo
 		keep = append(keep, required...)
 	}
 	next.Exit.RequiresNodes = keep
+	workflow.SynthesizeJoinStages(&next)
 	for name, port := range next.Exit.Outputs {
 		if !inGraphGroup(port.Node, target) {
 			continue

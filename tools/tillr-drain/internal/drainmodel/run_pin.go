@@ -3,7 +3,10 @@ package drainmodel
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -15,6 +18,10 @@ const (
 	ItemPinPrefix = "refs/tillr/items/"
 	// ItemPinLongPrefix is the fallback ref namespace for item IDs too long or unsafe for a ref component.
 	ItemPinLongPrefix = "refs/tillr/items-long/"
+	// NodePinPrefix is the disjoint sibling ref namespace that pins each parallel writer's node commit.
+	NodePinPrefix = "refs/tillr/item-nodes/"
+	// NodePinLongPrefix is the fallback ref namespace for item IDs too long or unsafe for a ref component.
+	NodePinLongPrefix = "refs/tillr/item-nodes-long/"
 )
 
 // PinTimeout bounds the fetch and ref write that survive the loop's stop.
@@ -36,6 +43,71 @@ func ItemPinRef(itemID string) string {
 		return ItemPinPrefix + itemID
 	}
 	return fmt.Sprintf("%s%x", ItemPinLongPrefix, sha256.Sum256([]byte(itemID)))
+}
+
+// NodeKey returns a single sanitized ref and path component <sanitized>-<sha256[:8]>
+// within MaxRefComponent bytes so expanded node IDs (for example "work/piece-a") never
+// introduce '/' or collide with parent item refs.
+func NodeKey(nodeID string) string {
+	var b strings.Builder
+	prevDash := false
+	for _, r := range strings.ToLower(nodeID) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '_', r == '-':
+			b.WriteRune(r)
+			prevDash = false
+		default:
+			if !prevDash && b.Len() > 0 {
+				b.WriteByte('-')
+				prevDash = true
+			}
+		}
+	}
+	sanitized := strings.Trim(b.String(), "-")
+	if sanitized == "" {
+		sanitized = "node"
+	}
+	const hashSuffixLen = 9 // "-" + 8 hex chars
+	if maxPrefix := MaxRefComponent - hashSuffixLen; len(sanitized) > maxPrefix {
+		sanitized = strings.TrimRight(sanitized[:maxPrefix], "-")
+		if sanitized == "" {
+			sanitized = "node"
+		}
+	}
+	sum := sha256.Sum256([]byte(nodeID))
+	return sanitized + "-" + hex.EncodeToString(sum[:4])
+}
+
+// NodePinRef returns the disjoint Git ref path that pins a parallel writer's node commit.
+func NodePinRef(itemID, nodeID string) string {
+	if safeRefComponent(itemID) {
+		return NodePinPrefix + itemID + "/" + NodeKey(nodeID)
+	}
+	return fmt.Sprintf("%s%x", NodePinLongPrefix, sha256.Sum256([]byte(itemID+"\x00"+nodeID)))
+}
+
+// NodeLaneBranch returns the isolated branch name for a parallel writer's node checkout.
+func NodeLaneBranch(scope, itemID, nodeID string) string {
+	itemKey := itemID
+	if !safeRefComponent(itemKey) {
+		itemKey = NodeKey(itemID)
+	}
+	return "tillr/" + scope + "-nodes/" + itemKey + "/" + NodeKey(nodeID)
+}
+
+// NodeDir returns the directory holding one parallel writer's checkout and scratch.
+func NodeDir(laneRoot, itemID, nodeID string) string {
+	return filepath.Join(laneRoot, itemID, "nodes", NodeKey(nodeID))
+}
+
+// NodeWorktreePath returns the isolated worktree path for one parallel writer.
+func NodeWorktreePath(laneRoot, itemID, nodeID string) string {
+	return filepath.Join(NodeDir(laneRoot, itemID, nodeID), "worktree")
+}
+
+// NodeScratchDir returns the node-scoped run scratch directory for one parallel writer.
+func NodeScratchDir(laneRoot, itemID, nodeID, runID string) string {
+	return filepath.Join(NodeDir(laneRoot, itemID, nodeID), "scratch", runID)
 }
 
 // safeRefComponent answers whether name is a valid, single-component Git ref name
@@ -110,6 +182,20 @@ func WriteItemPin(ctx context.Context, git func(context.Context, string, ...stri
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), PinTimeout)
 	defer cancel()
 	ref := ItemPinRef(itemID)
+	if _, err := git(ctx, repo, "update-ref", "--no-deref", ref, sha); err != nil {
+		return &RunPinError{ref, sha, err}
+	}
+	return nil
+}
+
+// WriteNodePin moves a parallel writer node's commit pin to sha.
+func WriteNodePin(ctx context.Context, git func(context.Context, string, ...string) (string, error), repo, itemID, nodeID, sha string) error {
+	if itemID == "" || nodeID == "" || sha == "" {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), PinTimeout)
+	defer cancel()
+	ref := NodePinRef(itemID, nodeID)
 	if _, err := git(ctx, repo, "update-ref", "--no-deref", ref, sha); err != nil {
 		return &RunPinError{ref, sha, err}
 	}

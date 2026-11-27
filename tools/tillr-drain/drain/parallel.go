@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/mschulkind-oss/tillr-drain/workflow"
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -66,7 +67,12 @@ func (l *Loop) claimParallelWithShut(tx *store.Tx, d *Decision, byRun map[string
 }
 
 func (l *Loop) claimParallelWithWorks(tx *store.Tx, d *Decision, works, byRun map[string]*pendingWork, shut map[string]bool) error {
-	if d.Workflow == nil || evaluatorNode(*d) || d.Workflow.Stages[d.NodeIndex].Access != "read_only" || len(d.Parallel) > 0 {
+	if d.Workflow == nil || evaluatorNode(*d) || len(d.Parallel) > 0 {
+		return nil
+	}
+	primaryStage := d.Workflow.Stages[d.NodeIndex]
+	parallelWriter := workflow.HasConcurrentWriter(d.Workflow, primaryStage.ID)
+	if primaryStage.Access != "read_only" && !parallelWriter {
 		return nil
 	}
 	outcomes, err := workflowOutcomes(tx.Reader(), d.ItemID, d.Attempt)
@@ -109,7 +115,14 @@ func (l *Loop) claimParallelWithWorks(tx *store.Tx, d *Decision, works, byRun ma
 		}
 	}
 	for i, s := range d.Workflow.Stages {
-		if i == d.NodeIndex || s.ID == evaluatorSlot(d.Workflow) || outcomes[s.ID] != "" || s.Access != "read_only" {
+		if i == d.NodeIndex || s.ID == evaluatorSlot(d.Workflow) || outcomes[s.ID] != "" {
+			continue
+		}
+		if parallelWriter {
+			if s.Access != "write" || s.Kind == "join" || !workflow.HasConcurrentWriter(d.Workflow, s.ID) {
+				continue
+			}
+		} else if s.Access != "read_only" {
 			continue
 		}
 		ready, incoming, followed := true, false, false
@@ -208,7 +221,7 @@ func (l *Loop) stageParallel(ctx context.Context, d Decision, base string) (Deci
 	if stagedBase := l.laneBase(d.LaneID); stagedBase != "" {
 		base = stagedBase
 	}
-	if !d.WorkflowRestart {
+	if !d.WorkflowRestart && !isParallelWriterDecision(d) {
 		dir := run.NodeDir(lane, d.RunRequest.RunID)
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			return d, err
@@ -270,7 +283,7 @@ func (l *Loop) stageParallel(ctx context.Context, d Decision, base string) (Deci
 		if err != nil {
 			return d, err
 		}
-		spec := StageSpec{Policy: l.currentPolicy(), Continue: true, Isolated: true, Node: &node.Workflow.Stages[node.NodeIndex], InputPaths: paths, LaneID: node.LaneID, ItemID: node.ItemID, RunID: node.RunRequest.RunID, Backend: node.RunRequest.Backend, BaseSHA: base, WorkingDir: node.RunRequest.WorkingDir, TimeoutMS: node.RunRequest.TimeoutMS, UnreadFooter: node.UnreadFooter}
+		spec := StageSpec{Policy: l.currentPolicy(), Continue: true, Isolated: !isParallelWriterDecision(node), Node: &node.Workflow.Stages[node.NodeIndex], InputPaths: paths, LaneID: node.LaneID, ItemID: node.ItemID, RunID: node.RunRequest.RunID, Backend: node.RunRequest.Backend, BaseSHA: base, ItemBaseSHA: base, WorkingDir: node.RunRequest.WorkingDir, TimeoutMS: node.RunRequest.TimeoutMS, UnreadFooter: node.UnreadFooter}
 		if err := l.stageInfrastructureSession(ctx, &node, &spec); err != nil {
 			return d, err
 		}
@@ -292,7 +305,11 @@ func (l *Loop) stageParallel(ctx context.Context, d Decision, base string) (Deci
 				}
 				argv = append(argv, node.RunRequest.Command[i])
 			}
-			node.RunRequest.Command = append(argv, "--brief", filepath.Join(run.NodeDir(lane, node.RunRequest.RunID), BriefFile))
+			briefPath := filepath.Join(run.NodeDir(lane, node.RunRequest.RunID), BriefFile)
+			if isParallelWriterDecision(node) {
+				briefPath = filepath.Join(l.nodeMetaDir(node), BriefFile)
+			}
+			node.RunRequest.Command = append(argv, "--brief", briefPath)
 		}
 	}
 	return d, l.recordStagedNode(ctx, d)
@@ -346,7 +363,7 @@ func (l *Loop) runParallel(ctx context.Context, d Decision, result *LoopResult, 
 				rec = &finished
 			}
 			// Hook groups retain their completion policy; their final hook is collective.
-			if l.nonLanding {
+			if l.nonLanding || isParallelWriterDecision(node) {
 				return
 			}
 			var outcome string
@@ -438,6 +455,9 @@ func parallelTerminal(r *store.Reader, d Decision) (bool, error) {
 func (l *Loop) settleParallel(ctx context.Context, work *pendingWork, result *LoopResult, timing *PassTiming, watched []string) laneOutcome {
 	if l.nonLanding {
 		return l.settleHookGroup(ctx, work, result, timing)
+	}
+	if isParallelWriterDecision(work.Decision) {
+		return l.settleParallelWriters(ctx, work, result, timing, watched)
 	}
 	if err := RecordBackendOutcomes(ctx, l.cfg.Store); err != nil {
 		return laneOutcome{err: err}
@@ -732,4 +752,148 @@ func (l *Loop) settleParallelReader(ctx context.Context, work *pendingWork, node
 		}
 	}
 	return node, rec, log, outcome, laneOutcome{}
+}
+
+func isParallelWriterDecision(d Decision) bool {
+	if d.Workflow == nil || d.NodeIndex < 0 || d.NodeIndex >= len(d.Workflow.Stages) {
+		return false
+	}
+	return workflow.HasConcurrentWriter(d.Workflow, d.Workflow.Stages[d.NodeIndex].ID)
+}
+
+func (l *Loop) nodeTarget(d Decision) string {
+	if d.RunRequest != nil && strings.HasPrefix(d.RunRequest.WorkingDir, "nodes/") && !strings.Contains(d.RunRequest.WorkingDir, "..") {
+		return filepath.Join(l.laneDirPath(d.LaneID), d.RunRequest.WorkingDir)
+	}
+	return l.laneTarget(d.LaneID)
+}
+
+func (l *Loop) nodeMetaDir(d Decision) string {
+	if d.RunRequest != nil && strings.HasPrefix(d.RunRequest.WorkingDir, "nodes/") && !strings.Contains(d.RunRequest.WorkingDir, "..") {
+		return filepath.Dir(l.nodeTarget(d))
+	}
+	return l.laneDirPath(d.LaneID)
+}
+
+func (l *Loop) pinNodeCommit(ctx context.Context, lane, itemID, nodeID, runID, sha string) error {
+	repo := l.lanePinRepository(lane)
+	if err := writeRunPin(ctx, l.git, repo, runID, sha, false); err != nil {
+		return err
+	}
+	return writeNodePin(ctx, l.git, repo, itemID, nodeID, sha)
+}
+
+func (l *Loop) settleParallelWriters(ctx context.Context, work *pendingWork, result *LoopResult, timing *PassTiming, watched []string) laneOutcome {
+	d := work.Decision
+	if stagedBase := l.laneBase(d.LaneID); stagedBase != "" {
+		copy := *work
+		copy.BaseSHA = stagedBase
+		work = &copy
+	}
+	nodes := parallelNodes(d)
+	recs := make([]run.Record, len(nodes))
+	logs := make([]string, len(nodes))
+	var spend []run.Record
+
+	s, err := store.OpenRead(ctx, l.cfg.Store)
+	if err != nil {
+		return laneOutcome{err: err}
+	}
+	err = s.ReadTx(ctx, func(r *store.Reader) error {
+		for i, node := range nodes {
+			rec, e := terminalRecord(r, node.RunRequest.RunID)
+			if e != nil {
+				return e
+			}
+			if rec == nil {
+				return fmt.Errorf("parallel writer %s has no terminal record", node.RunRequest.RunID)
+			}
+			recs[i] = *rec
+			logs[i] = logTail(rec.ArtifactRefs)
+		}
+		rows, e := r.Query(`SELECT run_id FROM read_only_runs WHERE group_id=?`, d.RunRequest.ReadOnlyGroup)
+		if e != nil {
+			return e
+		}
+		var ids []string
+		for rows.Next() {
+			var id string
+			if e = rows.Scan(&id); e != nil {
+				rows.Close()
+				return e
+			}
+			ids = append(ids, id)
+		}
+		e = rows.Err()
+		rows.Close()
+		if e != nil {
+			return e
+		}
+		for _, id := range ids {
+			rec, e := terminalRecord(r, id)
+			if e != nil {
+				return e
+			}
+			if rec != nil {
+				spend = append(spend, *rec)
+			}
+		}
+		return nil
+	})
+	s.Close()
+	if err != nil {
+		return laneOutcome{err: err}
+	}
+	for _, rec := range spend {
+		if err = l.recordSettlementSpend(ctx, timing.TickID, work.LoopID, rec); err != nil {
+			return laneOutcome{err: err}
+		}
+		l.countSettledSpend(result, rec, work.LoopID)
+	}
+
+	var firstErr error
+	for i, node := range nodes {
+		offered := false
+		_, sErr := l.settleNode(ctx, node, recs[i], logs[i], work.BaseSHA, result, offered)
+		if sErr != nil && firstErr == nil {
+			firstErr = sErr
+		}
+	}
+	if firstErr != nil {
+		return laneOutcome{err: firstErr}
+	}
+
+	allPassed := true
+	if err := l.readStore(ctx, func(r *store.Reader) error {
+		for _, node := range nodes {
+			var outcome string
+			if err := r.QueryRow(`SELECT outcome FROM node_runs WHERE run_id=?`, node.RunRequest.RunID).Scan(&outcome); err != nil {
+				return err
+			}
+			if outcome != "passed" {
+				allPassed = false
+			}
+		}
+		return nil
+	}); err != nil {
+		return laneOutcome{err: err}
+	}
+	if !allPassed {
+		return laneOutcome{}
+	}
+
+	next, err := l.nextWorkflowNode(ctx, d)
+	if err != nil {
+		return laneOutcome{err: err}
+	}
+	if next >= 0 {
+		return laneOutcome{err: l.advanceNode(ctx, d, work.BaseSHA, filepath.Join(RunDir(l.cfg.Root, d.RunRequest.RunID), "node-report.md"))}
+	}
+	primaryTarget := l.laneTarget(d.LaneID)
+	head, err := l.revParse(ctx, primaryTarget, "HEAD")
+	if err != nil {
+		return laneOutcome{err: err}
+	}
+	_, err = l.finishWorkflow(ctx, d, recs[0], work.BaseSHA, head, result)
+	return laneOutcome{err: err}
 }

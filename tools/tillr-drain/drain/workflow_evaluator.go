@@ -117,7 +117,7 @@ func (l *Loop) evaluatorCandidate(ctx context.Context, d Decision) (Candidate, e
 					break
 				}
 			}
-			if node == evaluatorSlot(d.Workflow) {
+			if node == evaluatorSlot(d.Workflow) || producer.Kind != "agent" {
 				continue
 			}
 			work := history[id]

@@ -469,23 +469,33 @@ func ExpandWorkflowWithWatch(root, p string, policy *SeatPolicy, stack map[strin
 				if err := ResolveCommand(root, &stage); err != nil {
 					findings = append(findings, fmt.Errorf("stage=%s: %w", stage.ID, err))
 				}
+			} else if stage.Kind == "join" {
+				// join has no seat or command_ref
 			} else if policy != nil && policy.Seats[stage.Seat] == "" {
 				findings = append(findings, fmt.Errorf("workflow-unknown-seat: %s: seat %s is not mapped by policy; %s", stage.ID, stage.Seat, policy.SeatDeclaration))
 			} else if policy != nil && stage.Access == "write" && slices.Contains(policy.ReadOnlySeats, stage.Seat) {
 				findings = append(findings, fmt.Errorf("workflow-read-only-seat-writes: %s: seat %s is read-only under policy; %s", stage.ID, stage.Seat, policy.SeatDeclaration))
 			}
 			copies := []WorkflowStage{stage}
+			var pieceEdges []WorkflowEdge
 			if stage.Repeat != "" {
 				repeated[stage.ID] = true
 				values, _ := args[stage.Repeat].([]any)
 				copies = nil
-				for i, value := range values {
-					node := stage
-					if w.Args[stage.Repeat].Type == "pieces" {
+				if w.Args[stage.Repeat].Type == "pieces" {
+					pieces := make([]WorkflowPiece, 0, len(values))
+					pieceByID := make(map[string]int, len(values))
+					for _, value := range values {
 						piece, err := ParseWorkflowPiece(root, value)
 						if err != nil {
 							return nil, nil, nil, fmt.Errorf("workflow-argument-type: %s: %w", stage.Repeat, err)
 						}
+						if _, dup := pieceByID[piece.ID]; dup {
+							return nil, nil, nil, fmt.Errorf("workflow-argument-type: %s: duplicate piece id %q", stage.Repeat, piece.ID)
+						}
+						pieceByID[piece.ID] = len(pieces)
+						pieces = append(pieces, piece)
+						node := stage
 						node.ID = stage.ID + "-" + piece.ID
 						node.Seat, node.Access, node.Prompt, node.Outputs = piece.Seat, piece.Access, piece.Prompt, piece.Outputs
 						node.WriteScope = WorkflowScope{Paths: piece.WriteScope, explicit: piece.Access == "write"}
@@ -494,27 +504,63 @@ func ExpandWorkflowWithWatch(root, p string, policy *SeatPolicy, stack map[strin
 						} else if policy != nil && node.Access == "write" && slices.Contains(policy.ReadOnlySeats, node.Seat) {
 							findings = append(findings, fmt.Errorf("workflow-read-only-seat-writes: %s: seat %s is read-only under policy; %s", node.ID, node.Seat, policy.SeatDeclaration))
 						}
-					} else {
+						node.Repeat = ""
+						node.CopiesOf = stage.ID
+						copies = append(copies, node)
+					}
+					var err error
+					pieceEdges, err = buildPieceEdges(stage.ID, pieces, pieceByID, copies)
+					if err != nil {
+						return nil, nil, nil, fmt.Errorf("workflow-argument-type: %s: %w", stage.Repeat, err)
+					}
+				} else {
+					for i, value := range values {
+						node := stage
 						node.ID = fmt.Sprintf("%s-%d", stage.ID, i+1)
 						node.Prompt = strings.ReplaceAll(stage.Prompt, "${item}", value.(string))
+						node.Repeat = ""
+						node.CopiesOf = stage.ID
+						copies = append(copies, node)
 					}
-					node.Repeat = ""
-					node.CopiesOf = stage.ID
-					copies = append(copies, node)
 				}
 			}
 			inputPorts[stage.ID] = map[string][]string{}
 			outputPorts[stage.ID] = map[string][]WorkflowPort{}
-			for _, node := range copies {
-				entries[stage.ID] = append(entries[stage.ID], node.ID)
-				exits[stage.ID] = append(exits[stage.ID], node.ID)
-				for name := range node.Inputs {
-					inputPorts[stage.ID][name] = append(inputPorts[stage.ID][name], node.ID)
+			if len(pieceEdges) > 0 {
+				hasIn := map[string]bool{}
+				hasOut := map[string]bool{}
+				for _, pe := range pieceEdges {
+					hasOut[pe.From] = true
+					hasIn[pe.To] = true
 				}
-				for name := range node.Outputs {
-					outputPorts[stage.ID][name] = append(outputPorts[stage.ID][name], WorkflowPort{Node: node.ID, Output: name})
+				for _, node := range copies {
+					if !hasIn[node.ID] {
+						entries[stage.ID] = append(entries[stage.ID], node.ID)
+					}
+					if !hasOut[node.ID] {
+						exits[stage.ID] = append(exits[stage.ID], node.ID)
+					}
+					for name := range node.Inputs {
+						inputPorts[stage.ID][name] = append(inputPorts[stage.ID][name], node.ID)
+					}
+					for name := range node.Outputs {
+						outputPorts[stage.ID][name] = append(outputPorts[stage.ID][name], WorkflowPort{Node: node.ID, Output: name})
+					}
+					stages = append(stages, node)
 				}
-				stages = append(stages, node)
+				edges = append(edges, pieceEdges...)
+			} else {
+				for _, node := range copies {
+					entries[stage.ID] = append(entries[stage.ID], node.ID)
+					exits[stage.ID] = append(exits[stage.ID], node.ID)
+					for name := range node.Inputs {
+						inputPorts[stage.ID][name] = append(inputPorts[stage.ID][name], node.ID)
+					}
+					for name := range node.Outputs {
+						outputPorts[stage.ID][name] = append(outputPorts[stage.ID][name], WorkflowPort{Node: node.ID, Output: name})
+					}
+					stages = append(stages, node)
+				}
 			}
 		}
 	}
@@ -587,6 +633,7 @@ func ExpandWorkflowWithWatch(root, p string, policy *SeatPolicy, stack map[strin
 		}
 	}
 	w.Stages, w.Edges, w.Exit = stages, edges, &WorkflowExit{RequiresNodes: required, RequiresCandidate: candidate, Outputs: ports, EvaluatorSlot: evaluator}
+	SynthesizeJoinStages(w)
 	ids := map[string]bool{}
 	for _, s := range w.Stages {
 		if ids[s.ID] {
@@ -738,4 +785,437 @@ func CheckWorkflows(root, target string, out io.Writer) bool {
 		}
 	}
 	return ok
+}
+
+func buildPieceEdges(stageID string, pieces []WorkflowPiece, pieceByID map[string]int, copies []WorkflowStage) ([]WorkflowEdge, error) {
+	var edges []WorkflowEdge
+	edgeSeen := map[string]bool{}
+	addEdge := func(fromIdx, toIdx int) {
+		fromID := copies[fromIdx].ID
+		toID := copies[toIdx].ID
+		key := fromID + "\x00" + toID
+		if edgeSeen[key] {
+			return
+		}
+		edgeSeen[key] = true
+		edges = append(edges, WorkflowEdge{From: fromID, To: toID})
+	}
+
+	hasOutgoingWrite := make([]bool, len(pieces))
+	lastWriteIdx := -1
+	var pendingReads []int
+
+	for i, piece := range pieces {
+		if piece.After != nil {
+			for _, dep := range *piece.After {
+				depIdx, ok := pieceByID[dep]
+				if !ok {
+					return nil, fmt.Errorf("piece %s after unknown piece %s", piece.ID, dep)
+				}
+				addEdge(depIdx, i)
+				if piece.Access == "write" && pieces[depIdx].Access == "write" {
+					hasOutgoingWrite[depIdx] = true
+				}
+			}
+			if piece.Access == "write" {
+				lastWriteIdx = i
+				pendingReads = nil
+			} else {
+				pendingReads = append(pendingReads, i)
+			}
+			continue
+		}
+		if piece.Access == "read_only" {
+			if lastWriteIdx >= 0 {
+				addEdge(lastWriteIdx, i)
+			}
+			pendingReads = append(pendingReads, i)
+			continue
+		}
+		// Sequential write piece (After == nil): depends on preceding write(s) without an
+		// outgoing write edge plus any read_only pieces since the last write.
+		for j := 0; j < i; j++ {
+			if pieces[j].Access == "write" && !hasOutgoingWrite[j] {
+				addEdge(j, i)
+				hasOutgoingWrite[j] = true
+			}
+		}
+		for _, rIdx := range pendingReads {
+			addEdge(rIdx, i)
+		}
+		lastWriteIdx = i
+		pendingReads = nil
+	}
+
+	// Validate acyclicity across piece edges.
+	inDeg := make(map[string]int, len(copies))
+	adj := make(map[string][]string, len(copies))
+	for _, c := range copies {
+		inDeg[c.ID] = 0
+	}
+	for _, e := range edges {
+		adj[e.From] = append(adj[e.From], e.To)
+		inDeg[e.To]++
+	}
+	var queue []string
+	for _, c := range copies {
+		if inDeg[c.ID] == 0 {
+			queue = append(queue, c.ID)
+		}
+	}
+	visited := 0
+	for len(queue) > 0 {
+		cur := queue[0]
+		queue = queue[1:]
+		visited++
+		for _, nxt := range adj[cur] {
+			inDeg[nxt]--
+			if inDeg[nxt] == 0 {
+				queue = append(queue, nxt)
+			}
+		}
+	}
+	if visited != len(copies) {
+		return nil, fmt.Errorf("piece dependencies contain a cycle")
+	}
+	return edges, nil
+}
+
+// SynthesizeJoinStages inserts a built-in kind: "join" stage whenever two or more "write"
+// stages are unordered in a parallel fan-out without an explicit reconverging join stage.
+func SynthesizeJoinStages(w *Workflow) {
+	if w == nil || len(w.Stages) < 2 {
+		return
+	}
+	writeIDs := []string{}
+	joinIDs := []string{}
+	existingIDs := make(map[string]bool, len(w.Stages))
+	for _, s := range w.Stages {
+		existingIDs[s.ID] = true
+		if s.Kind == "join" {
+			joinIDs = append(joinIDs, s.ID)
+		} else if s.Access == "write" {
+			writeIDs = append(writeIDs, s.ID)
+		}
+	}
+	if len(writeIDs) < 2 {
+		return
+	}
+
+	adj := make(map[string][]string, len(w.Stages))
+	for _, e := range w.Edges {
+		if e.WhenOutcome == "fail" {
+			continue
+		}
+		adj[e.From] = append(adj[e.From], e.To)
+	}
+	reach := make(map[string]map[string]bool, len(w.Stages))
+	for _, s := range w.Stages {
+		seen := map[string]bool{}
+		stack := append([]string(nil), adj[s.ID]...)
+		for len(stack) > 0 {
+			cur := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+			if seen[cur] {
+				continue
+			}
+			seen[cur] = true
+			stack = append(stack, adj[cur]...)
+		}
+		reach[s.ID] = seen
+	}
+
+	unreconverged := make(map[string]map[string]bool, len(writeIDs))
+	for i := 0; i < len(writeIDs); i++ {
+		for j := i + 1; j < len(writeIDs); j++ {
+			a, b := writeIDs[i], writeIDs[j]
+			if reach[a][b] || reach[b][a] {
+				continue
+			}
+			hasJoin := false
+			for _, jID := range joinIDs {
+				if reach[a][jID] && reach[b][jID] {
+					hasJoin = true
+					break
+				}
+			}
+			if hasJoin {
+				continue
+			}
+			if unreconverged[a] == nil {
+				unreconverged[a] = map[string]bool{}
+			}
+			if unreconverged[b] == nil {
+				unreconverged[b] = map[string]bool{}
+			}
+			unreconverged[a][b] = true
+			unreconverged[b][a] = true
+		}
+	}
+	if len(unreconverged) == 0 {
+		return
+	}
+
+	visited := map[string]bool{}
+	var components [][]string
+	for _, id := range writeIDs {
+		if len(unreconverged[id]) == 0 || visited[id] {
+			continue
+		}
+		compSet := map[string]bool{}
+		queue := []string{id}
+		visited[id] = true
+		for len(queue) > 0 {
+			cur := queue[0]
+			queue = queue[1:]
+			compSet[cur] = true
+			for nb := range unreconverged[cur] {
+				if !visited[nb] {
+					visited[nb] = true
+					queue = append(queue, nb)
+				}
+			}
+		}
+		var comp []string
+		for _, wid := range writeIDs {
+			if compSet[wid] {
+				comp = append(comp, wid)
+			}
+		}
+		if len(comp) >= 2 {
+			components = append(components, comp)
+		}
+	}
+
+	nextJoinID := func() string {
+		if !existingIDs["join"] {
+			existingIDs["join"] = true
+			return "join"
+		}
+		for n := 2; ; n++ {
+			cand := fmt.Sprintf("join-%d", n)
+			if !existingIDs[cand] {
+				existingIDs[cand] = true
+				return cand
+			}
+		}
+	}
+
+	for _, comp := range components {
+		compSet := make(map[string]bool, len(comp))
+		for _, id := range comp {
+			compSet[id] = true
+		}
+		joinID := nextJoinID()
+		joinStage := WorkflowStage{
+			ID:     joinID,
+			Kind:   "join",
+			Access: "write",
+		}
+		lastCompIdx := -1
+		for idx, s := range w.Stages {
+			if compSet[s.ID] {
+				lastCompIdx = idx
+			}
+		}
+		if lastCompIdx >= 0 && lastCompIdx+1 < len(w.Stages) {
+			nextStages := make([]WorkflowStage, 0, len(w.Stages)+1)
+			nextStages = append(nextStages, w.Stages[:lastCompIdx+1]...)
+			nextStages = append(nextStages, joinStage)
+			nextStages = append(nextStages, w.Stages[lastCompIdx+1:]...)
+			w.Stages = nextStages
+		} else {
+			w.Stages = append(w.Stages, joinStage)
+		}
+
+		edgeKey := func(e WorkflowEdge) string {
+			return e.From + "\x00" + e.To + "\x00" + e.WhenOutcome + "\x00" + e.FromOutput + "\x00" + e.ToInput
+		}
+		seenEdges := make(map[string]bool, len(w.Edges)+len(comp))
+		var nextEdges []WorkflowEdge
+		addUniqueEdge := func(e WorkflowEdge) {
+			k := edgeKey(e)
+			if seenEdges[k] {
+				return
+			}
+			seenEdges[k] = true
+			nextEdges = append(nextEdges, e)
+		}
+
+		for _, e := range w.Edges {
+			if compSet[e.From] && !compSet[e.To] && e.To != joinID && e.WhenOutcome != "fail" {
+				if e.FromOutput != "" {
+					addUniqueEdge(e)
+					addUniqueEdge(WorkflowEdge{From: joinID, To: e.To, ToInput: e.ToInput})
+				} else {
+					rewired := e
+					rewired.From = joinID
+					rewired.RequiresPassed = nil
+					addUniqueEdge(rewired)
+				}
+				continue
+			}
+			addUniqueEdge(e)
+		}
+		for _, id := range comp {
+			addUniqueEdge(WorkflowEdge{From: id, To: joinID})
+		}
+		w.Edges = nextEdges
+
+		if w.Exit != nil {
+			seenReq := map[string]bool{}
+			var nextReq []string
+			for _, id := range w.Exit.RequiresNodes {
+				target := id
+				if compSet[id] {
+					target = joinID
+				}
+				if !seenReq[target] {
+					seenReq[target] = true
+					nextReq = append(nextReq, target)
+				}
+			}
+			w.Exit.RequiresNodes = nextReq
+		}
+	}
+}
+
+// HasConcurrentWriter reports whether stageID is a non-join "write" stage in w that has
+// at least one other non-join "write" stage with no ordering path between them.
+func HasConcurrentWriter(w *Workflow, stageID string) bool {
+	if w == nil || stageID == "" {
+		return false
+	}
+	var target *WorkflowStage
+	for i := range w.Stages {
+		if w.Stages[i].ID == stageID {
+			target = &w.Stages[i]
+			break
+		}
+	}
+	if target == nil || target.Access != "write" || target.Kind == "join" {
+		return false
+	}
+	adj := make(map[string][]string, len(w.Stages))
+	for _, e := range w.Edges {
+		if e.WhenOutcome == "fail" {
+			continue
+		}
+		adj[e.From] = append(adj[e.From], e.To)
+	}
+	reaches := func(from, to string) bool {
+		seen := map[string]bool{}
+		stack := append([]string(nil), adj[from]...)
+		for len(stack) > 0 {
+			cur := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+			if cur == to {
+				return true
+			}
+			if seen[cur] {
+				continue
+			}
+			seen[cur] = true
+			stack = append(stack, adj[cur]...)
+		}
+		return false
+	}
+	for _, s := range w.Stages {
+		if s.ID == stageID || s.Access != "write" || s.Kind == "join" {
+			continue
+		}
+		if !reaches(stageID, s.ID) && !reaches(s.ID, stageID) {
+			return true
+		}
+	}
+	return false
+}
+
+// UnionWriteScopes merges write scopes across parallel siblings. If any sibling uses
+// inherit (Paths == nil), the union is inherit.
+func UnionWriteScopes(scopes []WorkflowScope) WorkflowScope {
+	seen := map[string]bool{}
+	var paths []string
+	for _, sc := range scopes {
+		if sc.Paths == nil {
+			return WorkflowScope{}
+		}
+		for _, p := range sc.Paths {
+			if !seen[p] {
+				seen[p] = true
+				paths = append(paths, p)
+			}
+		}
+	}
+	if len(paths) == 0 {
+		return WorkflowScope{}
+	}
+	return WorkflowScope{Paths: paths, explicit: true}
+}
+
+// SpliceReconcileStage inserts an intra-item <joinID>-reconcile build writer stage
+// immediately after joinID when join hits overlapping non-mirror conflicts.
+func SpliceReconcileStage(w *Workflow, joinID, prompt string, scope WorkflowScope) (*Workflow, string) {
+	raw, err := json.Marshal(w)
+	if err != nil {
+		return w, ""
+	}
+	var next Workflow
+	if err := json.Unmarshal(raw, &next); err != nil {
+		return w, ""
+	}
+	existing := make(map[string]bool, len(next.Stages))
+	joinIdx := -1
+	for i, s := range next.Stages {
+		existing[s.ID] = true
+		if s.ID == joinID {
+			joinIdx = i
+		}
+	}
+	if joinIdx < 0 {
+		return &next, ""
+	}
+	reconcileID := joinID + "-reconcile"
+	if existing[reconcileID] {
+		for n := 2; ; n++ {
+			cand := fmt.Sprintf("%s-reconcile-%d", joinID, n)
+			if !existing[cand] {
+				reconcileID = cand
+				break
+			}
+		}
+	}
+	reconcileStage := WorkflowStage{
+		ID:         reconcileID,
+		Kind:       "agent",
+		Seat:       "build",
+		Access:     "write",
+		WriteScope: scope,
+		Prompt:     prompt,
+	}
+	stages := make([]WorkflowStage, 0, len(next.Stages)+1)
+	stages = append(stages, next.Stages[:joinIdx+1]...)
+	stages = append(stages, reconcileStage)
+	stages = append(stages, next.Stages[joinIdx+1:]...)
+	next.Stages = stages
+
+	var edges []WorkflowEdge
+	for _, e := range next.Edges {
+		if e.From == joinID && e.WhenOutcome != "fail" {
+			e.From = reconcileID
+			e.RequiresPassed = nil
+		}
+		edges = append(edges, e)
+	}
+	edges = append(edges, WorkflowEdge{From: joinID, To: reconcileID, WhenOutcome: "fail"})
+	next.Edges = edges
+
+	if next.Exit != nil {
+		for i, id := range next.Exit.RequiresNodes {
+			if id == joinID {
+				next.Exit.RequiresNodes[i] = reconcileID
+			}
+		}
+	}
+	return &next, reconcileID
 }

@@ -3,6 +3,7 @@ package drain
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -12,13 +13,26 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/mschulkind-oss/tillr-drain/internal/boundary"
+	"github.com/mschulkind-oss/tillr-drain/internal/joinmerge"
 	"github.com/mschulkind-oss/tillr-drain/workflow"
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/definition"
+	"github.com/mschulkind-oss/tillr/event"
+	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/store"
 )
+
+const joinConflictKind = "drain.join-conflict"
+
+func init() {
+	if err := event.Register(joinConflictKind, Utility); err != nil {
+		panic(err)
+	}
+}
 
 type Workflow = workflow.Workflow
 type WorkflowWatch = workflow.WorkflowWatch
@@ -373,7 +387,7 @@ func (l *Loop) advanceNode(ctx context.Context, d Decision, base, report string)
 	next.Action, next.Reason = ActionDispatch, "workflow-next-node"
 	next.From, next.To = "running", "running"
 	runID := workflowNodeRunID(next, next.NodeIndex)
-	if stage.Kind == "command" {
+	if stage.Kind == "command" || stage.Kind == "join" {
 		next.RunRequest = commandRequest(stage, d.ItemID, d.LaneID, runID)
 	} else {
 		next.RunRequest = l.cfg.Policy.Request(d.ItemID, d.LaneID, runID, l.cfg.Policy.FirstBackend(d.ItemID, stage.Seat))
@@ -689,6 +703,9 @@ func (l *Loop) settleNodeFormat(ctx context.Context, d Decision, rec run.Record,
 	if evaluatorNode(d) {
 		return l.settleEvaluator(ctx, d, rec, base, result)
 	}
+	if joinStage(d) {
+		return l.settleJoinStage(ctx, d, rec, base, result)
+	}
 	stage := d.Workflow.Stages[d.NodeIndex]
 	quickWay, err := planTookQuickWay(l.cfg.Root, d)
 	if err != nil {
@@ -707,7 +724,7 @@ func (l *Loop) settleNodeFormat(ctx context.Context, d Decision, rec run.Record,
 	if stagedBase != "" {
 		base = stagedBase
 	}
-	target := l.laneTarget(d.LaneID)
+	target := l.nodeTarget(d)
 	var head, nodeBase, dirty string
 	if !l.nonLanding {
 		head, err = l.revParse(ctx, target, "HEAD")
@@ -828,7 +845,7 @@ func (l *Loop) settleNodeFormat(ctx context.Context, d Decision, rec run.Record,
 		// fence file, including for already dispatched runs.
 		var scopeFile string
 		if stage.WriteScope.Paths != nil {
-			scopeFile = filepath.Join(l.laneDirPath(d.LaneID), FenceFile)
+			scopeFile = filepath.Join(l.nodeMetaDir(d), FenceFile)
 		}
 		escape, err := l.changeFenceViolationAt(ctx, c, scopeFile, blocked)
 		if err != nil {
@@ -1098,8 +1115,14 @@ func (l *Loop) settleNodeFormat(ctx context.Context, d Decision, rec run.Record,
 		return true, err
 	}
 	if !l.nonLanding && effectiveAccess == "write" && head != "" && head != nodeBase {
-		if err := l.pinLane(ctx, d.LaneID, d.ItemID, rec.RunID, head); err != nil {
-			return true, err
+		if isParallelWriterDecision(d) {
+			if err := l.pinNodeCommit(ctx, d.LaneID, d.ItemID, stage.ID, rec.RunID, head); err != nil {
+				return true, err
+			}
+		} else {
+			if err := l.pinLane(ctx, d.LaneID, d.ItemID, rec.RunID, head); err != nil {
+				return true, err
+			}
 		}
 	}
 	if quickWay {
@@ -1130,6 +1153,9 @@ func (l *Loop) settleNodeFormat(ctx context.Context, d Decision, rec run.Record,
 			}
 			return false, nil
 		}
+	}
+	if isParallelWriterDecision(d) {
+		return true, nil
 	}
 	next, err := l.nextWorkflowNode(ctx, d)
 	if err != nil {
@@ -1162,4 +1188,308 @@ func (l *Loop) settleNodeFormat(ctx context.Context, d Decision, rec run.Record,
 		return true, err
 	}
 	return true, l.advanceNode(ctx, d, base, path)
+}
+
+func (l *Loop) runJoinStage(ctx context.Context, d Decision, at time.Time, result *LoopResult) (run.Record, string, error) {
+	joinStage := d.Workflow.Stages[d.NodeIndex]
+	primaryWT := l.laneTarget(d.LaneID)
+	repo := l.lanePinRepository(d.LaneID)
+
+	base, err := l.revParse(ctx, primaryWT, "HEAD")
+	if err != nil {
+		return run.Record{}, "", err
+	}
+
+	incomingWriters := map[string]bool{}
+	for _, e := range d.Workflow.Edges {
+		if e.To == joinStage.ID && e.WhenOutcome != "fail" {
+			incomingWriters[e.From] = true
+		}
+	}
+	var siblings []WorkflowStage
+	var siblingScopes []WorkflowScope
+	for _, s := range d.Workflow.Stages {
+		if incomingWriters[s.ID] && s.Access == "write" && s.Kind != "join" {
+			siblings = append(siblings, s)
+			siblingScopes = append(siblingScopes, s.WriteScope)
+		}
+	}
+
+	var changed []joinmerge.SiblingCommit
+	for _, s := range siblings {
+		pinRef := nodePinRef(d.ItemID, s.ID)
+		headSHA, pErr := l.git(ctx, repo, "rev-parse", "--verify", pinRef+"^{commit}")
+		if pErr != nil {
+			continue
+		}
+		headSHA = strings.TrimSpace(headSHA)
+		if headSHA == "" || headSHA == base {
+			continue
+		}
+		treeSHA, err := l.revParse(ctx, repo, headSHA+"^{tree}")
+		if err != nil {
+			return run.Record{}, "", err
+		}
+		metaRaw, err := l.git(ctx, repo, "log", "-1", "--format=%s%x00%B%x00%aI", headSHA)
+		if err != nil {
+			return run.Record{}, "", err
+		}
+		parts := strings.SplitN(metaRaw, "\x00", 3)
+		var subj, msg, adate string
+		if len(parts) > 0 {
+			subj = parts[0]
+		}
+		if len(parts) > 1 {
+			msg = parts[1]
+		}
+		if len(parts) > 2 {
+			adate = strings.TrimSpace(parts[2])
+		}
+		changed = append(changed, joinmerge.SiblingCommit{
+			NodeID:     s.ID,
+			PinRef:     pinRef,
+			HeadSHA:    headSHA,
+			TreeSHA:    treeSHA,
+			Subject:    subj,
+			Message:    msg,
+			AuthorDate: adate,
+		})
+	}
+
+	cleanupNodes := func() {
+		l.cleanupParallelNodeCheckouts(ctx, d.LaneID, d.ItemID, siblings)
+	}
+
+	var joinLog string
+	if len(changed) == 0 {
+		cleanupNodes()
+		joinLog = "join: 0 changed writers; staying at " + base + "\nRESULT: done\n"
+	} else if len(changed) == 1 {
+		if _, err := l.git(ctx, primaryWT, "reset", "--hard", changed[0].HeadSHA); err != nil {
+			return run.Record{}, "", err
+		}
+		if err := writeItemPin(ctx, l.git, repo, d.ItemID, changed[0].HeadSHA); err != nil {
+			return run.Record{}, "", err
+		}
+		cleanupNodes()
+		joinLog = fmt.Sprintf("join: fast-forwarded 1 changed writer (%s -> %s)\nRESULT: done\n", changed[0].NodeID, changed[0].HeadSHA)
+	} else {
+		mergeRes, err := joinmerge.FoldSiblingCommits(ctx, primaryWT, base, changed)
+		if err != nil {
+			return run.Record{}, "", err
+		}
+		if mergeRes.Clean {
+			finalTree := mergeRes.TreeSHA
+			hasManifest, mErr := l.hasPackManifest(ctx, primaryWT, base)
+			if mErr != nil {
+				return run.Record{}, "", mErr
+			}
+			if hasManifest {
+				if _, err := l.git(ctx, primaryWT, "read-tree", "--reset", "-u", mergeRes.TreeSHA); err != nil {
+					return run.Record{}, "", err
+				}
+				tmpCommit, err := joinmerge.CommitTreeWithRepoIdentity(ctx, primaryWT, mergeRes.TreeSHA, base, changed[0].AuthorDate, "join: temporary merge tree", l.git)
+				if err != nil {
+					return run.Record{}, "", err
+				}
+				if _, err := boundary.StagePackMirror(ctx, primaryWT, base, tmpCommit, d.ItemID, l.git); err != nil {
+					return run.Record{}, "", err
+				}
+				wtTree, err := l.git(ctx, primaryWT, "write-tree")
+				if err != nil {
+					return run.Record{}, "", err
+				}
+				finalTree = strings.TrimSpace(wtTree)
+			}
+			msg := joinmerge.CombinedCommitMessage(changed)
+			joinedSHA, err := joinmerge.CommitTreeWithRepoIdentity(ctx, primaryWT, finalTree, base, changed[0].AuthorDate, msg, l.git)
+			if err != nil {
+				return run.Record{}, "", err
+			}
+			if _, err := l.git(ctx, primaryWT, "reset", "--hard", joinedSHA); err != nil {
+				return run.Record{}, "", err
+			}
+			if err := writeItemPin(ctx, l.git, repo, d.ItemID, joinedSHA); err != nil {
+				return run.Record{}, "", err
+			}
+			cleanupNodes()
+			joinLog = fmt.Sprintf("join: merged %d changed writers into %s\nRESULT: done\n", len(changed), joinedSHA)
+		} else {
+			cleanupNodes()
+			if err := l.handleJoinConflict(ctx, d, joinStage.ID, base, changed, siblingScopes, mergeRes, at); err != nil {
+				return run.Record{}, "", err
+			}
+			joinLog = fmt.Sprintf("join: conflict across %d writers on %s\n", len(changed), strings.Join(mergeRes.ConflictingPaths, ", "))
+		}
+	}
+
+	code := 0
+	ts := at.UTC().Format(time.RFC3339)
+	rec := run.Record{
+		RunID:        d.RunRequest.RunID,
+		ItemID:       d.ItemID,
+		LaneID:       d.LaneID,
+		Backend:      "command",
+		State:        run.StateExited,
+		ExitCode:     &code,
+		EndCause:     run.EndNormalExit,
+		StartedAt:    ts,
+		FinishedAt:   ts,
+		ArtifactRefs: []run.ArtifactRef{},
+	}
+	if err := l.recordSyntheticRun(ctx, rec, at); err != nil {
+		return run.Record{}, "", err
+	}
+	return rec, joinLog, nil
+}
+
+func (l *Loop) cleanupParallelNodeCheckouts(ctx context.Context, laneID, itemID string, siblings []WorkflowStage) {
+	laneDir := l.laneDirPath(laneID)
+	scope := laneRootScope(l.cfg.LaneRoot)
+	for _, s := range siblings {
+		nd := nodeDir(l.cfg.LaneRoot, itemID, s.ID)
+		if laneDir != filepath.Join(l.cfg.LaneRoot, itemID) {
+			nd = filepath.Join(laneDir, "nodes", nodeKey(s.ID))
+		}
+		_ = os.RemoveAll(nd)
+		branch := nodeLaneBranch(scope, itemID, s.ID)
+		_, _ = l.git(ctx, l.cfg.Root, "update-ref", "-d", "refs/heads/"+branch)
+	}
+	_, _ = l.git(ctx, l.cfg.Root, "worktree", "prune")
+}
+
+func (l *Loop) handleJoinConflict(ctx context.Context, d Decision, joinID, base string, changed []joinmerge.SiblingCommit, scopes []WorkflowScope, mergeRes joinmerge.MergeResult, at time.Time) error {
+	prompt := joinmerge.FormatReconcilePrompt(ctx, l.cfg.Root, base, changed, mergeRes.ConflictingPaths, l.git)
+	unionScope := workflow.UnionWriteScopes(scopes)
+	s, err := store.Open(ctx, l.cfg.Store, true)
+	if err != nil {
+		return err
+	}
+	defer s.Close()
+
+	return s.WriteTx(ctx, func(tx *store.Tx) error {
+		if _, err := tx.Exec(`UPDATE node_runs SET outcome='handled-fail' WHERE run_id=?`, d.RunRequest.RunID); err != nil {
+			return err
+		}
+		var existingSeq int64
+		err := tx.Reader().QueryRow(
+			`SELECT seq FROM events WHERE kind=? AND json_valid(payload) AND json_extract(payload,'$.item_id')=? AND json_extract(payload,'$.conflict_key')=? LIMIT 1`,
+			joinConflictKind, d.ItemID, mergeRes.ConflictKey,
+		).Scan(&existingSeq)
+		if err != nil && err != sql.ErrNoRows {
+			return err
+		}
+		if err == nil {
+			conflict := item.Conflict{
+				ConflictID: "conflict-" + d.RunRequest.RunID,
+				ItemID:     d.ItemID,
+				RunID:      d.RunRequest.RunID,
+				Status:     "raised",
+				WaitingOn:  "design",
+				Text:       "repeated identical join conflict (" + mergeRes.ConflictKey + ") on " + strings.Join(mergeRes.ConflictingPaths, ", "),
+			}
+			return item.RecordConflict(tx, conflict, at.UTC())
+		}
+
+		recPayload := joinmerge.JoinConflictRecord{
+			ItemID:           d.ItemID,
+			Attempt:          d.Attempt,
+			JoinNodeID:       joinID,
+			ConflictKey:      mergeRes.ConflictKey,
+			BaseSHA:          base,
+			ConflictingPaths: mergeRes.ConflictingPaths,
+		}
+		if err := appendEffect(tx, joinConflictKind, d.RunRequest.RunID, recPayload, at.UTC()); err != nil {
+			return err
+		}
+
+		beforeJSON, _ := json.Marshal(d.Workflow)
+		nextWF, reconcileID := workflow.SpliceReconcileStage(d.Workflow, joinID, prompt, unionScope)
+		afterJSON, _ := json.Marshal(nextWF)
+		if _, err := tx.Exec(
+			`INSERT INTO graph_revisions(item_id,attempt,proposing_run,proposing_node,target,workflow,rule,detail,before_graph,after_graph,before_nodes,after_nodes,recorded_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			d.ItemID, d.Attempt, d.RunRequest.RunID, joinID, reconcileID, "", "join-conflict-reconcile", strings.Join(mergeRes.ConflictingPaths, ", "),
+			string(beforeJSON), string(afterJSON), len(d.Workflow.Stages), len(nextWF.Stages), at.UTC().UnixMilli(),
+		); err != nil {
+			return err
+		}
+		nextDec := d
+		nextDec.Workflow = nextWF
+		nextDec.Workflow.Revision++
+		work := &pendingWork{Decision: nextDec, BaseSHA: base, LoopID: l.currentSessionID()}
+		return appendEffect(tx, graphChangedKind, d.RunRequest.RunID, work, at.UTC())
+	})
+}
+
+func (l *Loop) recordSyntheticRun(ctx context.Context, rec run.Record, at time.Time) error {
+	raw, err := json.Marshal(rec)
+	if err != nil {
+		return err
+	}
+	s, err := store.Open(ctx, l.cfg.Store, true)
+	if err != nil {
+		return err
+	}
+	defer s.Close()
+	return s.WriteTx(ctx, func(tx *store.Tx) error {
+		_, err := run.Apply(ctx, tx, record.Envelope{
+			RecordVersion: 1,
+			Kind:          run.RecordKind,
+			ID:            rec.RunID,
+			CreatedAt:     at.UTC(),
+			Payload:       raw,
+		})
+		return err
+	})
+}
+
+func (l *Loop) settleJoinStage(ctx context.Context, d Decision, rec run.Record, base string, result *LoopResult) (bool, error) {
+	var outcome string
+	var hasDesignConflict bool
+	var latestWF *Workflow
+	if err := l.readStore(ctx, func(r *store.Reader) error {
+		if err := r.QueryRow(`SELECT outcome FROM node_runs WHERE run_id=?`, d.RunRequest.RunID).Scan(&outcome); err != nil {
+			return err
+		}
+		var cnt int
+		if err := r.QueryRow(`SELECT COUNT(*) FROM events WHERE kind='item.conflict' AND json_extract(payload,'$.conflict_id')=?`, "conflict-"+d.RunRequest.RunID).Scan(&cnt); err != nil {
+			return err
+		}
+		hasDesignConflict = cnt > 0
+		if works, err := readPending(r); err == nil {
+			if w := works[d.ItemID]; w != nil && w.Decision.Workflow != nil {
+				latestWF = w.Decision.Workflow
+			}
+		}
+		return nil
+	}); err != nil {
+		return true, err
+	}
+	if latestWF != nil {
+		d.Workflow = latestWF
+	}
+	if hasDesignConflict {
+		if stop := l.abandon(ctx, d.LaneID, d.RunRequest.RunID, base, "repeated join conflict"); stop != "" {
+			return true, retainedAfter(d.LaneID, stop)
+		}
+		return true, l.markExamined(ctx, d)
+	}
+	if outcome != "handled-fail" {
+		if err := l.nodeOutcome(ctx, d, "passed"); err != nil {
+			return true, err
+		}
+	}
+	next, err := l.nextWorkflowNode(ctx, d)
+	if err != nil {
+		return true, err
+	}
+	primaryWT := l.laneTarget(d.LaneID)
+	head, err := l.revParse(ctx, primaryWT, "HEAD")
+	if err != nil {
+		return true, err
+	}
+	if next < 0 {
+		return l.finishWorkflow(ctx, d, rec, base, head, result)
+	}
+	return true, l.advanceNode(ctx, d, base, "")
 }

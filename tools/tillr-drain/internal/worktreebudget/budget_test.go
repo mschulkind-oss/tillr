@@ -87,3 +87,31 @@ func TestFormatBytes(t *testing.T) {
 		t.Fatalf("FormatBytes(4GiB) = %q", got)
 	}
 }
+
+func TestMeasureLaneRootIncludesNodeCheckoutsAndScratch(t *testing.T) {
+	laneRoot := t.TempDir()
+	nodeDir := filepath.Join(laneRoot, "item-a", "nodes", "work-p1-12345678")
+	if err := os.MkdirAll(filepath.Join(nodeDir, "worktree"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(nodeDir, "worktree", "f.txt"), make([]byte, 120), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(nodeDir, "scratch", "run-1"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(nodeDir, "scratch", "run-1", "out.bin"), make([]byte, 300), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	snap, err := MeasureLaneRoot(laneRoot, map[string]bool{"item-a": true})
+	if err != nil {
+		t.Fatalf("MeasureLaneRoot: %v", err)
+	}
+	if snap.OnDisk != 1 || snap.InUse != 1 || snap.Idle != 0 {
+		t.Fatalf("counts = (onDisk=%d, inUse=%d, idle=%d), want (1, 1, 0)", snap.OnDisk, snap.InUse, snap.Idle)
+	}
+	if snap.WorktreeBytes != 120 || snap.ScratchBytes != 300 || snap.TotalBytes != 420 {
+		t.Fatalf("bytes = (wt=%d, sc=%d, total=%d), want (120, 300, 420)", snap.WorktreeBytes, snap.ScratchBytes, snap.TotalBytes)
+	}
+}

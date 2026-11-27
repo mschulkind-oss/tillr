@@ -224,3 +224,113 @@ func TestUnitValidateEvaluatorAndExit(t *testing.T) {
 		t.Fatalf("expected workflow-exit, got %v", err)
 	}
 }
+
+func TestDecodeWorkflowJoin(t *testing.T) {
+	valid := `{"name":"parallel","version":1,"stages":[
+		{"id":"a","kind":"agent","seat":"build","access":"write","write_scope":["docs/"]},
+		{"id":"b","kind":"agent","seat":"build","access":"write","write_scope":["tests/"]},
+		{"id":"join","kind":"join","access":"write"}
+	],"edges":[{"from_node":"a","to_node":"join"},{"from_node":"b","to_node":"join"}]}`
+	w, err := DecodeWorkflow([]byte(valid), "parallel@v1")
+	if err != nil {
+		t.Fatalf("DecodeWorkflow valid join failed: %v", err)
+	}
+	if len(w.Stages) != 3 || w.Stages[2].Kind != "join" || w.Stages[2].Access != "write" {
+		t.Fatalf("unexpected stages: %+v", w.Stages)
+	}
+
+	badSeat := `{"name":"bad","version":1,"stages":[{"id":"join","kind":"join","seat":"build","access":"write"}],"edges":[]}`
+	if _, err := DecodeWorkflow([]byte(badSeat), "bad@v1"); err == nil || !strings.Contains(err.Error(), "workflow-kind") {
+		t.Fatalf("expected workflow-kind for join with seat, got %v", err)
+	}
+	badAccess := `{"name":"bad","version":1,"stages":[{"id":"join","kind":"join","access":"read_only"}],"edges":[]}`
+	if _, err := DecodeWorkflow([]byte(badAccess), "bad@v1"); err == nil || !strings.Contains(err.Error(), "workflow-kind") {
+		t.Fatalf("expected workflow-kind for read_only join, got %v", err)
+	}
+}
+
+func TestWorkflowPieceAfterAndJoinSynthesis(t *testing.T) {
+	root := t.TempDir()
+	wfDir := filepath.Join(root, "config", "tillr", "workflows")
+	if err := os.MkdirAll(wfDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	bpPath := filepath.Join(wfDir, "build-pieces@v1.json")
+	bpJSON := `{
+		"name": "build-pieces",
+		"version": 1,
+		"args": { "pieces": { "type": "pieces", "most": 12 } },
+		"stages": [{ "id": "piece", "kind": "agent", "seat": "build", "access": "read_only", "repeat": "pieces" }],
+		"edges": [],
+		"exit": { "requires_nodes": ["piece"], "requires_candidate": "commit_required" }
+	}`
+	if err := os.WriteFile(bpPath, []byte(bpJSON), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("omitted after stays sequential with no join", func(t *testing.T) {
+		args := map[string]any{
+			"pieces": []any{
+				map[string]any{"id": "p1", "seat": "build", "access": "write", "write_scope": []string{"docs/"}, "prompt": "one"},
+				map[string]any{"id": "p2", "seat": "build", "access": "write", "write_scope": []string{"tests/"}, "prompt": "two"},
+			},
+		}
+		w, err := ExpandWorkflow(root, bpPath, nil, map[string]bool{}, args, nil)
+		if err != nil {
+			t.Fatalf("ExpandWorkflow failed: %v", err)
+		}
+		if len(w.Stages) != 2 {
+			t.Fatalf("expected 2 stages (no join), got %d: %+v", len(w.Stages), w.Stages)
+		}
+		if len(w.Edges) != 1 || w.Edges[0].From != "piece-p1" || w.Edges[0].To != "piece-p2" {
+			t.Fatalf("expected sequential edge piece-p1 -> piece-p2, got %+v", w.Edges)
+		}
+	})
+
+	t.Run("explicit after empty fan-out synthesizes join", func(t *testing.T) {
+		args := map[string]any{
+			"pieces": []any{
+				map[string]any{"id": "p1", "seat": "build", "access": "write", "after": []string{}, "write_scope": []string{"docs/"}, "prompt": "one"},
+				map[string]any{"id": "p2", "seat": "build", "access": "write", "after": []string{}, "write_scope": []string{"tests/"}, "prompt": "two"},
+				map[string]any{"id": "p3", "seat": "build", "access": "write", "after": []string{"p1", "p2"}, "write_scope": []string{"README.md"}, "prompt": "three"},
+			},
+		}
+		w, err := ExpandWorkflow(root, bpPath, nil, map[string]bool{}, args, nil)
+		if err != nil {
+			t.Fatalf("ExpandWorkflow failed: %v", err)
+		}
+		var joinID string
+		for _, s := range w.Stages {
+			if s.Kind == "join" {
+				joinID = s.ID
+			}
+		}
+		if joinID == "" {
+			t.Fatalf("expected synthesized join stage, got %+v", w.Stages)
+		}
+		edgeSet := map[string]bool{}
+		for _, e := range w.Edges {
+			edgeSet[e.From+"->"+e.To] = true
+		}
+		for _, want := range []string{"piece-p1->" + joinID, "piece-p2->" + joinID, joinID + "->piece-p3"} {
+			if !edgeSet[want] {
+				t.Fatalf("missing edge %s in %+v", want, w.Edges)
+			}
+		}
+		if !reflect.DeepEqual(w.Exit.RequiresNodes, []string{"piece-p3"}) {
+			t.Fatalf("expected requires_nodes [piece-p3], got %v", w.Exit.RequiresNodes)
+		}
+	})
+
+	t.Run("cycle in after is rejected", func(t *testing.T) {
+		args := map[string]any{
+			"pieces": []any{
+				map[string]any{"id": "p1", "seat": "build", "access": "write", "after": []string{"p2"}, "write_scope": []string{"docs/"}, "prompt": "one"},
+				map[string]any{"id": "p2", "seat": "build", "access": "write", "after": []string{"p1"}, "write_scope": []string{"tests/"}, "prompt": "two"},
+			},
+		}
+		if _, err := ExpandWorkflow(root, bpPath, nil, map[string]bool{}, args, nil); err == nil || !strings.Contains(err.Error(), "cycle") {
+			t.Fatalf("expected cycle error, got %v", err)
+		}
+	})
+}

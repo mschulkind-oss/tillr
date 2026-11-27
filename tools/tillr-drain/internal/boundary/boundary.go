@@ -423,7 +423,7 @@ func trunkHistoryRef(ref string) bool {
 // lost. A sibling lane's landing writes both while this bracket's run is in flight.
 func LanderRef(ref string) bool {
 	// The heavy runner owns the proof ref, just as the lander owns its receipt refs.
-	return ref == heavyrun.GreenRef || strings.HasPrefix(ref, "refs/tillr/runs/") || strings.HasPrefix(ref, "refs/tillr/landed/") || strings.HasPrefix(ref, drainmodel.ItemPinPrefix) || strings.HasPrefix(ref, drainmodel.ItemPinLongPrefix) || strings.HasPrefix(ref, preserved.Prefix) || strings.HasPrefix(ref, EndedWorkPrefix) || strings.HasPrefix(ref, ownerRecoveryPrefix)
+	return ref == heavyrun.GreenRef || strings.HasPrefix(ref, "refs/tillr/runs/") || strings.HasPrefix(ref, "refs/tillr/landed/") || strings.HasPrefix(ref, drainmodel.ItemPinPrefix) || strings.HasPrefix(ref, drainmodel.ItemPinLongPrefix) || strings.HasPrefix(ref, drainmodel.NodePinPrefix) || strings.HasPrefix(ref, drainmodel.NodePinLongPrefix) || strings.HasPrefix(ref, preserved.Prefix) || strings.HasPrefix(ref, EndedWorkPrefix) || strings.HasPrefix(ref, ownerRecoveryPrefix)
 }
 
 // ownerRecoveryPrefix is the lander's recovery copy of the owner's uncommitted content on the
@@ -454,7 +454,7 @@ func compareRunRefs(before, after *Boundary) []Violation {
 	landed := landedDuring(before, after)
 	places := loopPlacesOf(before, after)
 	return refViolations(before, after, func(name string) bool {
-		return excused[name] || RunRefExcused(name, before) || places.deskBranch(name) || landedPatchMove(name, after, landed)
+		return excused[name] || RunRefExcused(name, before) || places.deskBranch(name) || places.nodeBranch(name) || landedPatchMove(name, after, landed)
 	})
 }
 
@@ -592,8 +592,35 @@ func (p loopPlaces) worktree(wt Worktree) bool {
 		return wt.Branch == ""
 	case base == run.WorktreeDir && filepath.Dir(dir) == root && strings.HasPrefix(filepath.Base(dir), "desk-"):
 		return p.scope != "" && wt.Branch == "refs/heads/tillr/"+p.scope+"/"+filepath.Base(dir)
+	case p.nodeWorktree(wt, root):
+		return true
 	}
 	return false
+}
+
+func (p loopPlaces) nodeWorktree(wt Worktree, root string) bool {
+	if p.scope == "" || filepath.Base(wt.Path) != run.WorktreeDir {
+		return false
+	}
+	nodeDir := filepath.Dir(wt.Path)
+	nodesDir := filepath.Dir(nodeDir)
+	itemDir := filepath.Dir(nodesDir)
+	if filepath.Base(nodesDir) != "nodes" || filepath.Dir(itemDir) != root {
+		return false
+	}
+	return strings.HasPrefix(wt.Branch, "refs/heads/tillr/"+p.scope+"-nodes/")
+}
+
+func (p loopPlaces) nodeBranch(ref string) bool {
+	if p.scope == "" {
+		return false
+	}
+	rest, ok := strings.CutPrefix(ref, "refs/heads/tillr/"+p.scope+"-nodes/")
+	if !ok {
+		return false
+	}
+	itemKey, nodeKey, hasSlash := strings.Cut(rest, "/")
+	return hasSlash && itemKey != "" && nodeKey != "" && !strings.Contains(nodeKey, "/")
 }
 
 // deskBranch answers whether ref is the lane branch of a review-comment desk lane in

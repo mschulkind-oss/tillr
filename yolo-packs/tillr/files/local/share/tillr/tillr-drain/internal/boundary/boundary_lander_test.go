@@ -114,3 +114,25 @@ func TestARealLandingDuringASiblingRunConvictsNothing(t *testing.T) {
 		t.Fatalf("a sibling's real landing (refs %v) convicted the run: %v", written, violations)
 	}
 }
+
+func TestBoundaryExcusesNodeCheckoutsAndNodeRefs(t *testing.T) {
+	if !LanderRef("refs/tillr/item-nodes/item-a/work-p1-12345678") {
+		t.Fatal("LanderRef should excuse NodePinPrefix")
+	}
+	if !LanderRef("refs/tillr/item-nodes-long/abcdef") {
+		t.Fatal("LanderRef should excuse NodePinLongPrefix")
+	}
+	places := loopPlaces{root: "/tmp/items", scope: "items-12345678"}
+	if !places.nodeBranch("refs/heads/tillr/items-12345678-nodes/item-a/work-p1-12345678") {
+		t.Fatal("loopPlaces.nodeBranch should excuse NodeLaneBranch")
+	}
+	if places.nodeBranch("refs/heads/tillr/items-12345678/item-a") {
+		t.Fatal("loopPlaces.nodeBranch should not match non-node item branch")
+	}
+	if !places.worktree(Worktree{
+		Path:   "/tmp/items/item-a/nodes/work-p1-12345678/worktree",
+		Branch: "refs/heads/tillr/items-12345678-nodes/item-a/work-p1-12345678",
+	}) {
+		t.Fatal("loopPlaces.worktree should excuse node checkout")
+	}
+}

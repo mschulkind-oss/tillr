@@ -93,7 +93,9 @@ func TestStagingKeepsEachRunsBriefFenceAndBaseSHAAfterTheLaneMovesOn(t *testing.
 		"yolo-packs/tillr/files/local/share/tillr/tillr-drain/\n" +
 		"yolo-packs/tillr/skills/tillr-operating/SKILL.md\n" +
 		"tools/tillr/tillrdocs/\n" +
-		"yolo-packs/tillr/files/local/share/tillr/tillr/tillrdocs/"
+		"yolo-packs/tillr/files/local/share/tillr/tillr/tillrdocs/\n" +
+		"tools/tillr/buildstamp/support-revision\n" +
+		"yolo-packs/tillr/files/local/share/tillr/tillr/buildstamp/support-revision"
 	if fence := strings.TrimSpace(kept[drain.FenceFile]); fence != wantFence {
 		t.Fatalf("the first run's kept fence is %q, want its own staged scope %q", fence, wantFence)
 	}
@@ -109,7 +111,9 @@ func TestStagingKeepsEachRunsBriefFenceAndBaseSHAAfterTheLaneMovesOn(t *testing.
 		"yolo-packs/tillr/files/local/share/tillr/tillr-view/\n" +
 		"yolo-packs/tillr/skills/tillr-operating/SKILL.md\n" +
 		"tools/tillr/tillrdocs/\n" +
-		"yolo-packs/tillr/files/local/share/tillr/tillr/tillrdocs/"
+		"yolo-packs/tillr/files/local/share/tillr/tillr/tillrdocs/\n" +
+		"tools/tillr/buildstamp/support-revision\n" +
+		"yolo-packs/tillr/files/local/share/tillr/tillr/buildstamp/support-revision"
 	if fence := strings.TrimSpace(moved[drain.FenceFile]); fence != wantMoved {
 		t.Fatalf("the second run's kept fence is %q, want its own staged scope %q", fence, wantMoved)
 	}

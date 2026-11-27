@@ -110,6 +110,7 @@ type WorkflowPiece struct {
 	ID         string            `json:"id"`
 	Seat       string            `json:"seat"`
 	Access     string            `json:"access"`
+	After      *[]string         `json:"after,omitempty"`
 	WriteScope []string          `json:"write_scope,omitempty"`
 	Prompt     string            `json:"prompt"`
 	Outputs    map[string]string `json:"outputs,omitempty"`
@@ -135,6 +136,24 @@ func ParseWorkflowPiece(root string, value any) (WorkflowPiece, error) {
 	d.DisallowUnknownFields()
 	if err := d.Decode(&p); err != nil {
 		return p, err
+	}
+	if _, hasAfter := fields["after"]; hasAfter && p.After == nil {
+		return p, fmt.Errorf("piece after must be a string list")
+	}
+	if p.After != nil {
+		seenAfter := make(map[string]bool, len(*p.After))
+		for _, dep := range *p.After {
+			if !OutputNameValid(dep) {
+				return p, fmt.Errorf("invalid piece after id %q", dep)
+			}
+			if dep == p.ID {
+				return p, fmt.Errorf("piece %s cannot depend on itself", p.ID)
+			}
+			if seenAfter[dep] {
+				return p, fmt.Errorf("duplicate piece after id %q", dep)
+			}
+			seenAfter[dep] = true
+		}
 	}
 	if !OutputNameValid(p.ID) || !item.ValidSeatName(p.Seat) || strings.ContainsRune(p.Prompt, 0) {
 		return p, fmt.Errorf("invalid piece id, seat or prompt")

@@ -48,3 +48,43 @@ func TestItemPinRefNormalAndFallback(t *testing.T) {
 		}
 	}
 }
+
+func TestNodeKeyPinRefAndBranch(t *testing.T) {
+	key := NodeKey("work/piece-a")
+	if strings.Contains(key, "/") || len(key) > MaxRefComponent {
+		t.Fatalf("NodeKey(%q) = %q, must be single component <= %d", "work/piece-a", key, MaxRefComponent)
+	}
+	if !strings.HasPrefix(key, "work-piece-a-") {
+		t.Fatalf("NodeKey(%q) = %q, expected sanitized prefix", "work/piece-a", key)
+	}
+	if NodeKey("work/piece-a") != NodeKey("work/piece-a") {
+		t.Fatal("NodeKey is not deterministic")
+	}
+	if NodeKey("work/piece-a") == NodeKey("work-piece-a") {
+		t.Fatal("NodeKey hash suffix failed to disambiguate slash vs dash")
+	}
+
+	ref := NodePinRef("item-a", "work/piece-a")
+	if !strings.HasPrefix(ref, NodePinPrefix+"item-a/") {
+		t.Fatalf("NodePinRef = %q", ref)
+	}
+	if out, err := exec.Command("git", "check-ref-format", ref).CombinedOutput(); err != nil {
+		t.Fatalf("git check-ref-format %q failed: %v (%s)", ref, err, strings.TrimSpace(string(out)))
+	}
+
+	longRef := NodePinRef("item/nested", "work/piece-a")
+	if !strings.HasPrefix(longRef, NodePinLongPrefix) {
+		t.Fatalf("NodePinRef fallback = %q", longRef)
+	}
+	if out, err := exec.Command("git", "check-ref-format", longRef).CombinedOutput(); err != nil {
+		t.Fatalf("git check-ref-format %q failed: %v (%s)", longRef, err, strings.TrimSpace(string(out)))
+	}
+
+	branch := NodeLaneBranch("items-12345678", "item-a", "work/piece-a")
+	if !strings.HasPrefix(branch, "tillr/items-12345678-nodes/item-a/") {
+		t.Fatalf("NodeLaneBranch = %q", branch)
+	}
+	if out, err := exec.Command("git", "check-ref-format", "refs/heads/"+branch).CombinedOutput(); err != nil {
+		t.Fatalf("git check-ref-format %q failed: %v (%s)", branch, err, strings.TrimSpace(string(out)))
+	}
+}

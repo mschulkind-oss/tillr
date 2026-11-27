@@ -100,10 +100,21 @@ const (
 	maxRefComponent               = drainmodel.MaxRefComponent
 	itemPinPrefix                 = drainmodel.ItemPinPrefix
 	itemPinLongPrefix             = drainmodel.ItemPinLongPrefix
+	nodePinPrefix                 = drainmodel.NodePinPrefix
+	nodePinLongPrefix             = drainmodel.NodePinLongPrefix
 	pinTimeout                    = drainmodel.PinTimeout
 	generationDDL                 = drainmodel.GenerationDDL
 	rewriteAcceptedKind           = drainmodel.RewriteAcceptedKind
 	acceptedTrunkPrefix           = drainmodel.AcceptedTrunkPrefix
+)
+
+var (
+	nodeKey          = drainmodel.NodeKey
+	nodePinRef       = drainmodel.NodePinRef
+	nodeDir          = drainmodel.NodeDir
+	nodeWorktreePath = drainmodel.NodeWorktreePath
+	nodeLaneBranch   = drainmodel.NodeLaneBranch
+	writeNodePin     = drainmodel.WriteNodePin
 )
 
 // Variables re-exported from internal/drainmodel.

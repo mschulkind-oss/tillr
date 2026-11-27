@@ -344,7 +344,8 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 		endRead()
 		return err
 	}
-	if spec.WorkingDir != WorktreeDir {
+	isNodeCheckout := strings.HasPrefix(spec.WorkingDir, "nodes/") && !strings.Contains(spec.WorkingDir, "..")
+	if spec.WorkingDir != WorktreeDir && !isNodeCheckout {
 		endRead()
 		return Usagef("the request's working_dir is %q, want %q: the lane layout the brief template fixes puts the run in <lane-dir>/%s, and a request naming another directory would run the adapter outside the worktree staging prepared",
 			spec.WorkingDir, WorktreeDir, WorktreeDir)
@@ -354,7 +355,11 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 		now = s.Now
 	}
 	laneDir := filepath.Join(s.LaneRoot, spec.LaneID)
-	worktree := filepath.Join(laneDir, WorktreeDir)
+	primaryWorktree := filepath.Join(laneDir, WorktreeDir)
+	worktree := primaryWorktree
+	if isNodeCheckout {
+		worktree = filepath.Join(laneDir, spec.WorkingDir)
+	}
 
 	recorded, err := s.readItem(ctx, spec.ItemID)
 	if err != nil {
@@ -376,7 +381,7 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 	if isFork {
 		recorded.AllowedPaths = []string{fork.Path + "/"}
 	}
-	target, targetKind := worktree, "lane worktree"
+	target, targetKind := primaryWorktree, "lane worktree"
 	baseSHA := spec.BaseSHA
 	if isFork {
 		if err := s.ensureForkCheckout(ctx, spec, fork); err != nil {
@@ -411,9 +416,9 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 	itemBaseSHA := baseSHA
 	worktreeSpec := spec
 	if !isFork && !isPoolLaneName(spec.LaneID) {
-		if _, statErr := os.Stat(worktree); os.IsNotExist(statErr) {
+		if _, statErr := os.Stat(primaryWorktree); os.IsNotExist(statErr) {
 			if spec.Continue {
-				if _, rErr := s.restoreCollectedWorktree(ctx, spec, laneDir, worktree); rErr != nil {
+				if _, rErr := s.restoreCollectedWorktree(ctx, spec, laneDir, primaryWorktree); rErr != nil {
 					endRead()
 					return Externalf("restoring collected worktree for %s: %v", spec.ItemID, rErr)
 				}
@@ -488,10 +493,14 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 	endRead()
 	endBrief := timeHandoffPhase(ctx, "stage_brief")
 	// The brief names the same absolute scratch directory `run exec` exports.
-	durableDir, err := filepath.Abs(run.DurableDir(laneDir, spec.RunID))
+	durableBase := laneDir
+	if isNodeCheckout {
+		durableBase = filepath.Dir(worktree)
+	}
+	durableDir, err := filepath.Abs(run.DurableDir(durableBase, spec.RunID))
 	if err != nil {
 		endBrief()
-		return Internalf("resolving the run's scratch directory under %s: %v", laneDir, err)
+		return Internalf("resolving the run's scratch directory under %s: %v", durableBase, err)
 	}
 	requestWords, err := requestWordsFor(ctx, s.Store, spec.ItemID)
 	if err != nil {
@@ -622,7 +631,9 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 	}
 	capability := run.EndingFooter
 	metadataDir := laneDir
-	if spec.Isolated {
+	if isNodeCheckout {
+		metadataDir = filepath.Dir(worktree)
+	} else if spec.Isolated {
 		metadataDir = run.NodeDir(laneDir, spec.RunID)
 	}
 	if spec.SessionID != "" {
@@ -707,7 +718,15 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 	endBrief()
 	if !spec.Continue {
 		endWT := timeHandoffPhase(ctx, "ensure_worktree")
-		err := s.ensureWorktree(ctx, worktreeSpec, laneDir, worktree)
+		err := s.ensureWorktree(ctx, worktreeSpec, laneDir, primaryWorktree)
+		endWT()
+		if err != nil {
+			return err
+		}
+	}
+	if isNodeCheckout && spec.Node != nil {
+		endWT := timeHandoffPhase(ctx, "ensure_node_worktree")
+		err := s.ensureNodeWorktree(ctx, spec.ItemID, spec.Node.ID, worktree, baseSHA)
 		endWT()
 		if err != nil {
 			return err
@@ -1091,6 +1110,32 @@ func (s *LaneStager) restoreCollectedWorktree(ctx context.Context, spec StageSpe
 		return false, err
 	}
 	return true, nil
+}
+
+func (s *LaneStager) ensureNodeWorktree(ctx context.Context, itemID, nodeID, worktree, baseSHA string) error {
+	if err := authorizeWorktreeRoot(s.Root); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(worktree), 0o755); err != nil {
+		return Externalf("creating node directory %s: %v", filepath.Dir(worktree), err)
+	}
+	branch := nodeLaneBranch(laneRootScope(s.LaneRoot), itemID, nodeID)
+	if _, err := os.Stat(filepath.Join(worktree, ".git")); err == nil {
+		if _, err := s.git(ctx, worktree, "checkout", "-f", "-B", branch, baseSHA); err == nil {
+			if _, cleanErr := s.git(ctx, worktree, "clean", "-fdx"); cleanErr != nil {
+				return cleanErr
+			}
+			return nil
+		}
+		if err := os.RemoveAll(worktree); err != nil {
+			return Externalf("removing stale node worktree %s: %v", worktree, err)
+		}
+	}
+	_, _ = s.git(ctx, s.Root, "worktree", "prune")
+	if _, err := s.git(ctx, s.Root, "worktree", "add", "-f", "-B", branch, worktree, baseSHA); err != nil {
+		return Externalf("staging node worktree %s at %s: %v", worktree, baseSHA, err)
+	}
+	return nil
 }
 
 func (s *LaneStager) ensureWorktree(ctx context.Context, spec StageSpec, laneDir, worktree string) error {

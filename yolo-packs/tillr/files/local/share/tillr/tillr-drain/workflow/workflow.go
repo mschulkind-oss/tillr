@@ -29,6 +29,14 @@ const (
 	tillrDocsTest       = "tools/tillr/tillrdocs/"
 	tillrDocsTestMirror = "yolo-packs/tillr/files/local/share/tillr/tillr/tillrdocs/"
 	museBackendTest     = "tests/tillr-muse-backend.test.py"
+
+	// The generated paths `just pack-sync` writes whenever a pack-delivered tree changes: the
+	// support revision stamp and its pack copy, and the pack copy of the tracked workflows.
+	supportRevisionPath   = "tools/tillr/buildstamp/support-revision"
+	supportRevisionMirror = "yolo-packs/tillr/files/local/share/tillr/tillr/buildstamp/support-revision"
+	workflowsDir          = "config/tillr/workflows"
+	workflowsMirror       = "yolo-packs/tillr/files/local/share/tillr/workflows/"
+	packProgramsPrefix    = "yolo-packs/tillr/programs"
 )
 
 // SeatPolicy describes the seat mappings and read-only constraints enforced
@@ -206,8 +214,8 @@ func DecodeWorkflow(raw []byte, ref string) (*Workflow, error) {
 				}
 			}
 		}
-		if s.Kind != "agent" && s.Kind != "command" && s.Kind != "workflow" {
-			return nil, fmt.Errorf("workflow-kind: %s: expected agent, command or workflow", s.ID)
+		if s.Kind != "agent" && s.Kind != "command" && s.Kind != "workflow" && s.Kind != "join" {
+			return nil, fmt.Errorf("workflow-kind: %s: expected agent, command, workflow or join", s.ID)
 		}
 		if s.Kind == "workflow" {
 			if !item.WorkflowRefValid(s.Workflow) {
@@ -229,6 +237,9 @@ func DecodeWorkflow(raw []byte, ref string) (*Workflow, error) {
 		}
 		if s.Kind == "command" && (s.CommandRef == "" || s.Seat != "") {
 			return nil, fmt.Errorf("workflow-kind: %s: command needs command_ref and no seat", s.ID)
+		}
+		if s.Kind == "join" && (s.CommandRef != "" || s.Flags != nil || s.Seat != "" || s.Access != "write") {
+			return nil, fmt.Errorf("workflow-kind: %s: join requires access write and no seat or command_ref", s.ID)
 		}
 		if s.Kind == "agent" && (s.CommandRef != "" || s.Flags != nil) {
 			return nil, fmt.Errorf("workflow-command: agent cannot name command flags")
@@ -851,7 +862,16 @@ func FencePaths(allowed []string) []string {
 		// A fence spells a directory with or without its trailing slash and means the same
 		// path either way, so the rules below match on the path and not on the spelling.
 		named := strings.TrimSuffix(p, "/")
-		if named == strings.TrimSuffix(tillrDocsTest, "/") {
+		if named == supportRevisionPath {
+			add(supportRevisionMirror)
+		} else if named == workflowsDir || strings.HasPrefix(named, workflowsDir+"/") {
+			add(workflowsMirror)
+			add(supportRevisionPath)
+			add(supportRevisionMirror)
+		} else if strings.HasPrefix(named, packProgramsPrefix) {
+			add(supportRevisionPath)
+			add(supportRevisionMirror)
+		} else if named == strings.TrimSuffix(tillrDocsTest, "/") {
 			add(tillrDocsTestMirror)
 		} else if module, ok := tillrModule(named); ok {
 			add("yolo-packs/tillr/files/local/share/tillr/" + module + "/")
@@ -861,9 +881,20 @@ func FencePaths(allowed []string) []string {
 			add(tillrSkillPath)
 			add(tillrDocsTest)
 			add(tillrDocsTestMirror)
+			add(supportRevisionPath)
+			add(supportRevisionMirror)
 			if module == "tillr-loop" {
 				add("tools/tillr-loop/")
 			}
+		}
+		if named == workflowsDir || strings.HasPrefix(named, workflowsDir+"/") {
+			add(workflowsMirror)
+			add(supportRevisionPath)
+			add(supportRevisionMirror)
+		}
+		if named == packProgramsPrefix || strings.HasPrefix(named, packProgramsPrefix+"/") {
+			add(supportRevisionPath)
+			add(supportRevisionMirror)
 		}
 		if named == "tools/tillr-run/backends" || strings.HasPrefix(named, "tools/tillr-run/backends/") {
 			add(museBackendTest)

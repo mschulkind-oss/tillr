@@ -2948,6 +2948,10 @@ func (l *Loop) launchRun(ctx context.Context, d Decision, at time.Time, watch *l
 						completion.result = &local
 					}
 				}
+			} else if joinStage(d) {
+				finishStartHandoff(runCtx)
+				record, log, err = l.runJoinStage(runCtx, d, at, &local)
+				completion.result = &local
 			} else if len(d.Parallel) > 0 {
 				finishStartHandoff(runCtx)
 				err = l.runParallel(runCtx, d, &local, completion.timing, watched)

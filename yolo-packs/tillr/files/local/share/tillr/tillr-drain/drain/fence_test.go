@@ -32,6 +32,8 @@ func TestFencePathsDeriveTheGateCompanions(t *testing.T) {
 	docsTest := "tools/tillr/tillrdocs/"
 	docsTestMirror := "yolo-packs/tillr/files/local/share/tillr/tillr/tillrdocs/"
 	mirror := "yolo-packs/tillr/files/local/share/tillr/"
+	stamp := "tools/tillr/buildstamp/support-revision"
+	stampMirror := mirror + "tillr/buildstamp/support-revision"
 
 	cases := []struct {
 		name    string
@@ -48,6 +50,8 @@ func TestFencePathsDeriveTheGateCompanions(t *testing.T) {
 				skill,
 				docsTest,
 				docsTestMirror,
+				stamp,
+				stampMirror,
 			},
 			why: "the module's directory already covers its README, so no README entry is derived",
 		},
@@ -61,6 +65,8 @@ func TestFencePathsDeriveTheGateCompanions(t *testing.T) {
 				skill,
 				docsTest,
 				docsTestMirror,
+				stamp,
+				stampMirror,
 			},
 			why: "a sub-path does not cover the module's README, which the documentation suite holds",
 		},
@@ -74,6 +80,8 @@ func TestFencePathsDeriveTheGateCompanions(t *testing.T) {
 				skill,
 				docsTest,
 				docsTestMirror,
+				stamp,
+				stampMirror,
 				"tests/tillr-muse-backend.test.py",
 			},
 			why: "the adapters' suite is derived from the directory that holds them",
@@ -88,9 +96,34 @@ func TestFencePathsDeriveTheGateCompanions(t *testing.T) {
 				skill,
 				docsTest,
 				docsTestMirror,
+				stamp,
+				stampMirror,
 				"tools/tillr-loop/",
 			},
 			why: "a fence naming only the program barred the lane from the test and README judged with it",
+		},
+		{
+			name:    "the tracked workflows",
+			allowed: []string{"config/tillr/workflows/planned-build@v1.json"},
+			want: []string{
+				"config/tillr/workflows/planned-build@v1.json",
+				mirror + "workflows/",
+				stamp,
+				stampMirror,
+			},
+			why: "pack-sync mirrors the workflows and restamps the support revision",
+		},
+		{
+			name:    "the support revision stamp itself",
+			allowed: []string{stamp},
+			want:    []string{stamp, stampMirror},
+			why:     "the stamp's pack copy is derived without widening into tools/tillr/",
+		},
+		{
+			name:    "a pack program",
+			allowed: []string{"yolo-packs/tillr/programs/tillr-example"},
+			want:    []string{"yolo-packs/tillr/programs/tillr-example", stamp, stampMirror},
+			why:     "pack-sync restamps the support revision when a pack program changes",
 		},
 		{
 			name:    "a path that names none of them",

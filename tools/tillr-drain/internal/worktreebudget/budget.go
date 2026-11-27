@@ -107,6 +107,9 @@ func MeasureLaneRoot(laneRoot string, inUse map[string]bool) (Snapshot, error) {
 			}
 		}
 		usage.TotalBytes = usage.WorktreeBytes + usage.ScratchBytes
+		snap.WorktreeBytes += usage.WorktreeBytes
+		snap.ScratchBytes += usage.ScratchBytes
+		snap.TotalBytes += usage.TotalBytes
 		if usage.HasWorktree {
 			snap.OnDisk++
 			if usage.InUse {
@@ -115,9 +118,57 @@ func MeasureLaneRoot(laneRoot string, inUse map[string]bool) (Snapshot, error) {
 				snap.Idle++
 			}
 		}
-		snap.WorktreeBytes += usage.WorktreeBytes
-		snap.ScratchBytes += usage.ScratchBytes
-		snap.TotalBytes += usage.TotalBytes
+		// Walk active per-node checkouts and scratch under <laneDir>/nodes/*.
+		nodesDir := filepath.Join(laneDir, "nodes")
+		if nodeEntries, err := os.ReadDir(nodesDir); err == nil {
+			for _, ne := range nodeEntries {
+				if !ne.IsDir() || strings.HasPrefix(ne.Name(), ".") {
+					continue
+				}
+				nodeDir := filepath.Join(nodesDir, ne.Name())
+				nodeWT := filepath.Join(nodeDir, "worktree")
+				if st, err := os.Stat(nodeWT); err == nil && st.IsDir() {
+					usage.HasWorktree = true
+					b := dirBytes(nodeWT)
+					usage.WorktreeBytes += b
+					usage.TotalBytes += b
+					snap.WorktreeBytes += b
+					snap.TotalBytes += b
+					if st.ModTime().After(usage.ModTime) {
+						usage.ModTime = st.ModTime()
+					}
+					snap.OnDisk++
+					if usage.InUse {
+						snap.InUse++
+					} else {
+						snap.Idle++
+					}
+				}
+				for _, sub := range []string{"scratch", "durable"} {
+					subPath := filepath.Join(nodeDir, sub)
+					subEntries, err := os.ReadDir(subPath)
+					if err != nil {
+						continue
+					}
+					for _, se := range subEntries {
+						p := filepath.Join(subPath, se.Name())
+						var b int64
+						if se.IsDir() {
+							b = dirBytes(p)
+							db := DirBytes{Path: p, RunID: se.Name(), Bytes: b}
+							usage.ScratchDirs = append(usage.ScratchDirs, db)
+							allScratch = append(allScratch, db)
+						} else if fi, err := se.Info(); err == nil {
+							b = fi.Size()
+						}
+						usage.ScratchBytes += b
+						usage.TotalBytes += b
+						snap.ScratchBytes += b
+						snap.TotalBytes += b
+					}
+				}
+			}
+		}
 		snap.Items[laneID] = usage
 	}
 

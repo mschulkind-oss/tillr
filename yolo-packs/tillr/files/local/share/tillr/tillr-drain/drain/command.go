@@ -30,7 +30,11 @@ func commandRequest(s WorkflowStage, itemID, laneID, runID string) *run.Request 
 }
 
 func commandStage(d Decision) bool {
-	return d.Workflow != nil && d.Workflow.Stages[d.NodeIndex].Kind == "command"
+	return d.Workflow != nil && (d.Workflow.Stages[d.NodeIndex].Kind == "command" || d.Workflow.Stages[d.NodeIndex].Kind == "join")
+}
+
+func joinStage(d Decision) bool {
+	return d.Workflow != nil && d.NodeIndex >= 0 && d.NodeIndex < len(d.Workflow.Stages) && d.Workflow.Stages[d.NodeIndex].Kind == "join"
 }
 
 // CommandOnlyWorkflows reports whether root declares at least one workflow under

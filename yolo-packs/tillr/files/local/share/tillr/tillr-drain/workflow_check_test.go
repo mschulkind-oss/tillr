@@ -16,7 +16,7 @@ func TestWorkflowCheckCommand(t *testing.T) {
 	edges := []map[string]string{}
 	// 150 nodes in nine levels, with the widest outgoing fan-out equal to 19.
 	for i := 0; i < 150; i++ {
-		stages = append(stages, map[string]any{"id": fmt.Sprint(i), "kind": "agent", "seat": "build", "access": "write"})
+		stages = append(stages, map[string]any{"id": fmt.Sprint(i), "kind": "agent", "seat": "scout", "access": "read_only"})
 		if i > 0 {
 			parent := 0
 			if i >= 20 {
