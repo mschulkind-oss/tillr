@@ -1496,7 +1496,7 @@ func (l *Loop) passPlansMode(ctx context.Context, at time.Time, generation *stri
 				l.reportf("%s", line)
 			}
 		}()
-		err = l.writeTx(ctx, s, func(tx *store.Tx) error {
+		err = s.WriteTx(ctx, func(tx *store.Tx) error {
 			var before, after int64
 			if err := tx.QueryRow("SELECT COALESCE(MAX(seq), 0) FROM events").Scan(&before); err != nil {
 				return err

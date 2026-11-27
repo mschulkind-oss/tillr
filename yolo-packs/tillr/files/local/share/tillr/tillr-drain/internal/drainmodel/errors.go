@@ -117,11 +117,5 @@ func ExitCode(err error) int {
 	if errors.As(err, &fce) {
 		return fce.Code
 	}
-	var sqliteErr interface{ Code() int }
-	if errors.As(err, &sqliteErr) {
-		if code := sqliteErr.Code() & 0xff; code == 5 || code == 15 {
-			return record.ExitIncompatible
-		}
-	}
 	return record.ExitInternal
 }

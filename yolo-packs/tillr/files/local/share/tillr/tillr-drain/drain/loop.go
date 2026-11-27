@@ -1226,7 +1226,6 @@ func (l *Loop) runPasses(ctx context.Context, result *LoopResult, pendingOnly bo
 			l.stageFaults = nil
 		}
 		l.mu.Unlock()
-		passStart := time.Now()
 		done, err := l.passMode(ctx, result, pendingOnly)
 		l.passTimer = nil
 		if err != nil {
@@ -1237,23 +1236,6 @@ func (l *Loop) runPasses(ctx context.Context, result *LoopResult, pendingOnly bo
 				result.Stop = StopOperatorStop
 				result.Detail = "the loop was asked to stop"
 				return nil
-			}
-			if store.IsBusy(err) && ctx.Err() == nil {
-				l.reportf("loop: store busy during pass; will retry on a later pass: %v\n", err)
-				l.recordBusyWrite("pass", time.Since(passStart), l.cfg.Now())
-				delay := l.cfg.BackoffBase
-				if delay <= 0 {
-					delay = time.Second
-				}
-				if !waitFor(ctx, delay) {
-					result.Stop = StopOperatorStop
-					result.Detail = "the loop was asked to stop"
-					return nil
-				}
-				if pendingOnly && view != nil {
-					view.notifyUpdate()
-				}
-				continue
 			}
 			return err
 		}
@@ -1296,29 +1278,11 @@ func (l *Loop) runPasses(ctx context.Context, result *LoopResult, pendingOnly bo
 			}
 			continue
 		}
-		backOffStart := time.Now()
 		waited, err := l.backOff(ctx)
 		l.mu.Lock()
 		l.stageBackoff = false
 		l.mu.Unlock()
 		if err != nil && ctx.Err() == nil {
-			if store.IsBusy(err) {
-				l.reportf("loop: store busy during backoff; will retry: %v\n", err)
-				l.recordBusyWrite("backoff", time.Since(backOffStart), l.cfg.Now())
-				delay := l.cfg.BackoffBase
-				if delay <= 0 {
-					delay = time.Second
-				}
-				if !waitFor(ctx, delay) {
-					result.Stop = StopOperatorStop
-					result.Detail = "the loop was asked to stop"
-					return nil
-				}
-				if pendingOnly && view != nil {
-					view.notifyUpdate()
-				}
-				continue
-			}
 			return err
 		}
 		if !waited {
