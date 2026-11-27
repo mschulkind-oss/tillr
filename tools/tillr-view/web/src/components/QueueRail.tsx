@@ -137,6 +137,8 @@ function QueueRow({
         </span>
         <span className="queue-row__meta">
           <span className="queue-row__id">{item.item_id}</span>
+          {item.split_part ? <span className="queue-row__split">{item.split_part.parent_title ? `${item.split_part.parent_title} · ` : ""}part {item.split_part.part_label}</span> : null}
+          {item.split_progress ? <span className="queue-row__split">{item.split_progress}</span> : null}
           <span className="queue-row__state" data-hold={hold === "" ? undefined : hold}>
             {hold === "" ? stateLabel(state) : hold}
           </span>

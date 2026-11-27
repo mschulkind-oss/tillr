@@ -121,6 +121,50 @@ export function ItemPage({ id, live, paused, row, baseURL }: { id: string; live:
     {item.data?.data.idea ? <section aria-label="Idea outcomes"><h2>Items from this idea</h2>
       {item.data.data.idea.outcomes?.length ? <ul>{item.data.data.idea.outcomes.map(outcome => <li key={outcome.item_id}><EntityLink kind="item" id={outcome.item_id} /> · {outcome.title} · {outcome.state}</li>)}</ul> : <p>No items from this idea have been imported yet.</p>}
     </section> : null}
+    {item.data?.data.split?.parent ? <section aria-label="Split parent">
+      <h2>Split parent</h2>
+      <p>{item.data.data.split.parent.progress_summary}</p>
+      {item.data.data.split.parent.owner_words ? <pre className="split-owner-words">{item.data.data.split.parent.owner_words}</pre> : null}
+      <table>
+        <thead><tr><th>Part</th><th>Item</th><th>Title</th><th>Standing</th><th>State</th><th>Landed commit</th></tr></thead>
+        <tbody>{item.data.data.split.parent.parts.map(part => <tr key={part.item_id}>
+          <td>part {part.label}</td>
+          <td><EntityLink kind="item" id={part.item_id} state={part.state} /></td>
+          <td>{part.title}</td>
+          <td>{part.required ? "required" : "optional"}</td>
+          <td>{part.state}</td>
+          <td>{part.landed_commit ? <a href={`/trunk?sha=${encodeURIComponent(part.landed_commit)}`}><code>{part.landed_commit}</code></a> : "—"}</td>
+        </tr>)}</tbody>
+      </table>
+      {item.data.data.split.parent.coverage.length ? <>
+        <h3>Coverage</h3>
+        <table>
+          <thead><tr><th>Criterion</th><th>Clause / text</th><th>Owner</th></tr></thead>
+          <tbody>{item.data.data.split.parent.coverage.flatMap(cov => cov.entries.map((entry, idx) => <tr key={`${cov.criterion_id}-${idx}`}>
+            <td>{cov.criterion_id}</td>
+            <td>{entry.clause || cov.criterion_text}</td>
+            <td>{entry.closing_check ? "closing check" : entry.part_item_id ? <><EntityLink kind="item" id={entry.part_item_id} /> (part {entry.part_label})</> : `part ${entry.part_label ?? ""}`}</td>
+          </tr>))}</tbody>
+        </table>
+      </> : null}
+    </section> : null}
+    {item.data?.data.split?.part ? <section aria-label="Split part">
+      <h2>Split part</h2>
+      <p>Parent <EntityLink kind="item" id={item.data.data.split.part.parent_id} /> · {item.data.data.split.part.parent_title} · part {item.data.data.split.part.label} ({item.data.data.split.part.required ? "required" : "optional"})</p>
+      <p>Share: {item.data.data.split.part.share}</p>
+      {item.data.data.split.part.leaves?.length ? <>
+        <h3>Leaves to siblings</h3>
+        <ul>{item.data.data.split.part.leaves.map(leaf => <li key={leaf.sibling_item_id}>
+          part {leaf.sibling_label} (<EntityLink kind="item" id={leaf.sibling_item_id} state={leaf.sibling_state} /> · {leaf.sibling_title} · {leaf.sibling_state}): {leaf.work}
+        </li>)}</ul>
+      </> : null}
+      {item.data.data.split.part.follows?.length ? <>
+        <h3>Follows</h3>
+        <ul>{item.data.data.split.part.follows.map(sib => <li key={sib.item_id}>
+          part {sib.label} (<EntityLink kind="item" id={sib.item_id} state={sib.state} /> · {sib.title} · {sib.state})
+        </li>)}</ul>
+      </> : null}
+    </section> : null}
     <ItemDetailPane itemId={id} item={item.data?.data} itemError={item.error} loading={item.isPending} onRetry={() => void item.refetch()} latestRun={pinned?.latest_run ?? null} updatedAtMs={pinned?.updated_at_ms ?? null} selectedRunId={null}
       onSelectRun={run => navigate(`/run/${encodeURIComponent(run)}`)} doc={{ doc: doc.data?.data, error: doc.error, pending: doc.isPending, onRetry: () => void doc.refetch(), baseUrl: baseURL }} />
     {item.data ? <><ItemLinkedAlerts alerts={item.data.data.linked_alerts} /><ItemGraph attempts={item.data.data.graph_attempts ?? []} /><DependencyLinks id={id} blockedBy={item.data.data.blocked_by} unblocks={item.data.data.unblocks} /><UsageSummary usage={item.data.data.usage} />{item.data.data.work_summary ? <p>{item.data.data.work_summary}</p> : null}<VerifyRefusals refusals={item.data.data.verify_refusals ?? []} /><ItemTimeline item={item.data.data} /></> : null}

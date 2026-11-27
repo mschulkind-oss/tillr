@@ -47,6 +47,14 @@ export function FinishedBand({ items, now, onSelectItem, onOpenArchive }: Finish
                 <span className="finished-band__title" title={item.title}>
                   {item.title}
                 </span>
+                {item.split_part ? (
+                  <span className="finished-band__split">
+                    {item.split_part.parent_title ? `${item.split_part.parent_title} · ` : ""}part {item.split_part.part_label}
+                  </span>
+                ) : null}
+                {item.split_progress ? (
+                  <span className="finished-band__split">{item.split_progress}</span>
+                ) : null}
                 {item.latest_run?.seat ? (
                   <span className="finished-band__seat">seat {item.latest_run.seat}</span>
                 ) : null}

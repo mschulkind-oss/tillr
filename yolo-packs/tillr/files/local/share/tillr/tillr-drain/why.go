@@ -203,7 +203,7 @@ func whyFace(args []string) int {
 		}{answer, drain.ReadBuildStamp()})
 	} else {
 		for _, row := range answer.Rows {
-			if _, err = fmt.Fprintf(os.Stdout, "%s\t%s\t%s\t%s\t%s\n", whyPlace(row.Place), row.ItemID, row.Position, row.TableReason(), row.Mover); err != nil {
+			if _, err = fmt.Fprintf(os.Stdout, "%s\t%s\t%s\t%s\t%s\n", whyPlace(row.Place), whyRowLabel(row), row.Position, row.TableReason(), row.Mover); err != nil {
 				break
 			}
 		}
@@ -322,6 +322,16 @@ func formatWhyProcessPriority(p *drain.ProcessPrioritySummary) string {
 		p.Classes[string(drain.ProcessClassWorker)],
 		p.UnavailableReason,
 	)
+}
+
+func whyRowLabel(row drain.WhyRow) string {
+	if row.SplitPart == nil {
+		return row.ItemID
+	}
+	if row.SplitPart.ParentTitle != "" {
+		return fmt.Sprintf("%s (%s · part %s)", row.ItemID, row.SplitPart.ParentTitle, row.SplitPart.PartLabel)
+	}
+	return fmt.Sprintf("%s (part %s)", row.ItemID, row.SplitPart.PartLabel)
 }
 
 func revParseTrunk(ctx context.Context, root, trunkRef string) (string, bool) {

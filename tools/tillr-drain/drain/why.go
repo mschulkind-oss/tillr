@@ -29,6 +29,36 @@ const (
 	whyDispatchDeclined  = "dispatch-declined"
 )
 
+// WhySplitHeldPart describes a held part surfaced on its split parent's row.
+type WhySplitHeldPart struct {
+	ItemID string `json:"item_id"`
+	Label  string `json:"label"`
+	Reason string `json:"reason"`
+	Mover  string `json:"mover"`
+}
+
+// WhySplitParent summarizes a split parent's parts in one queue row.
+type WhySplitParent struct {
+	TotalParts      int                `json:"total_parts"`
+	RequiredParts   int                `json:"required_parts"`
+	RequiredLanded  int                `json:"required_landed"`
+	Landed          int                `json:"landed"`
+	Working         int                `json:"working"`
+	Held            int                `json:"held"`
+	Queued          int                `json:"queued"`
+	Closed          int                `json:"closed"`
+	ProgressSummary string             `json:"progress_summary"`
+	HeldParts       []WhySplitHeldPart `json:"held_parts,omitempty"`
+}
+
+// WhySplitPart identifies the split parent and part label of an ordinary part row.
+type WhySplitPart struct {
+	ParentID    string `json:"parent_id"`
+	ParentTitle string `json:"parent_title"`
+	PartLabel   string `json:"part_label"`
+	Required    bool   `json:"required"`
+}
+
 // WhyRow decorates a planner decision with references a human can follow. For a
 // lost worker, Why reports the observed hold instead of the planner's run-live
 // assumption. The presentation fields do not decide readiness.
@@ -51,6 +81,8 @@ type WhyRow struct {
 	Refusals     map[string]int           `json:"refusals,omitempty"`
 	Landing      *item.LandingReference   `json:"landing,omitempty"`
 	LinkedAlerts []watchlinks.LinkedAlert `json:"linked_alerts,omitempty"`
+	SplitParent  *WhySplitParent          `json:"split_parent,omitempty"`
+	SplitPart    *WhySplitPart            `json:"split_part,omitempty"`
 	tableReason  string
 }
 
@@ -157,6 +189,18 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 	edges, err := readEdges(r)
 	if err != nil {
 		return answer, err
+	}
+	splits, err := item.ReadAllSplits(r)
+	if err != nil {
+		return answer, readFailure(err)
+	}
+	partIndex := item.SplitPartIndex(splits)
+	titles := map[string]string{}
+	if len(splits) > 0 {
+		titles, err = readItemTitles(r)
+		if err != nil {
+			return answer, readFailure(err)
+		}
 	}
 	states := map[string]string{}
 	for _, it := range items {
@@ -403,6 +447,15 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 		}
 		class, where, mover := whyPresentation(d)
 		row := WhyRow{Place: places[it.ItemID], ItemID: it.ItemID, State: it.State, Position: d.Position, Reason: d.Reason, Why: d.Reason, Class: class, Where: where, Mover: mover, Since: "current plan", ClassSource: "planner", WaitingOn: []string{}, Decision: planned}
+		if m, ok := partIndex[it.ItemID]; ok {
+			req := m.Part.Required != nil && *m.Part.Required
+			row.SplitPart = &WhySplitPart{
+				ParentID:    m.ParentID,
+				ParentTitle: titles[m.ParentID],
+				PartLabel:   m.Label,
+				Required:    req,
+			}
+		}
 		if d.Reason == ReasonGateReplay && examinerDead {
 			row.Class = "waits on the loop"
 			row.Where = "gate"
@@ -1075,6 +1128,7 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 		}
 		answer.Rows = append(answer.Rows, row)
 	}
+	decorateSplitParents(&answer, splits, states, def)
 	current := make([]alarms.Hold, 0, len(answer.Rows))
 	for _, row := range answer.Rows {
 		d := row.Decision

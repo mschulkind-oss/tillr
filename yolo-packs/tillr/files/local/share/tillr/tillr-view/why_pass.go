@@ -160,6 +160,9 @@ func (s *server) whyFromPass(ctx context.Context, now time.Time) (json.RawMessag
 			rows = append(rows, whyPassItemRow(it, places[it.ItemID], latest[it.ItemID], laneCtx))
 		}
 		sortPassRows(rows)
+		if err := decorateWhyPassSplits(r, rows); err != nil {
+			return err
+		}
 		declared, err := definition.ForReader(r)
 		if err != nil {
 			return err

@@ -19,6 +19,7 @@ function LandingFacts({ row }: { row: LandingRow }) {
     <p>{row.at_ms === null ? "Clock unrecorded" : new Date(row.at_ms).toISOString()} · {row.epistemic_state}</p>
     {row.trunk_before || row.trunk_after ? <p><code>{row.trunk_before}</code> → <code>{row.trunk_after}</code></p> : null}
     <div className="trunk__links">
+      {row.parent_id ? <a href={itemLink(row.parent_id)}>Parent {row.parent_title || row.parent_id}{row.part_label ? ` · part ${row.part_label}` : ""}</a> : null}
       {row.item_id ? <a href={itemLink(row.item_id)}>Item {row.item_id}</a> : null}
       {row.run_id && row.item_id ? <a href={runLink(row.item_id, row.run_id)}>Run {row.run_id}</a> : null}
       {row.pass_id ? <a href={`/pass/${encodeURIComponent(row.pass_id)}`}>Pass {row.pass_id}</a> : <span>Pass unrecorded</span>}

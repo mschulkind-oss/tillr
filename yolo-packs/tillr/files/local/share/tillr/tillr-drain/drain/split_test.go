@@ -436,3 +436,123 @@ func TestFileSplitRefusesWholeStatement(t *testing.T) {
 		})
 	}
 }
+
+func TestWhyReportsSplitParentAndParts(t *testing.T) {
+	f, l, parent := splitFixture(t)
+	ctx := context.Background()
+	parts, err := FileSplit(ctx, f.root, f.storePath, parent, strings.NewReader(splitExample), l.cfg.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Mark "first" landed, "extra" held on owner, and leave "second" queued.
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		if _, err := tx.Exec(`UPDATE items SET state='landed' WHERE item_id=?`, parts["first"]); err != nil {
+			return err
+		}
+		_, err := item.SetState(ctx, tx, parts["extra"], StateBlocked, l.cfg.Now(), item.WaitingOn{Waiter: "owner", Reason: "needs clarification", Source: "state"})
+		return err
+	})
+
+	s, err := store.OpenRead(ctx, f.storePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	pol := &Policy{
+		Backends: map[string]Backend{"pi": {Adapter: "fixture"}},
+		Seats: map[string]string{
+			"build": "pi", "plan": "pi", "review": "pi", "scout": "pi",
+			"test-run": "pi", "verify": "pi", "design": "pi", "edit": "pi",
+			"tricky": "pi", "test-write": "pi", "docs": "pi", "classify": "pi",
+		},
+		ReadOnlySeats: []string{"scout", "test-run", "verify", "review", "classify"},
+	}
+	noLanes := []string{}
+	readWhy := func() map[string]WhyRow {
+		t.Helper()
+		byID := map[string]WhyRow{}
+		if err := s.ReadTx(ctx, func(r *store.Reader) error {
+			a, err := Why(r, Pass{Now: l.cfg.Now().Format(time.RFC3339), Root: f.root, AvailableLanes: &noLanes}, pol, nil)
+			if err != nil {
+				return err
+			}
+			for _, row := range a.Rows {
+				byID[row.ItemID] = row
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return byID
+	}
+
+	byID := readWhy()
+	// Non-split item has no SplitParent / SplitPart.
+	if qb := byID["queue-before"]; qb.SplitParent != nil || qb.SplitPart != nil {
+		t.Fatalf("non-split item got split fields: %+v", qb)
+	}
+
+	// Part row carries SplitPart with parent title and part label.
+	sec := byID[parts["second"]]
+	if sec.SplitPart == nil || sec.SplitPart.ParentID != parent || sec.SplitPart.ParentTitle != "Parent request" || sec.SplitPart.PartLabel != "second" || !sec.SplitPart.Required {
+		t.Fatalf("second part SplitPart = %+v", sec.SplitPart)
+	}
+	ext := byID[parts["extra"]]
+	if ext.SplitPart == nil || ext.SplitPart.Required {
+		t.Fatalf("extra part SplitPart = %+v", ext.SplitPart)
+	}
+
+	// Parent row summarizes counts and surfaces held part reason & mover.
+	prow := byID[parent]
+	if prow.SplitParent == nil {
+		t.Fatalf("parent missing SplitParent: %+v", prow)
+	}
+	if prow.SplitParent.TotalParts != 3 || prow.SplitParent.RequiredParts != 2 || prow.SplitParent.RequiredLanded != 1 || prow.SplitParent.Landed != 1 || prow.SplitParent.Held != 1 || prow.SplitParent.Queued != 1 {
+		t.Fatalf("unexpected SplitParent counts: %+v", prow.SplitParent)
+	}
+	if prow.SplitParent.ProgressSummary != "1 of 2 required parts landed" {
+		t.Fatalf("ProgressSummary = %q", prow.SplitParent.ProgressSummary)
+	}
+	if !strings.HasPrefix(prow.Why, "split into 3 parts: 1 landed, 1 held, 1 queued") {
+		t.Fatalf("parent Why = %q", prow.Why)
+	}
+	if !strings.Contains(prow.Why, "held: extra (") || !strings.Contains(prow.Why, "mover:") {
+		t.Fatalf("parent Why missing held part detail: %q", prow.Why)
+	}
+	if len(prow.SplitParent.HeldParts) != 1 || prow.SplitParent.HeldParts[0].Label != "extra" {
+		t.Fatalf("HeldParts = %+v", prow.SplitParent.HeldParts)
+	}
+
+	// Closing a required part surfaces owner hold on the parent.
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := tx.Exec(`UPDATE items SET state='closed' WHERE item_id=?`, parts["second"])
+		return err
+	})
+	byID = readWhy()
+	prow = byID[parent]
+	if prow.Class != "needs you" || !strings.Contains(prow.Mover, "owner; required part did not land: "+parts["second"]) {
+		t.Fatalf("closed required part parent: class=%q mover=%q why=%q", prow.Class, prow.Mover, prow.Why)
+	}
+	if prow.SplitParent.Closed != 1 {
+		t.Fatalf("expected Closed=1, got %+v", prow.SplitParent)
+	}
+
+	// Landing all required parts surfaces operator hand-check with split count prefix.
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := tx.Exec(`UPDATE items SET state='landed' WHERE item_id=?`, parts["second"])
+		return err
+	})
+	byID = readWhy()
+	prow = byID[parent]
+	if prow.Class != "needs you" || prow.Mover != "operator; check the parent's criteria by hand" {
+		t.Fatalf("all-required-landed parent: class=%q mover=%q", prow.Class, prow.Mover)
+	}
+	if !strings.Contains(prow.Why, "split into 3 parts: 2 landed, 1 held; check the parent's criteria by hand") {
+		t.Fatalf("all-required-landed Why = %q", prow.Why)
+	}
+	if prow.SplitParent.ProgressSummary != "2 of 2 required parts landed" {
+		t.Fatalf("ProgressSummary = %q", prow.SplitParent.ProgressSummary)
+	}
+}

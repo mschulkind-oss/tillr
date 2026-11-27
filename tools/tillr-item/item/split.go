@@ -49,6 +49,11 @@ func splitKey(parent, label string) string {
 	return fmt.Sprintf("%x", sha256.Sum256([]byte(parent+"\x00"+label)))
 }
 
+// SplitPartID returns the deterministic item ID for a part of parent.
+func SplitPartID(parent, label string) string {
+	return "item-part-" + splitKey(parent, label)
+}
+
 func splitOrder(parent string, parts []SplitPart) ([]SplitPart, map[string]string, error) {
 	if len(parts) < 2 {
 		return nil, nil, Rejectionf("split-parts", parent, "a split needs at least two parts")
@@ -71,7 +76,7 @@ func splitOrder(parent string, parts []SplitPart) ([]SplitPart, map[string]strin
 		if *p.Required {
 			hasRequired = true
 		}
-		byLabel[p.Label], ids[p.Label] = p, "item-part-"+splitKey(parent, p.Label)
+		byLabel[p.Label], ids[p.Label] = p, SplitPartID(parent, p.Label)
 	}
 	if !hasRequired {
 		return nil, nil, Rejectionf("split-parts", parent, "a split needs at least one required part")
@@ -345,11 +350,85 @@ func SplitRequiredParts(r *store.Reader, parent string) ([]string, error) {
 	var required []string
 	for _, p := range statement.Parts {
 		if p.Required != nil && *p.Required {
-			required = append(required, "item-part-"+splitKey(parent, p.Label))
+			required = append(required, SplitPartID(parent, p.Label))
 		}
 	}
 	slices.Sort(required)
 	return required, nil
+}
+
+// SplitPartMembership identifies the parent split and part metadata for a part item.
+type SplitPartMembership struct {
+	ParentID string
+	Label    string
+	Part     SplitPart
+}
+
+func isMissingSplitsTable(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "no such table")
+}
+
+// ReadSplitStatement reads the filed SplitStatement for parent. It returns
+// (nil, false, nil) when no row exists or the item_splits table is absent.
+func ReadSplitStatement(r *store.Reader, parent string) (*SplitStatement, bool, error) {
+	var raw []byte
+	err := r.QueryRow(`SELECT statement FROM item_splits WHERE parent_id=?`, parent).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) || isMissingSplitsTable(err) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	var st SplitStatement
+	if err := json.Unmarshal(raw, &st); err != nil {
+		return nil, false, err
+	}
+	return &st, true, nil
+}
+
+// ReadAllSplits reads all filed split statements keyed by parent_id.
+// It returns an empty map when the item_splits table is absent.
+func ReadAllSplits(r *store.Reader) (map[string]SplitStatement, error) {
+	out := map[string]SplitStatement{}
+	rows, err := r.Query(`SELECT parent_id, statement FROM item_splits`)
+	if isMissingSplitsTable(err) {
+		return out, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var parentID string
+		var raw []byte
+		if err := rows.Scan(&parentID, &raw); err != nil {
+			return nil, err
+		}
+		var st SplitStatement
+		if err := json.Unmarshal(raw, &st); err != nil {
+			return nil, err
+		}
+		out[parentID] = st
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// SplitPartIndex maps each part's item ID to its parent membership.
+func SplitPartIndex(splits map[string]SplitStatement) map[string]SplitPartMembership {
+	out := make(map[string]SplitPartMembership)
+	for parentID, st := range splits {
+		for _, p := range st.Parts {
+			out[SplitPartID(parentID, p.Label)] = SplitPartMembership{
+				ParentID: parentID,
+				Label:    p.Label,
+				Part:     p,
+			}
+		}
+	}
+	return out
 }
 
 func checkSplitMove(d definition.Definition, id string, wait *WaitingOn, to string) error {

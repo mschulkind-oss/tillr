@@ -42,17 +42,19 @@ type waitingRow struct {
 	LaneID       string             `json:"lane_id,omitempty"`
 	Document     string             `json:"document"`
 	// Observation identifies a repository condition, never an item or design document.
-	Observation string `json:"observation,omitempty"`
-	Class       string `json:"class"`
-	Position    string `json:"position,omitempty"`
-	Where       string `json:"where"`
-	Why         string `json:"why"`
-	Mover       string `json:"mover"`
-	Since       string `json:"since"`
-	Waited      string `json:"waited"`
-	ClassSource string `json:"class_source"`
-	LaneStatus  string `json:"lane_status,omitempty"`
-	LaneReason  string `json:"lane_reason,omitempty"`
+	Observation string          `json:"observation,omitempty"`
+	Class       string          `json:"class"`
+	Position    string          `json:"position,omitempty"`
+	Where       string          `json:"where"`
+	Why         string          `json:"why"`
+	Mover       string          `json:"mover"`
+	Since       string          `json:"since"`
+	Waited      string          `json:"waited"`
+	ClassSource string          `json:"class_source"`
+	LaneStatus  string          `json:"lane_status,omitempty"`
+	LaneReason  string          `json:"lane_reason,omitempty"`
+	SplitParent *whySplitParent `json:"split_parent,omitempty"`
+	SplitPart   *whySplitPart   `json:"split_part,omitempty"`
 }
 
 // waitingRule is the view's copy of a holdrules.Rule. The rules themselves live in
@@ -1051,6 +1053,13 @@ func printWaiting(w io.Writer, rows []waitingRow) error {
 			why += " (waited " + row.Waited + ")"
 		}
 		identity := row.ItemID
+		if row.SplitPart != nil && row.Document == "" && row.Observation == "" {
+			if row.SplitPart.ParentTitle != "" {
+				identity = fmt.Sprintf("%s (%s · part %s)", row.ItemID, row.SplitPart.ParentTitle, row.SplitPart.PartLabel)
+			} else {
+				identity = fmt.Sprintf("%s (part %s)", row.ItemID, row.SplitPart.PartLabel)
+			}
+		}
 		if row.Document != "" {
 			identity = row.Document
 		}

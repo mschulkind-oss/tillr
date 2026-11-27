@@ -65,6 +65,7 @@ export interface LandingRow {
   gated_tree?: string; landed_tree?: string; conflict_paths?: string[]; gate_skipped_reason?: string;
   event_seq: number; at_ms: number | null; epistemic_state: string;
   fix_run_id?: string; fixer_item?: string; red_sha?: string; failing_checks?: string[];
+  parent_id?: string; parent_title?: string; part_label?: string;
 }
 
 export interface LandingsData { rows: LandingRow[]; }
@@ -112,6 +113,33 @@ export interface BackendAlarm {
   lanes: string[];
 }
 
+export interface WhySplitHeldPart {
+  item_id: string;
+  label: string;
+  reason: string;
+  mover: string;
+}
+
+export interface WhySplitParent {
+  total_parts: number;
+  required_parts: number;
+  required_landed: number;
+  landed: number;
+  working: number;
+  held: number;
+  queued: number;
+  closed: number;
+  progress_summary: string;
+  held_parts?: WhySplitHeldPart[];
+}
+
+export interface WhySplitPart {
+  parent_id: string;
+  parent_title: string;
+  part_label: string;
+  required: boolean;
+}
+
 export interface WaitingRow {
   alarm?: BackendAlarm;
   graph_changes?: string[];
@@ -128,6 +156,8 @@ export interface WaitingRow {
   since: string;
   waited?: string;
   class_source: string;
+  split_parent?: WhySplitParent;
+  split_part?: WhySplitPart;
 }
 
 export interface ModelUsage {
@@ -230,6 +260,8 @@ export interface ItemView {
   place?: number;
   /** How many of the item's criteria are still open, when the server counts them. */
   open_criteria?: number | null;
+  split_progress?: string;
+  split_part?: WhySplitPart;
 }
 
 export interface PipelineStep {
@@ -647,6 +679,73 @@ export interface ItemGraphNode {
 }
 export interface ItemGraphAttempt { attempt: number; nodes: ItemGraphNode[] }
 
+export interface SplitPartStatusView {
+  label: string;
+  item_id: string;
+  title: string;
+  share: string;
+  leaves?: Record<string, string>;
+  follows?: string[];
+  required: boolean;
+  state: string;
+  landed_commit?: string;
+  landing_id?: string;
+}
+
+export interface SplitCoverageEntryView {
+  clause?: string;
+  part_label?: string;
+  part_item_id?: string;
+  closing_check?: boolean;
+}
+
+export interface SplitCoverageRowView {
+  criterion_id: string;
+  criterion_text: string;
+  entries: SplitCoverageEntryView[];
+}
+
+export interface SplitParentDetailView {
+  owner_words: string;
+  total_parts: number;
+  required_parts: number;
+  required_landed: number;
+  progress_summary: string;
+  parts: SplitPartStatusView[];
+  coverage: SplitCoverageRowView[];
+}
+
+export interface SplitSiblingRef {
+  label: string;
+  item_id: string;
+  title: string;
+  state: string;
+}
+
+export interface SplitLeafView {
+  sibling_label: string;
+  sibling_item_id: string;
+  sibling_title: string;
+  sibling_state: string;
+  work: string;
+}
+
+export interface SplitPartDetailView {
+  parent_id: string;
+  parent_title: string;
+  label: string;
+  title: string;
+  share: string;
+  required: boolean;
+  follows?: SplitSiblingRef[];
+  leaves?: SplitLeafView[];
+}
+
+export interface ItemSplitView {
+  parent?: SplitParentDetailView;
+  part?: SplitPartDetailView;
+}
+
 export interface ItemData {
   graph_attempts?: ItemGraphAttempt[];
   progress?: ProgressClaim[];
@@ -668,6 +767,7 @@ export interface ItemData {
   verify_refusals?: VerifyRefusalView[];
   work_summary?: string;
   linked_alerts?: LinkedAlertView[];
+  split?: ItemSplitView;
 }
 
 export interface StageView {

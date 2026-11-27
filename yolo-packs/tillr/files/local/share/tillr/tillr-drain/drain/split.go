@@ -183,3 +183,143 @@ func splitWait(row *WhyRow, blockers []string, states map[string]string, def def
 		}
 	}
 }
+
+func readItemTitles(r *store.Reader) (map[string]string, error) {
+	out := map[string]string{}
+	rows, err := r.Query(`SELECT item_id, title FROM items`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, title string
+		if err := rows.Scan(&id, &title); err != nil {
+			return nil, err
+		}
+		out[id] = title
+	}
+	return out, rows.Err()
+}
+
+func formatSplitCounts(total, landed, working, held, queued, closed int) string {
+	var parts []string
+	if landed > 0 {
+		parts = append(parts, fmt.Sprintf("%d landed", landed))
+	}
+	if working > 0 {
+		parts = append(parts, fmt.Sprintf("%d working", working))
+	}
+	if held > 0 {
+		parts = append(parts, fmt.Sprintf("%d held", held))
+	}
+	if queued > 0 {
+		parts = append(parts, fmt.Sprintf("%d queued", queued))
+	}
+	if closed > 0 {
+		parts = append(parts, fmt.Sprintf("%d closed", closed))
+	}
+	if len(parts) == 0 {
+		return fmt.Sprintf("split into %d parts", total)
+	}
+	return fmt.Sprintf("split into %d parts: %s", total, strings.Join(parts, ", "))
+}
+
+func decorateSplitParents(answer *WhyAnswer, splits map[string]item.SplitStatement, states map[string]string, def definition.Definition) {
+	if len(splits) == 0 || len(answer.Rows) == 0 {
+		return
+	}
+	rowByID := make(map[string]*WhyRow, len(answer.Rows))
+	for i := range answer.Rows {
+		rowByID[answer.Rows[i].ItemID] = &answer.Rows[i]
+	}
+	for i := range answer.Rows {
+		row := &answer.Rows[i]
+		st, ok := splits[row.ItemID]
+		if !ok {
+			continue
+		}
+		sp := &WhySplitParent{TotalParts: len(st.Parts)}
+		var closedRequired []string
+		var unlandedRequired []string
+		for _, p := range st.Parts {
+			partID := item.SplitPartID(row.ItemID, p.Label)
+			req := p.Required != nil && *p.Required
+			if req {
+				sp.RequiredParts++
+			}
+			partState := states[partID]
+			switch {
+			case partState == StateLanded:
+				sp.Landed++
+				if req {
+					sp.RequiredLanded++
+				}
+			case finishedState(def, partState):
+				sp.Closed++
+				if req {
+					closedRequired = append(closedRequired, partID)
+					unlandedRequired = append(unlandedRequired, partID)
+				}
+			default:
+				if req {
+					unlandedRequired = append(unlandedRequired, partID)
+				}
+				partRow := rowByID[partID]
+				if partRow != nil && (partRow.Position == "running" || partRow.Class == "moving") {
+					sp.Working++
+				} else if partRow != nil && (partRow.Class == "needs you" || partRow.Class == "alarm" || partRow.Class == "needs a cause") {
+					sp.Held++
+					sp.HeldParts = append(sp.HeldParts, WhySplitHeldPart{
+						ItemID: partID,
+						Label:  p.Label,
+						Reason: partRow.TableReason(),
+						Mover:  partRow.Mover,
+					})
+				} else {
+					sp.Queued++
+				}
+			}
+		}
+		sp.ProgressSummary = fmt.Sprintf("%d of %d required parts landed", sp.RequiredLanded, sp.RequiredParts)
+		row.SplitParent = sp
+		if finishedState(def, row.State) {
+			continue
+		}
+		summary := formatSplitCounts(sp.TotalParts, sp.Landed, sp.Working, sp.Held, sp.Queued, sp.Closed)
+		switch {
+		case len(closedRequired) > 0:
+			id := closedRequired[0]
+			row.Class = "needs you"
+			row.Mover = "owner; required part did not land: " + id
+			row.Why = summary + "; required part did not land: " + id + " (" + states[id] + ")"
+			row.tableReason = row.Why
+		case sp.RequiredLanded == sp.RequiredParts:
+			row.Class = "needs you"
+			row.Mover = "operator; check the parent's criteria by hand"
+			row.Why = summary + "; check the parent's criteria by hand"
+			row.tableReason = row.Why
+		case len(sp.HeldParts) > 0:
+			heldDetails := make([]string, 0, len(sp.HeldParts))
+			heldMovers := make([]string, 0, len(sp.HeldParts))
+			for _, hp := range sp.HeldParts {
+				heldDetails = append(heldDetails, fmt.Sprintf("%s (%s; mover: %s)", hp.Label, hp.Reason, hp.Mover))
+				if hp.Mover != "" {
+					heldMovers = append(heldMovers, hp.Label+": "+hp.Mover)
+				}
+			}
+			row.Why = summary + "; held: " + strings.Join(heldDetails, ", ")
+			row.tableReason = row.Why
+			if len(heldMovers) > 0 {
+				row.Mover = strings.Join(heldMovers, "; ")
+			} else if len(unlandedRequired) > 0 {
+				row.Mover = strings.Join(unlandedRequired, ", ")
+			}
+		default:
+			row.Why = summary
+			row.tableReason = summary
+			if len(unlandedRequired) > 0 {
+				row.Mover = strings.Join(unlandedRequired, ", ")
+			}
+		}
+	}
+}

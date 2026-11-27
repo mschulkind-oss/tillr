@@ -1,0 +1,249 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"database/sql"
+	"encoding/json"
+	"io"
+	"net/http"
+	"strings"
+	"testing"
+
+	"github.com/mschulkind-oss/tillr/store"
+)
+
+func TestSplitViewAPIsAndSurfaces(t *testing.T) {
+	h := newServeHarness(t)
+	ctx := context.Background()
+
+	parentID := "item-seed-01"
+	partAID := splitPartID(parentID, "a")
+	partBID := splitPartID(parentID, "b")
+	nestedPartID := splitPartID(partBID, "b1")
+	nestedPart2ID := splitPartID(partBID, "b2")
+
+	parentSplit := splitStatement{
+		Parts: []splitPart{
+			{Label: "a", Title: "Part A", Share: "Deliver A", Leaves: map[string]string{"b": "Deliver B"}, Required: boolPtr(true)},
+			{Label: "b", Title: "Part B", Share: "Deliver B", Leaves: map[string]string{"a": "Deliver A"}, Follows: []string{"a"}, Required: boolPtr(true)},
+		},
+		Coverage: map[string][]splitCoverage{
+			"c5": {
+				{Clause: "A works;", Part: "a"},
+				{Clause: "B works.", Part: "b"},
+			},
+			"c6": {{ClosingCheck: true}},
+		},
+	}
+	nestedSplit := splitStatement{
+		Parts: []splitPart{
+			{Label: "b1", Title: "Part B1", Share: "Deliver B1", Required: boolPtr(true)},
+			{Label: "b2", Title: "Part B2", Share: "Deliver B2", Follows: []string{"b1"}, Required: boolPtr(true)},
+		},
+		Coverage: map[string][]splitCoverage{
+			"c5": {{Part: "b1"}},
+		},
+	}
+	parentJSON, err := json.Marshal(parentSplit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nestedJSON, err := json.Marshal(nestedSplit)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := sql.Open("sqlite", h.store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	for _, q := range []struct {
+		sql  string
+		args []any
+	}{
+		{`CREATE TABLE IF NOT EXISTS item_splits (parent_id TEXT PRIMARY KEY, statement BLOB NOT NULL)`, nil},
+		{`CREATE TABLE IF NOT EXISTS request_words (item_id TEXT PRIMARY KEY, words BLOB NOT NULL)`, nil},
+		{`CREATE TABLE IF NOT EXISTS landings (landing_id TEXT PRIMARY KEY, item_id TEXT, run_id TEXT, verdict_id TEXT, result TEXT, reason TEXT, base_sha TEXT, head_sha TEXT, trunk_before TEXT, trunk_after TEXT, gated_tree TEXT, landed_tree TEXT, conflict_paths TEXT, gate_skipped_reason TEXT, event_seq INT)`, nil},
+		{`INSERT OR REPLACE INTO items (item_id, title, state, updated_at) VALUES (?, 'Parent Ask', 'blocked', 1900)`, []any{parentID}},
+		{`INSERT INTO items (item_id, title, state, updated_at) VALUES (?, 'Part A', 'landed', 2000)`, []any{partAID}},
+		{`INSERT INTO items (item_id, title, state, updated_at) VALUES (?, 'Part B', 'blocked', 2100)`, []any{partBID}},
+		{`INSERT INTO items (item_id, title, state, updated_at) VALUES (?, 'Part B1', 'in-queue', 2200)`, []any{nestedPartID}},
+		{`INSERT INTO items (item_id, title, state, updated_at) VALUES (?, 'Part B2', 'in-queue', 2300)`, []any{nestedPart2ID}},
+		{`INSERT INTO request_words (item_id, words) VALUES (?, ?)`, []any{parentID, []byte("Owner's original words.")}},
+		{`INSERT INTO item_criteria (item_id, criterion_id, text, state) VALUES (?, 'c5', 'A works; B works.', 'not-done')`, []any{parentID}},
+		{`INSERT INTO item_criteria (item_id, criterion_id, text, state) VALUES (?, 'c6', 'Together they work.', 'not-done')`, []any{parentID}},
+		{`INSERT INTO item_splits (parent_id, statement) VALUES (?, ?)`, []any{parentID, parentJSON}},
+		{`INSERT INTO item_splits (parent_id, statement) VALUES (?, ?)`, []any{partBID, nestedJSON}},
+		{`INSERT INTO landings (landing_id, item_id, run_id, verdict_id, result, reason, base_sha, head_sha, trunk_before, trunk_after, gated_tree, landed_tree, conflict_paths, gate_skipped_reason, event_seq) VALUES ('land-a', ?, 'run-a', 'ver-a', 'landed', '', 'base', 'head', 'tb', 'sha-landed-a', 'gt', 'lt', '[]', '', 99)`, []any{partAID}},
+	} {
+		if _, err := db.Exec(q.sql, q.args...); err != nil {
+			t.Fatalf("%s: %v", q.sql, err)
+		}
+	}
+
+	// 1. Item page API for parent.
+	resp, err := h.http.Client().Get(h.http.URL + "/api/v1/items/" + parentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("parent itemPayload status=%d body=%s", resp.StatusCode, body)
+	}
+	var parentEnv struct {
+		Data itemData `json:"data"`
+	}
+	if err := json.Unmarshal(body, &parentEnv); err != nil {
+		t.Fatal(err)
+	}
+	if parentEnv.Data.Split == nil || parentEnv.Data.Split.Parent == nil {
+		t.Fatalf("missing split parent detail: %+v", parentEnv.Data.Split)
+	}
+	sp := parentEnv.Data.Split.Parent
+	if sp.OwnerWords != "Owner's original words." || sp.ProgressSummary != "1 of 2 required parts landed" || sp.TotalParts != 2 {
+		t.Fatalf("unexpected parent detail: %+v", sp)
+	}
+	if sp.Parts[0].LandedCommit != "sha-landed-a" || sp.Parts[0].LandingID != "land-a" {
+		t.Fatalf("part A missing landed commit: %+v", sp.Parts[0])
+	}
+	if len(sp.Coverage) != 2 || sp.Coverage[0].CriterionID != "c5" || len(sp.Coverage[0].Entries) != 2 || !sp.Coverage[1].Entries[0].ClosingCheck {
+		t.Fatalf("unexpected coverage: %+v", sp.Coverage)
+	}
+
+	// 2. Item page API for nested split item (both part and parent).
+	respB, err := h.http.Client().Get(h.http.URL + "/api/v1/items/" + partBID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer respB.Body.Close()
+	bodyB, err := io.ReadAll(respB.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if respB.StatusCode != http.StatusOK {
+		t.Fatalf("part B itemPayload status=%d body=%s", respB.StatusCode, bodyB)
+	}
+	var partBEnv struct {
+		Data itemData `json:"data"`
+	}
+	if err := json.Unmarshal(bodyB, &partBEnv); err != nil {
+		t.Fatal(err)
+	}
+	if partBEnv.Data.Split == nil || partBEnv.Data.Split.Part == nil || partBEnv.Data.Split.Parent == nil {
+		t.Fatalf("nested split item missing part or parent detail: %+v", partBEnv.Data.Split)
+	}
+	pb := partBEnv.Data.Split.Part
+	if pb.ParentID != parentID || pb.ParentTitle != "Parent Ask" || pb.Label != "b" || pb.Share != "Deliver B" {
+		t.Fatalf("unexpected part B detail: %+v", pb)
+	}
+	if len(pb.Follows) != 1 || pb.Follows[0].Label != "a" || pb.Follows[0].State != "landed" {
+		t.Fatalf("unexpected follows: %+v", pb.Follows)
+	}
+	if len(pb.Leaves) != 1 || pb.Leaves[0].SiblingLabel != "a" || pb.Leaves[0].Work != "Deliver A" {
+		t.Fatalf("unexpected leaves: %+v", pb.Leaves)
+	}
+
+	// 3. Landing history reports part A under Parent Ask.
+	rs, err := store.OpenRead(ctx, h.store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rs.Close()
+	if err := rs.ReadTx(ctx, func(r *store.Reader) error {
+		landings, err := readLandingHistory(r)
+		if err != nil {
+			return err
+		}
+		foundPartLanding := false
+		for _, l := range landings {
+			if l.ItemID == partAID {
+				foundPartLanding = true
+				if l.ParentID != parentID || l.ParentTitle != "Parent Ask" || l.PartLabel != "a" {
+					t.Fatalf("part landing missing parent metadata: %+v", l)
+				}
+			}
+		}
+		if !foundPartLanding {
+			t.Fatal("missing part A landing in history")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// 4. Snapshot counts do not count unlanded split parent as landed, and include split_progress/split_part.
+	snapResp, err := h.http.Client().Get(h.http.URL + "/api/v1/snapshot")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer snapResp.Body.Close()
+	snapBody, err := io.ReadAll(snapResp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapResp.StatusCode != http.StatusOK {
+		t.Fatalf("snapshot status=%d body=%s", snapResp.StatusCode, snapBody)
+	}
+	var snapEnv struct {
+		Data snapshotData `json:"data"`
+	}
+	if err := json.Unmarshal(snapBody, &snapEnv); err != nil {
+		t.Fatal(err)
+	}
+	if snapEnv.Data.Counts.ByState["landed"] != 1 {
+		t.Fatalf("expected only 1 landed item (part A, not parent), got %+v", snapEnv.Data.Counts.ByState)
+	}
+	snapItems := map[string]itemView{}
+	for _, it := range snapEnv.Data.Items {
+		snapItems[it.ItemID] = it
+	}
+	if snapItems[parentID].SplitProgress != "1 of 2 required parts landed" {
+		t.Fatalf("parent SplitProgress = %q", snapItems[parentID].SplitProgress)
+	}
+	if snapItems[partAID].SplitPart == nil || snapItems[partAID].SplitPart.ParentTitle != "Parent Ask" || snapItems[partAID].SplitPart.PartLabel != "a" {
+		t.Fatalf("part A SplitPart = %+v", snapItems[partAID].SplitPart)
+	}
+
+	// 5. printWaiting labels part rows with parent title and part label.
+	var buf bytes.Buffer
+	if err := printWaiting(&buf, []waitingRow{
+		{ItemID: partBID, Class: "needs you", Where: "queue", Why: "waiting", Mover: "owner", Since: "now", SplitPart: &whySplitPart{ParentID: parentID, ParentTitle: "Parent Ask", PartLabel: "b", Required: true}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), partBID+" (Parent Ask · part b)") {
+		t.Fatalf("printWaiting output missing parent label: %s", buf.String())
+	}
+
+	// 6. decorateWhyPassSplits decorates parent and part rows for whyFromPass.
+	rows := []whyPassRow{
+		{waitingRow: waitingRow{ItemID: parentID, Class: "waits on work", Why: "waiting", Mover: partBID}, State: "blocked", Reason: "blocked"},
+		{waitingRow: waitingRow{ItemID: partBID, Class: "waits on work", Why: "waiting", Mover: nestedPartID}, State: "blocked", Reason: "blocked"},
+		{waitingRow: waitingRow{ItemID: nestedPartID, Class: "ready", Why: "ready", Mover: "drain"}, State: "in-queue", Reason: "ready"},
+		{waitingRow: waitingRow{ItemID: nestedPart2ID, Class: "waits on work", Why: "waiting", Mover: nestedPartID}, State: "in-queue", Reason: "blocked-by"},
+	}
+	if err := rs.ReadTx(ctx, func(r *store.Reader) error {
+		return decorateWhyPassSplits(r, rows)
+	}); err != nil {
+		t.Fatalf("decorateWhyPassSplits: %v", err)
+	}
+	byID := map[string]whyPassRow{}
+	for _, r := range rows {
+		byID[r.ItemID] = r
+	}
+	if byID[parentID].SplitParent == nil || !strings.HasPrefix(byID[parentID].Why, "split into 2 parts:") {
+		t.Fatalf("whyFromPass parent row: %+v", byID[parentID])
+	}
+	if byID[nestedPartID].SplitPart == nil || byID[nestedPartID].SplitPart.ParentID != partBID || byID[nestedPartID].SplitPart.PartLabel != "b1" {
+		t.Fatalf("whyFromPass part row: %+v", byID[nestedPartID])
+	}
+}
+
+func boolPtr(v bool) *bool { return &v }

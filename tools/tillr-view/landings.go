@@ -37,6 +37,9 @@ type landingRow struct {
 	FixerItem         string   `json:"fixer_item,omitempty"`
 	RedSHA            string   `json:"red_sha,omitempty"`
 	FailingChecks     []string `json:"failing_checks,omitempty"`
+	ParentID          string   `json:"parent_id,omitempty"`
+	ParentTitle       string   `json:"parent_title,omitempty"`
+	PartLabel         string   `json:"part_label,omitempty"`
 }
 
 // readLandingHistory reads the ledger, not the retired candidate queue. Events
@@ -69,6 +72,24 @@ func readLandingHistory(r *store.Reader) ([]landingRow, error) {
 	rows.Close()
 	if err != nil {
 		return nil, err
+	}
+	splits, err := readAllSplits(r)
+	if err != nil {
+		return nil, err
+	}
+	if len(splits) > 0 {
+		partIndex := splitPartIndex(splits)
+		meta, err := readSplitItemMeta(r)
+		if err != nil {
+			return nil, err
+		}
+		for i := range out {
+			if m, ok := partIndex[out[i].ItemID]; ok {
+				out[i].ParentID = m.ParentID
+				out[i].ParentTitle = meta[m.ParentID].Title
+				out[i].PartLabel = m.Label
+			}
+		}
 	}
 	events, err := r.Events(0)
 	if err != nil {

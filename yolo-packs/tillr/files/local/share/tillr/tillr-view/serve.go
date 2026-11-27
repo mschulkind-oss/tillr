@@ -874,6 +874,8 @@ type itemView struct {
 	LatestDecision *dispatchView  `json:"latest_decision"`
 	LatestRun      *runSummary    `json:"latest_run"`
 	BlockedBy      []string       `json:"blocked_by"`
+	SplitProgress  string         `json:"split_progress,omitempty"`
+	SplitPart      *whySplitPart  `json:"split_part,omitempty"`
 }
 
 // snapshotData is the two-item drain view: every item projected, with its runs and the
@@ -1233,6 +1235,10 @@ func (s *server) snapshotBuild(r *store.Reader, req *http.Request, session *loop
 	counts := boardCountsOf(items, runs, candidates, attempts, edgesByItem, holds, history)
 	places := itemPlaces(items)
 	states := itemStates(items)
+	splitProgress, splitParts, err := splitSnapshotDecorations(r)
+	if err != nil {
+		return nil, unreadable(err)
+	}
 	out.Items = make([]itemView, 0, len(items))
 	for _, it := range items {
 		itemRuns := runsByItem[it.ItemID]
@@ -1282,6 +1288,12 @@ func (s *server) snapshotBuild(r *store.Reader, req *http.Request, session *loop
 		}
 		if ideas[it.ItemID] {
 			view.Kind = "idea"
+		}
+		if prog, ok := splitProgress[it.ItemID]; ok {
+			view.SplitProgress = prog
+		}
+		if sp, ok := splitParts[it.ItemID]; ok {
+			view.SplitPart = sp
 		}
 		out.Items = append(out.Items, view)
 	}
@@ -1571,6 +1583,7 @@ type itemData struct {
 	VerifyRefusals []verifyRefusalView `json:"verify_refusals"`
 	LinkedAlerts   []watch.LinkedAlert `json:"linked_alerts"`
 	WorkSummary    string              `json:"work_summary"`
+	Split          *itemSplitView      `json:"split,omitempty"`
 }
 
 // verdictView preserves each recorded judgment, not just the criterion's current state.
@@ -1820,6 +1833,10 @@ func (s *server) itemPayload(r *store.Reader, req *http.Request) (any, *apiFailu
 	waitingOn := waitingOnTargets(edges, itemStates(items))
 	out.Item.Projected = ProjectItemState(it, enqueuedCandidate, active, waitingOn, hold)
 	projectClosedBlockers(&out.Item.Projected, out.ClosedBlockers)
+	out.Split, err = readItemSplitView(r, id)
+	if err != nil {
+		return nil, unreadable(err)
+	}
 	return out, nil
 }
 
