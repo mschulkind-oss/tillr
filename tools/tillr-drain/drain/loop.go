@@ -1827,9 +1827,10 @@ func heldDetail(holds []Decision) string {
 // reached, or the error that ended it. A lane that neither stopped nor failed answers the
 // zero value.
 type laneOutcome struct {
-	stop        string
-	err         error
-	laneRefusal *LaneRefusalError
+	stop            string
+	err             error
+	laneRefusal     *LaneRefusalError
+	unsettledReason string
 }
 
 // holdLocal captures the item content on a staging refusal, not its place in line.
@@ -2813,6 +2814,10 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 	if l.nonLanding {
 		if decision.Workflow != nil {
 			_, err := l.settleNode(ctx, decision, record, log, mainSHA, result, offered)
+			if errors.Is(err, errJudgeBackendHeld) || errors.Is(err, errJudgePaused) {
+				prepared = true
+				return laneOutcome{unsettledReason: err.Error()}
+			}
 			return laneOutcome{err: err}
 		}
 		return l.settleHook(ctx, decision, result)
@@ -2879,6 +2884,10 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 			handled, nodeErr = l.settleNode(ctx, decision, record, log, mainSHA, result, offered)
 		}
 		if handled {
+			if errors.Is(nodeErr, errJudgeBackendHeld) || errors.Is(nodeErr, errJudgePaused) {
+				prepared = true
+				return laneOutcome{unsettledReason: nodeErr.Error()}
+			}
 			prepared = nodeErr == nil
 			return laneOutcome{err: nodeErr}
 		}

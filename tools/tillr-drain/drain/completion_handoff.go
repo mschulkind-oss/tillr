@@ -48,8 +48,27 @@ func (l *Loop) drainCompletions(ctx context.Context, result *LoopResult) (string
 }
 
 func (l *Loop) drainCompletionsCount(ctx context.Context, result *LoopResult) (int, string, error) {
+	// Drain only the completions already queued at entry so newly arriving
+	// completions wait for the next pass instead of postponing planning.
+	limit := len(l.completions)
+	if limit == 0 {
+		select {
+		case c := <-l.completions:
+			if stop, err := l.finishRunStep(ctx, c, result); stop != "" || err != nil {
+				return 1, stop, err
+			}
+			if l.cfg.ItemWorktrees && !l.nonLanding && !l.pollOnly {
+				if _, colErr := l.collectIdleWorktrees(ctx); colErr != nil {
+					l.reportf("loop: idle worktree collection after node end failed: %v\n", colErr)
+				}
+			}
+			return 1, "", nil
+		default:
+			return 0, "", nil
+		}
+	}
 	drained := 0
-	for {
+	for drained < limit {
 		select {
 		case c := <-l.completions:
 			drained++
@@ -57,14 +76,16 @@ func (l *Loop) drainCompletionsCount(ctx context.Context, result *LoopResult) (i
 				return drained, stop, err
 			}
 		default:
-			if drained > 0 && l.cfg.ItemWorktrees && !l.nonLanding && !l.pollOnly {
-				if _, colErr := l.collectIdleWorktrees(ctx); colErr != nil {
-					l.reportf("loop: idle worktree collection after node end failed: %v\n", colErr)
-				}
-			}
-			return drained, "", nil
+			goto done
 		}
 	}
+done:
+	if drained > 0 && l.cfg.ItemWorktrees && !l.nonLanding && !l.pollOnly {
+		if _, colErr := l.collectIdleWorktrees(ctx); colErr != nil {
+			l.reportf("loop: idle worktree collection after node end failed: %v\n", colErr)
+		}
+	}
+	return drained, "", nil
 }
 
 // finishRunStep lets a completion advance its own retained reservation. The

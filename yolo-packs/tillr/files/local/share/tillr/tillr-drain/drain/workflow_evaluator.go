@@ -188,7 +188,7 @@ func (l *Loop) settleEvaluator(ctx context.Context, d Decision, rec run.Record, 
 	}
 	c, accepted, err := l.judgeCandidate(ctx, c, result)
 	if errors.Is(err, errJudgeBackendHeld) || errors.Is(err, errJudgePaused) {
-		return true, nil
+		return true, err
 	}
 	if err != nil {
 		return true, err

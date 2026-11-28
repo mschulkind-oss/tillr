@@ -4,11 +4,13 @@ package drain
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"sort"
 	"time"
 
 	"github.com/mschulkind-oss/tillr-run/run"
+	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -174,11 +176,20 @@ func (l *Loop) findExaminableRuns(ctx context.Context) ([]examinableRun, error) 
 	}
 	defer s.Close()
 
+	at := l.cfg.Now().UTC()
 	var found []examinableRun
 	err = s.ReadTx(ctx, func(r *store.Reader) error {
-		works, err := readPending(r)
+		works, byRun, err := readPendingHistory(r)
 		if err != nil {
 			return err
+		}
+		faults, err := ReadItemFaults(r)
+		if err != nil {
+			return err
+		}
+		declared, err := definition.ForReader(r)
+		if err != nil {
+			return readFailure(err)
 		}
 		l.mu.Lock()
 		brackets := make(map[string]bool, len(l.activeBrackets))
@@ -192,12 +203,44 @@ func (l *Loop) findExaminableRuns(ctx context.Context) ([]examinableRun, error) 
 		l.mu.Unlock()
 
 		for itemID, work := range works {
+			if _, faulted := faults[itemID]; faulted {
+				continue
+			}
 			if !isWorkSettleEligible(work, "") {
 				continue
 			}
 			runID := work.Decision.RunRequest.RunID
 			if brackets[runID] || examining[runID] {
 				continue
+			}
+			var itemState string
+			if err := r.QueryRow(`SELECT state FROM items WHERE item_id = ?`, itemID).Scan(&itemState); err != nil {
+				if err == sql.ErrNoRows {
+					continue
+				}
+				return readFailure(err)
+			}
+			if !pendingWorkStateEligible(declared.Parsed, work, itemState) {
+				continue
+			}
+			if len(work.resumes) != 0 {
+				liveFound := false
+				for _, node := range parallelNodes(work.Decision) {
+					if node.RunRequest == nil {
+						continue
+					}
+					live, err := liveContinuation(r, work.resumes[node.RunRequest.RunID], node, at)
+					if err != nil {
+						return err
+					}
+					if live {
+						liveFound = true
+						break
+					}
+				}
+				if liveFound {
+					continue
+				}
 			}
 			paused, err := pausedPendingWork(r, work)
 			if err != nil {
@@ -207,19 +250,25 @@ func (l *Loop) findExaminableRuns(ctx context.Context) ([]examinableRun, error) 
 				continue
 			}
 			var finished bool
+			var rec *run.Record
 			if len(work.Decision.Parallel) > 0 {
 				finished, err = parallelTerminal(r, work.Decision)
 				if err != nil {
 					return err
 				}
 			} else {
-				rec, err := terminalRecord(r, runID)
+				rec, err = terminalRecord(r, runID)
 				if err != nil {
 					return err
 				}
 				finished = rec != nil && rec.State != run.StatePaused
 			}
 			if !finished {
+				continue
+			}
+			if held, err := l.settlementHeldByBackendOrWait(r, work.Decision, rec, byRun, at); err != nil {
+				return err
+			} else if held {
 				continue
 			}
 			found = append(found, examinableRun{itemID: itemID, runID: runID})

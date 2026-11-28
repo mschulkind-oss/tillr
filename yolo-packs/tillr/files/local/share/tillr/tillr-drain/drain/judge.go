@@ -242,7 +242,7 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 					return c, false, err
 				}
 				if !open {
-					return c, false, errJudgeBackendHeld
+					return c, false, fmt.Errorf("%w: backend %s", errJudgeBackendHeld, receipt.Request.Backend)
 				}
 			}
 			req := receipt.Request
@@ -325,7 +325,7 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 				return c, false, err
 			}
 			if !open {
-				return c, false, errJudgeBackendHeld
+				return c, false, fmt.Errorf("%w: backend %s", errJudgeBackendHeld, receipt.Request.Backend)
 			}
 			if err := l.restoreJudgeInputs(c, receipt); err != nil {
 				return c, false, err
@@ -348,7 +348,7 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 					return c, false, err
 				}
 				if !open {
-					return c, false, errJudgeBackendHeld
+					return c, false, fmt.Errorf("%w: backend %s", errJudgeBackendHeld, receipt.Request.Backend)
 				}
 			}
 			if len(c.Writers) == 0 {
@@ -382,7 +382,7 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 					return c, false, err
 				}
 				if !open {
-					return c, false, errJudgeBackendHeld
+					return c, false, fmt.Errorf("%w: backend %s", errJudgeBackendHeld, receipt.Request.Backend)
 				}
 			}
 			if err := l.restoreJudgeInputs(c, receipt); err != nil {
@@ -510,7 +510,7 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 					return c, false, err
 				}
 				if !open {
-					return c, false, errJudgeBackendHeld
+					return c, false, fmt.Errorf("%w: backend %s", errJudgeBackendHeld, req.Backend)
 				}
 				req = &selected
 			}
@@ -621,7 +621,7 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 						return c, false, err
 					}
 					if !open {
-						return c, false, errJudgeBackendHeld
+						return c, false, fmt.Errorf("%w: backend %s", errJudgeBackendHeld, receipt.Request.Backend)
 					}
 				}
 				req := receipt.Request
@@ -637,7 +637,7 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 				if err := l.recordBackendWindow(ctx, judgeRec); err != nil {
 					return c, false, err
 				}
-				return c, false, errJudgeBackendHeld
+				return c, false, fmt.Errorf("%w: backend %s", errJudgeBackendHeld, judgeRec.Backend)
 			}
 		}
 		if len(receipt.Raw) == 0 && judgeRec.RunID != "" && judgeBackendFailure(c, judgeRec, judgeLog) {
@@ -646,7 +646,7 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 				if err := l.holdJudgeInfrastructure(ctx, c, receipt, judgeRec, judgeLog); err != nil {
 					return c, false, err
 				}
-				return c, false, errJudgeBackendHeld
+				return c, false, fmt.Errorf("%w: backend %s", errJudgeBackendHeld, judgeRec.Backend)
 			}
 		}
 		if len(receipt.Raw) == 0 && judgeRec.State == run.StatePaused && judgeRec.EndCause == run.EndRestart && !judgeQuotaRefusal(judgeRec) {

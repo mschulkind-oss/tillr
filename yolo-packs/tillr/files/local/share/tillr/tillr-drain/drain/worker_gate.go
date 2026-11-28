@@ -3,6 +3,8 @@ package drain
 import (
 	"context"
 	"database/sql"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/mschulkind-oss/tillr-item/item"
@@ -252,6 +254,13 @@ func (l *Loop) shouldExamineInline(ctx context.Context, d Decision) bool {
 }
 
 func isWorkSettleEligible(work *pendingWork, runID string) bool {
+	if work == nil || work.Examining || work.Examiner != nil {
+		return false
+	}
+	return isWorkSettleEligibleIgnoringClaim(work, runID)
+}
+
+func isWorkSettleEligibleIgnoringClaim(work *pendingWork, runID string) bool {
 	if work == nil || work.Done || work.Ready || work.Candidate != nil {
 		return false
 	}
@@ -261,9 +270,6 @@ func isWorkSettleEligible(work *pendingWork, runID string) bool {
 	if work.LaneReleased || work.LaneBusyByOther || work.ReopenedPausedJudge {
 		return false
 	}
-	if work.Examining || work.Examiner != nil {
-		return false
-	}
 	if work.Decision.RunRequest == nil || work.Decision.LaneID == "" {
 		return false
 	}
@@ -271,6 +277,99 @@ func isWorkSettleEligible(work *pendingWork, runID string) bool {
 		return false
 	}
 	return true
+}
+
+// holdUnsettledExamination records a single settle-failed fault hold when an
+// examination finishes without settling the run and nothing else prevents it
+// from being claimed again on the next poll.
+func (l *Loop) holdUnsettledExamination(ctx context.Context, d Decision, work *pendingWork, at time.Time, reason string) error {
+	if d.ItemID == "" || d.RunRequest == nil || d.RunRequest.RunID == "" || l.cfg.Store == "" {
+		return nil
+	}
+	runID := d.RunRequest.RunID
+	s, err := store.OpenRead(ctx, l.cfg.Store)
+	if err != nil {
+		return err
+	}
+	stillUnsettled := false
+	err = s.ReadTx(ctx, func(r *store.Reader) error {
+		works, byRun, err := readPendingHistory(r)
+		if err != nil {
+			return err
+		}
+		w := works[d.ItemID]
+		if !isWorkSettleEligibleIgnoringClaim(w, runID) {
+			return nil
+		}
+		faults, err := ReadItemFaults(r)
+		if err != nil {
+			return err
+		}
+		if _, faulted := faults[d.ItemID]; faulted {
+			return nil
+		}
+		declared, err := definition.ForReader(r)
+		if err != nil {
+			return readFailure(err)
+		}
+		var itemState string
+		if err := r.QueryRow(`SELECT state FROM items WHERE item_id = ?`, d.ItemID).Scan(&itemState); err != nil {
+			if err == sql.ErrNoRows {
+				return nil
+			}
+			return readFailure(err)
+		}
+		if !pendingWorkStateEligible(declared.Parsed, w, itemState) {
+			return nil
+		}
+		if len(w.resumes) != 0 {
+			for _, node := range parallelNodes(w.Decision) {
+				if node.RunRequest == nil {
+					continue
+				}
+				live, err := liveContinuation(r, w.resumes[node.RunRequest.RunID], node, at)
+				if err != nil {
+					return err
+				}
+				if live {
+					return nil
+				}
+			}
+		}
+		if paused, err := pausedPendingWork(r, w); err != nil || paused {
+			return err
+		}
+		var rec *run.Record
+		if len(w.Decision.Parallel) > 0 {
+			finished, err := parallelTerminal(r, w.Decision)
+			if err != nil || !finished {
+				return err
+			}
+		} else {
+			rec, err = terminalRecord(r, runID)
+			if err != nil || rec == nil || rec.State == run.StatePaused {
+				return err
+			}
+		}
+		if held, err := l.settlementHeldByBackendOrWait(r, w.Decision, rec, byRun, at); err != nil || held {
+			return err
+		}
+		stillUnsettled = true
+		return nil
+	})
+	s.Close()
+	if err != nil || !stillUnsettled {
+		return err
+	}
+	detail := strings.TrimSpace(reason)
+	if detail == "" {
+		detail = fmt.Sprintf("examination released run %s without settling it", runID)
+	}
+	err = l.holdItemFault(ctx, Candidate{ItemID: d.ItemID, RunID: runID, LaneID: d.LaneID}, ReasonSettleFailed, detail)
+	if terminal := asItemTerminal(err); terminal != nil {
+		return l.settleTerminalItem(ctx, work, terminal)
+	}
+	return err
 }
 
 func (l *Loop) settlementHeldByBackendOrWait(r *store.Reader, d Decision, rec *run.Record, byRun map[string]*pendingWork, at time.Time) (bool, error) {

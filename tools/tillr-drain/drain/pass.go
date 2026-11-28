@@ -3351,7 +3351,7 @@ plans:
 			return l.waitForTrigger(ctx, leases, at, result)
 		}
 	}
-	if stale {
+	if stale || len(l.completions) > 0 {
 		return "", nil
 	}
 	if err := l.timePassPhase("check_stop_requested", func() error { return l.checkStopRequested(ctx) }); err != nil {
@@ -3734,7 +3734,7 @@ func (l *Loop) examineClaimed(ctx context.Context, d Decision, work *pendingWork
 		} else {
 			completion.outcome.err = err
 		}
-		if completion.outcome.err == nil && completion.outcome.stop == "" && completion.laneRefusal == nil && !l.isGateCoordinatorActive() {
+		if completion.outcome.err == nil && completion.outcome.stop == "" && completion.outcome.unsettledReason == "" && completion.laneRefusal == nil && !l.isGateCoordinatorActive() {
 			completion.outcome, completion.step = l.judgeSettledCandidate(ctx, d, local, timing)
 		}
 	} else {
@@ -3756,6 +3756,18 @@ func (l *Loop) examineClaimed(ctx context.Context, d Decision, work *pendingWork
 		if checkout != "" && ref != "" {
 			l.reportForkCheckoutLeftover(context.WithoutCancel(ctx), d, checkout, ref, l.cfg.Now().UTC())
 		}
+	}
+	// If examination finished without error or refusal yet left the run still
+	// unsettled and claimable, record a fault hold naming why before releasing
+	// the examination so the run is not claimed again until something changes.
+	if d.Action == ActionSettle && d.RunRequest != nil &&
+		completion.outcome.stop == "" && completion.outcome.err == nil &&
+		completion.laneRefusal == nil && !l.isRestartReplaced() && ctx.Err() == nil {
+		endCheck := timeHandoffPhase(ctx, "check_unsettled_examination")
+		if err := l.holdUnsettledExamination(ctx, d, work, at, completion.outcome.unsettledReason); err != nil {
+			completion.outcome.err = err
+		}
+		endCheck()
 	}
 	// A retained lane keeps its lease: releasing it would let the next staging clear the
 	// work that could not be preserved.
