@@ -16,6 +16,7 @@ import (
 
 	"github.com/mschulkind-oss/tillr-drain/heavy"
 	"github.com/mschulkind-oss/tillr-drain/internal/drainmodel"
+	"github.com/mschulkind-oss/tillr-drain/internal/stagelaunch"
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/event"
@@ -1451,4 +1452,178 @@ func (l *Loop) restoreReclaimedLane(ctx context.Context, c endedLaneCandidate) b
 		return false
 	}
 	return true
+}
+
+// poolLaneDirName reports whether a lane-root entry is an ordinary or express pool lane
+// directory (lane-<n>, express-<n>). Desks (desk-*) still stage under item-owned
+// worktrees, so they are not pool directories here.
+func poolLaneDirName(name string) bool {
+	return strings.HasPrefix(name, "lane-") || isExpressLane(name)
+}
+
+// poolLaneSweep is what the start-time sweep did with each pool lane directory.
+type poolLaneSweep struct {
+	Removed []string
+	Kept    []keptPoolLane
+}
+
+type keptPoolLane struct {
+	Lane   string
+	Reason string
+}
+
+// sweepPoolLaneDirs removes the pool lane directories (lane-<n>, express-<n>) left
+// under the lane root from before item-owned worktrees, once, when the loop starts.
+// Under item-owned worktrees every run takes its item's own directory, so a pool lane
+// directory is kept only when something still needs it: a run, staging or pending work
+// on it, a lane condition, preserved work recorded against it, a fork checkout, or
+// unlanded work in its worktree (uncommitted changes, or a HEAD the trunk does not
+// contain). The start report names each directory removed and each kept, with why.
+func (l *Loop) sweepPoolLaneDirs(ctx context.Context) poolLaneSweep {
+	var out poolLaneSweep
+	if !l.cfg.ItemWorktrees || l.nonLanding || l.cfg.LaneRoot == "" {
+		return out
+	}
+	entries, err := os.ReadDir(l.cfg.LaneRoot)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			l.reportf("loop: pool lane directories: unreadable lane root: %v\n", err)
+		}
+		return out
+	}
+	var lanes []string
+	for _, e := range entries {
+		if e.IsDir() && poolLaneDirName(e.Name()) {
+			lanes = append(lanes, e.Name())
+		}
+	}
+	if len(lanes) == 0 {
+		return out
+	}
+	sort.Strings(lanes)
+	preserved := l.preservedPoolLanes(ctx)
+	for _, lane := range lanes {
+		if reason := l.removePoolLaneDir(ctx, lane, preserved); reason != "" {
+			out.Kept = append(out.Kept, keptPoolLane{Lane: lane, Reason: reason})
+		} else {
+			out.Removed = append(out.Removed, lane)
+		}
+	}
+	l.reportf("%s\n", out.line())
+	return out
+}
+
+func (s poolLaneSweep) line() string {
+	removed := "none"
+	if len(s.Removed) > 0 {
+		removed = strings.Join(s.Removed, ", ")
+	}
+	kept := "none"
+	if len(s.Kept) > 0 {
+		parts := make([]string, len(s.Kept))
+		for i, k := range s.Kept {
+			parts[i] = k.Lane + " (" + k.Reason + ")"
+		}
+		kept = strings.Join(parts, ", ")
+	}
+	return fmt.Sprintf("loop: pool lane directories: removed %s (nothing needs them under item-owned worktrees); kept %s", removed, kept)
+}
+
+// preservedPoolLanes answers the pool lanes that unpruned preserved work names.
+func (l *Loop) preservedPoolLanes(ctx context.Context) map[string]string {
+	out := map[string]string{}
+	if l.cfg.Store == "" {
+		return out
+	}
+	s, err := store.OpenRead(ctx, l.cfg.Store)
+	if err != nil {
+		return nil
+	}
+	defer s.Close()
+	err = s.ReadTx(ctx, func(r *store.Reader) error {
+		saved, err := ReadPreservedWork(r)
+		for _, p := range saved {
+			if !p.Pruned && poolLaneDirName(p.LaneID) {
+				out[p.LaneID] = p.RunID
+			}
+		}
+		return err
+	})
+	if err != nil {
+		return nil
+	}
+	return out
+}
+
+// removePoolLaneDir removes one pool lane directory, or answers why it stays. A nil
+// preserved map means the preserved-work record could not be read, which keeps every
+// directory: removal is never decided on a guess.
+func (l *Loop) removePoolLaneDir(ctx context.Context, lane string, preserved map[string]string) string {
+	if preserved == nil {
+		return "preserved work could not be read"
+	}
+	if runID, ok := preserved[lane]; ok {
+		return "holds preserved work from " + runID
+	}
+	l.laneMu.Lock()
+	c, conditioned := l.laneConditions[lane]
+	l.laneMu.Unlock()
+	if conditioned {
+		return "lane condition " + c.reason
+	}
+	if l.laneForkTarget(lane) != "" {
+		return "holds a fork checkout"
+	}
+	worktree := l.lanePath(lane)
+	unlock, acquired, err := stagelaunch.AcquireStageLock(worktree)
+	if err != nil {
+		return "stage lock: " + err.Error()
+	}
+	if !acquired {
+		return "being staged"
+	}
+	defer unlock()
+	if inUse, err := l.isItemLaneInUseNow(ctx, lane, ""); err != nil {
+		return "use could not be read: " + err.Error()
+	} else if inUse {
+		return "in use by a run or pending work"
+	}
+	hasWorktree := false
+	if _, err := os.Stat(worktree); err == nil {
+		hasWorktree = true
+		status, err := l.git(ctx, worktree, "status", "--porcelain", "--untracked-files=all")
+		if err != nil {
+			return "worktree status unreadable: " + err.Error()
+		}
+		if strings.TrimSpace(status) != "" {
+			return "worktree holds uncommitted changes"
+		}
+		head, err := l.revParse(ctx, worktree, "HEAD")
+		if err != nil || head == "" {
+			return "worktree HEAD unreadable"
+		}
+		if _, err := l.git(ctx, l.cfg.Root, "merge-base", "--is-ancestor", head, l.trunkRef()); err != nil {
+			return "HEAD " + shortSHA(head) + " is not on the trunk"
+		}
+	}
+	dir := l.laneDirPath(lane)
+	for _, sub := range []string{"scratch", "durable"} {
+		subPath := filepath.Join(dir, sub)
+		if _, err := os.Stat(subPath); err != nil {
+			continue
+		}
+		if err := preserveLaneScratchFiles(l.cfg.Root, subPath); err != nil {
+			return "saving scratch files failed: " + err.Error()
+		}
+	}
+	if hasWorktree {
+		l.noteLaneWrite(lane)
+		if err := l.deleteEndedItemWorktree(ctx, endedLaneCandidate{lane: lane}); err != nil {
+			return "removing worktree failed: " + err.Error()
+		}
+	}
+	if err := removeEndedDir(dir); err != nil {
+		return "removing directory failed: " + err.Error()
+	}
+	return ""
 }

@@ -1505,6 +1505,9 @@ func (l *Loop) stageLandingLanes(ctx context.Context) error {
 		if err := l.recheckLanes(ctx); err != nil {
 			return err
 		}
+		// Pool lane directories from before item-owned worktrees are removed once
+		// here unless something still needs them (ended_item_lane.go).
+		l.sweepPoolLaneDirs(ctx)
 		var desks []string
 		for _, lane := range l.lanes() {
 			if strings.HasPrefix(lane, "desk-") {

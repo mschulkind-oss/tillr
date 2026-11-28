@@ -1112,6 +1112,16 @@ still pending keeps its directory until `refs/tillr/green` advances past it.
   recorded in `drain.ended-worktree-collect-failed` with the directory and reason, and retried
   on a later pass.
 
+**Old pool lane directories at start.** Under item-owned worktrees, every run takes its item's
+own directory, so the pool lane directories left from before (`lane-*`, `express-*`; desks are
+not included) are swept once when the loop starts. A pool lane directory is kept while a run,
+staging step or pending work uses it, while a lane condition holds it, while unpruned preserved
+work names it, while it holds a fork checkout, or while its worktree holds unlanded work
+(uncommitted changes, or a `HEAD` the trunk does not contain). Every other pool lane directory
+has its run scratch files copied as above, its worktree removed through Git, and the directory
+deleted. The start report's `loop: pool lane directories:` line names each directory removed
+and each one kept, with the reason it stays.
+
 ## Ref lifetimes and backlog cleanup
 
 A **run pin** is the commit pointer for a worker attempt; a **landing marker** is the

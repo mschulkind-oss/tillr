@@ -646,7 +646,13 @@ func (p *planner) splitCallDecision(row itemRow, sc item.SplitCall) Decision {
 		if p.tick.MaxDispatches != nil && p.dispatched >= *p.tick.MaxDispatches {
 			break
 		}
-		lane, ok := p.freeLane(row.Express)
+		// Under item-owned worktrees the split design run takes the item's own
+		// directory and an ordinary agent slot, like every other dispatch; a bare
+		// freeLane here placed it on a pool lane.
+		if p.tick.ItemWorktrees && !p.ordinaryAgentSlotOpen(row.Express, false, "") {
+			break
+		}
+		lane, ok := p.freeLaneForItem(row.ItemID, row.Express)
 		if !ok {
 			break
 		}
@@ -655,6 +661,9 @@ func (p *planner) splitCallDecision(row itemRow, sc item.SplitCall) Decision {
 		d.SelectSeat = true
 		d.RunRequest = p.request(row.ItemID, lane, backend)
 		stampDecisionRequest(d, d.RunRequest)
+		if p.tick.ItemWorktrees {
+			p.claimOrdinaryAgentSlot(row.Express, false, lane, d.RunRequest.RunID)
+		}
 	}
 	identifyDecision(&d)
 	return d

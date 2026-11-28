@@ -628,3 +628,51 @@ func TestSplitCallUnansweredAndRepeatRoutesToOwnerWithDonorPinned(t *testing.T) 
 		t.Fatalf("donor pin lost after repeat: %s != %s", gotSHA, head)
 	}
 }
+
+// TestSplitCallDesignDispatchUsesItemDirectoryUnderItemWorktrees pins the split-call
+// design dispatch (splitCallDecision) to the item's own directory: it once took a bare
+// pool lane, so a split parent's design run ran on lane-1 after item-owned worktrees.
+func TestSplitCallDesignDispatchUsesItemDirectoryUnderItemWorktrees(t *testing.T) {
+	f, l, parent := splitFixture(t)
+	recordTestSplitCallFromRefusal(t, f, l, parent, "run-item-lane", 3, 2, false, nil)
+	l.cfg.Policy = splitTestDesignPolicy(t, "designer")
+	ctx := context.Background()
+	s, err := store.OpenRead(ctx, l.cfg.Store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	def, err := definition.GitLanding()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var d Decision
+	if err := s.ReadTx(ctx, func(r *store.Reader) error {
+		envs, err := planWithDetails(r, Pass{
+			Now:            l.cfg.Now().Format(time.RFC3339Nano),
+			AvailableLanes: &[]string{"lane-1", "lane-2"},
+			ItemWorktrees:  true,
+		}, l.cfg.Policy, nil, def, nil)
+		if err != nil {
+			return err
+		}
+		for _, env := range envs {
+			var dec Decision
+			if err := json.Unmarshal(env.Payload, &dec); err != nil {
+				return err
+			}
+			if dec.ItemID == parent {
+				d = dec
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if d.Action != ActionDispatch || d.Reason != ReasonSplitCallDesign || d.Seat != "design" {
+		t.Fatalf("decision = %+v, want a split-call design dispatch", d)
+	}
+	if d.LaneID != parent || d.RunRequest == nil || d.RunRequest.LaneID != parent {
+		t.Fatalf("split design run lane = %q (request %+v), want the item's own directory %q", d.LaneID, d.RunRequest, parent)
+	}
+}
