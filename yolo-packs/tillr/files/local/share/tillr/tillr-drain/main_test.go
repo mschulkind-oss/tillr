@@ -529,6 +529,18 @@ func TestLoopCheckCommandOnlyWithoutBackendPolicy(t *testing.T) {
 		t.Fatalf("loop --check on command-only root without backend policy exited %d: %s", code, out)
 	}
 
+	// An unknown key in the trunk's own .tillr.toml is still refused at startup.
+	if err := os.WriteFile(filepath.Join(root, ".tillr.toml"), []byte("[gate]\nmistyped_key = 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, out = invoke(t, "loop", "--check", "--root", root, "--store", storePath, "--item-bin", itemStub, "--brief-template", filepath.Join(root, "brief.md"))
+	if code == 0 || !strings.Contains(string(out), ".tillr.toml") || !strings.Contains(string(out), "gate.mistyped_key") {
+		t.Fatalf("loop --check with an unknown trunk key: code=%d out=%s", code, out)
+	}
+	if err := os.Remove(filepath.Join(root, ".tillr.toml")); err != nil {
+		t.Fatal(err)
+	}
+
 	// Adding an agent stage makes loop --check refuse when no backend policy exists.
 	if err := os.WriteFile(filepath.Join(root, "config", "tillr", "workflows", "agent@v1.json"), []byte(`{"name":"agent","version":1,"stages":[{"id":"work","kind":"agent","seat":"build","access":"read_only"}],"edges":[]}`), 0o644); err != nil {
 		t.Fatal(err)

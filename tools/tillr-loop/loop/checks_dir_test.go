@@ -232,3 +232,27 @@ func TestChecksDirRevisionChecks(t *testing.T) {
 		t.Fatalf("invalid .tillr.toml got %T %v, want Refusal with ExitExternal", err, err)
 	}
 }
+
+func TestChecksDirRevisionChecksIgnoreUnknownSettings(t *testing.T) {
+	root, head := initLoopChecksDirFixture(t, "custom/checks", true)
+	toml := "[gate]\nchecks_dir = \"custom/checks\"\ndisabled_tests = [\"pkg:TestX\"]\n\n[future]\nkey = 1\n"
+	if err := os.WriteFile(filepath.Join(root, ".tillr.toml"), []byte(toml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	binDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(binDir, "tillr-gate"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+":"+os.Getenv("PATH"))
+	var out, errBuf bytes.Buffer
+	parsed, handled, code := parseArgs("fixer-gate", []string{
+		"--item", "i1", "--run", "r1", "--base", head,
+		"--only", "heavy-tree-check", "--worktree", root, "--head", head,
+	}, &out, &errBuf)
+	if handled {
+		t.Fatalf("parseArgs failed: code=%d stderr=%s", code, errBuf.String())
+	}
+	if code, err := revisionCheck("fixer-gate", parsed, strings.NewReader(""), &out, &errBuf); err != nil || code != 0 {
+		t.Fatalf("a candidate with unknown settings must be judged: code=%d err=%v", code, err)
+	}
+}

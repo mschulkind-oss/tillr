@@ -215,22 +215,7 @@ func (loader *classifyRepoLoader) commitSet(rev string) (*loadedCheckSet, error)
 			if err != nil {
 				return nil, err
 			}
-			tmpDir, err := os.MkdirTemp("", "tillr-gate-settings-*")
-			if err != nil {
-				return nil, err
-			}
-			err = func() error {
-				defer os.RemoveAll(tmpDir)
-				if writeErr := os.WriteFile(filepath.Join(tmpDir, ".tillr.toml"), raw, 0600); writeErr != nil {
-					return writeErr
-				}
-				s, readErr := settings.Read(tmpDir)
-				if readErr != nil {
-					return readErr
-				}
-				checksDir = s.ChecksDir()
-				return nil
-			}()
+			checksDir, err = settings.ParseChecksDir(rev+":.tillr.toml", []byte(raw))
 			if err != nil {
 				return nil, err
 			}
@@ -287,11 +272,11 @@ func (loader *classifyRepoLoader) worktreeSet(rawWT, rev string) (*loadedCheckSe
 	if cached, ok := loader.byWT[cacheKey]; ok {
 		return cached, nil
 	}
-	s, err := settings.Read(wtDir)
+	configured, err := settings.ReadChecksDir(wtDir)
 	if err != nil {
 		return nil, err
 	}
-	checkDir := filepath.Join(wtDir, filepath.FromSlash(s.ChecksDir()))
+	checkDir := filepath.Join(wtDir, filepath.FromSlash(configured))
 	entries, err := os.ReadDir(checkDir)
 	var decls []Declaration
 	if err != nil && !os.IsNotExist(err) {

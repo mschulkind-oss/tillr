@@ -1636,11 +1636,10 @@ func (s *ProcessSteps) gateFailureContext(candidate Candidate) ([]string, []stri
 		}
 		// Fast tree declarations own their read sets. A wrapper's generated plan
 		// need not hold their raw ids, so use that same declaration directory.
-		checksDir := settings.DefaultChecksDir
-		if s, err := settings.Read(candidate.Worktree); err == nil {
-			checksDir = s.ChecksDir()
+		var declarations []string
+		if checksDir, err := settings.ReadChecksDir(candidate.Worktree); err == nil {
+			declarations, _ = filepath.Glob(filepath.Join(candidate.Worktree, filepath.FromSlash(checksDir), "*.json"))
 		}
-		declarations, _ := filepath.Glob(filepath.Join(candidate.Worktree, filepath.FromSlash(checksDir), "*.json"))
 		for _, path := range declarations {
 			body, err := os.ReadFile(path)
 			var decl struct {
@@ -1686,11 +1685,10 @@ func (s *ProcessSteps) gateCheckReads(candidate Candidate, watches map[string][]
 		}
 	}
 	if candidate.Worktree != "" {
-		checksDir := settings.DefaultChecksDir
-		if s, err := settings.Read(candidate.Worktree); err == nil {
-			checksDir = s.ChecksDir()
+		var declarations []string
+		if checksDir, err := settings.ReadChecksDir(candidate.Worktree); err == nil {
+			declarations, _ = filepath.Glob(filepath.Join(candidate.Worktree, filepath.FromSlash(checksDir), "*.json"))
 		}
-		declarations, _ := filepath.Glob(filepath.Join(candidate.Worktree, filepath.FromSlash(checksDir), "*.json"))
 		for _, path := range declarations {
 			body, err := os.ReadFile(path)
 			var decl struct {

@@ -62,11 +62,11 @@ func FixerHeavyDeclaration(dir, id string) bool {
 	if filepath.Base(id) != id {
 		return false
 	}
-	s, err := settings.Read(dir)
+	checksDir, err := settings.ReadChecksDir(dir)
 	if err != nil {
 		return false
 	}
-	raw, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(s.ChecksDir()), id+".json"))
+	raw, err := os.ReadFile(filepath.Join(dir, filepath.FromSlash(checksDir), id+".json"))
 	var decl struct{ ID, Scope, Tier string }
 	return err == nil && json.Unmarshal(raw, &decl) == nil && decl.ID == id && decl.Scope == "tree" && decl.Tier == "heavy"
 }

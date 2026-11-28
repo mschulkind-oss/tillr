@@ -1003,3 +1003,49 @@ func (s Settings) StartupLine() string {
 	}
 	return line
 }
+
+// ReadChecksDir reads only <root>/.tillr.toml's [gate] checks_dir and returns it, or
+// DefaultChecksDir when the file, [gate] or checks_dir is absent. It is the reader for
+// a candidate's settings and for check declarations: every other table and key is
+// ignored, so a candidate that adds a key this build does not know is still settled and
+// gated. Unreadable or malformed files, a non-table [gate] and an invalid checks_dir
+// refuse; none falls back to DefaultChecksDir.
+func ReadChecksDir(root string) (string, error) {
+	path := filepath.Join(root, ".tillr.toml")
+	raw, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return DefaultChecksDir, nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("%s: expected a readable settings file: %w", path, err)
+	}
+	return ParseChecksDir(path, raw)
+}
+
+// ParseChecksDir is ReadChecksDir over bytes already read; path only names the file in
+// refusals.
+func ParseChecksDir(path string, raw []byte) (string, error) {
+	var tables map[string]any
+	if err := toml.Unmarshal(raw, &tables); err != nil {
+		return "", fmt.Errorf("%s: expected valid TOML: %w", path, err)
+	}
+	gate, present := tables["gate"]
+	if !present {
+		return DefaultChecksDir, nil
+	}
+	values, ok := gate.(map[string]any)
+	if !ok {
+		return "", fmt.Errorf("%s: gate: expected a table", path)
+	}
+	value, present := values["checks_dir"]
+	if !present {
+		return DefaultChecksDir, nil
+	}
+	str, ok := value.(string)
+	if ok {
+		if clean, valid := cleanChecksDir(str); valid {
+			return clean, nil
+		}
+	}
+	return "", fmt.Errorf("%s: gate.checks_dir: expected a clean repository-relative subdirectory path outside .git", path)
+}

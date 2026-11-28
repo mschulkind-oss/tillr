@@ -32,7 +32,7 @@ type fixerCheckStep interface {
 }
 
 func (s *ProcessSteps) fixerCheck(ctx context.Context, c Candidate, id string) (string, string) {
-	if _, err := settings.Read(c.Worktree); err != nil {
+	if _, err := settings.ReadChecksDir(c.Worktree); err != nil {
 		return "error", err.Error()
 	}
 	// Modern proof selectors also include focused Go tests and declaration-file

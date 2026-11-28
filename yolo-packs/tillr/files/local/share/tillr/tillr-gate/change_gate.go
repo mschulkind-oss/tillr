@@ -39,11 +39,7 @@ func resolveChecksDir(explicit string) (string, error) {
 	if explicit != "" {
 		return explicit, nil
 	}
-	s, err := settings.Read(".")
-	if err != nil {
-		return "", err
-	}
-	return s.ChecksDir(), nil
+	return settings.ReadChecksDir(".")
 }
 
 func checkEnvironment() []string {

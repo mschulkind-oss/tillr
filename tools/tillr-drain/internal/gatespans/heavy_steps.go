@@ -69,11 +69,11 @@ type HeavyDeclaration struct {
 }
 
 func HeavyCheckDeclarations(dir string) (map[string]HeavyDeclaration, error) {
-	s, err := settings.Read(dir)
+	configured, err := settings.ReadChecksDir(dir)
 	if err != nil {
 		return nil, err
 	}
-	checksDir := filepath.Join(dir, filepath.FromSlash(s.ChecksDir()))
+	checksDir := filepath.Join(dir, filepath.FromSlash(configured))
 	entries, err := os.ReadDir(checksDir)
 	if err != nil {
 		return nil, err
@@ -251,12 +251,12 @@ func JudgeHeavy(ctx context.Context, cfg HeavyJudgeConfig, dir, only string) ([]
 		if bin == "" {
 			bin = "tillr-gate"
 		}
-		repoCfg, err := settings.Read(dir)
+		repoChecksDir, err := settings.ReadChecksDir(dir)
 		if err != nil {
 			return nil, drainmodel.Externalf("heavy declarations unavailable: %v", err)
 		}
 		logs := filepath.Join(cfg.LaneRoot, ".rolling", "logs", rev)
-		args := []string{"checks", "--heavy-tree", "--base", rev, "--head", rev, "--worktree", dir, "--checks", repoCfg.ChecksDir(), "--logs", logs}
+		args := []string{"checks", "--heavy-tree", "--base", rev, "--head", rev, "--worktree", dir, "--checks", repoChecksDir, "--logs", logs}
 		if only != "" {
 			args = append(args, "--only", only)
 		}

@@ -165,11 +165,11 @@ func runDirectGateChecks(ctx context.Context, worktree, baseSHA, headSHA, laneRo
 	if worktree == "" {
 		return false, "no candidate worktree", nil
 	}
-	s, err := settings.Read(worktree)
+	configured, err := settings.ReadChecksDir(worktree)
 	if err != nil {
 		return false, fmt.Sprintf("reading .tillr.toml in %s: %v", worktree, err), nil
 	}
-	checksDir := filepath.Join(worktree, filepath.FromSlash(s.ChecksDir()))
+	checksDir := filepath.Join(worktree, filepath.FromSlash(configured))
 	entries, err := os.ReadDir(checksDir)
 	if err != nil {
 		return false, fmt.Sprintf("reading check directory %s: %v", checksDir, err), nil

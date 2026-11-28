@@ -137,3 +137,68 @@ func TestGateDisabledTestsRefusesInvalidPath(t *testing.T) {
 		})
 	}
 }
+
+func TestReadChecksDirIgnoresUnknownKeysAndTables(t *testing.T) {
+	cases := map[string]string{
+		"": settings.DefaultChecksDir,
+		"[gate]\ndisabled_tests = [\"pkg:TestX\"]\n":             settings.DefaultChecksDir,
+		"[gate]\nchecks_dir = \"custom/checks/\"\nnew_key = 1\n": "custom/checks",
+		"[future]\nx = 1\n[[things]]\ny = 2\n":                   settings.DefaultChecksDir,
+		"[gate]\nchecks_dir = \"c\"\n[future]\nx = 1\n":          "c",
+	}
+	for body, want := range cases {
+		dir := root(t)
+		if body != "" {
+			if err := os.WriteFile(filepath.Join(dir, ".tillr.toml"), []byte(body), 0644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		got, err := settings.ReadChecksDir(dir)
+		if err != nil || got != want {
+			t.Fatalf("%q: got %q, %v; want %q", body, got, err, want)
+		}
+		if body != "" && strings.Contains(body, "[future]") {
+			if _, err := settings.Read(dir); err == nil {
+				t.Fatalf("settings.Read must stay strict for %q", body)
+			}
+		}
+	}
+}
+
+func TestReadChecksDirRefusesWithoutFallback(t *testing.T) {
+	for body, want := range map[string]string{
+		"[gate\n":                         "expected valid TOML",
+		"gate = 3\n":                      "gate: expected a table",
+		"[gate]\nchecks_dir = 3\n":        "gate.checks_dir",
+		"[gate]\nchecks_dir = \"../x\"\n": "gate.checks_dir",
+	} {
+		dir := root(t)
+		if err := os.WriteFile(filepath.Join(dir, ".tillr.toml"), []byte(body), 0644); err != nil {
+			t.Fatal(err)
+		}
+		got, err := settings.ReadChecksDir(dir)
+		if err == nil || got != "" || !strings.Contains(err.Error(), want) || !strings.Contains(err.Error(), ".tillr.toml") {
+			t.Fatalf("%q: got %q, %v; want refusal containing %q", body, got, err, want)
+		}
+	}
+}
+
+func TestParseChecksDirNamesGivenPath(t *testing.T) {
+	got, err := settings.ParseChecksDir("rev:.tillr.toml", []byte("[gate]\nchecks_dir = \"a/b\"\nfuture = true\n"))
+	if err != nil || got != "a/b" {
+		t.Fatalf("got %q, %v", got, err)
+	}
+	if _, err := settings.ParseChecksDir("rev:.tillr.toml", []byte("[gate\n")); err == nil || !strings.Contains(err.Error(), "rev:.tillr.toml") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestReadStaysStrictOnMistypedGateKey(t *testing.T) {
+	dir := root(t)
+	if err := os.WriteFile(filepath.Join(dir, ".tillr.toml"), []byte("[gate]\nmistyped_key = 1\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := settings.Read(dir); err == nil || !strings.Contains(err.Error(), "gate.mistyped_key") {
+		t.Fatalf("err = %v", err)
+	}
+}

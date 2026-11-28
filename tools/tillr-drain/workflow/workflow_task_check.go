@@ -393,14 +393,12 @@ func parsePromptTargets(root, prompt string) (writeTargets, checkTargets []strin
 
 			// In modeCheck, a bare gate check ID like `go-affected-test` resolves to `<checks_dir>/<id>.json` if present.
 			if mode == modeCheck && root != "" && lowerWord != "" && !strings.Contains(lowerWord, "/") {
-				checksDir := settings.DefaultChecksDir
-				if s, err := settings.Read(root); err == nil {
-					checksDir = s.ChecksDir()
-				}
-				checkJSON := path.Join(checksDir, lowerWord+".json")
-				if st, err := os.Stat(filepath.Join(root, checkJSON)); err == nil && !st.IsDir() {
-					addCheck(checkJSON)
-					seenPathInMode = true
+				if checksDir, err := settings.ReadChecksDir(root); err == nil {
+					checkJSON := path.Join(checksDir, lowerWord+".json")
+					if st, err := os.Stat(filepath.Join(root, checkJSON)); err == nil && !st.IsDir() {
+						addCheck(checkJSON)
+						seenPathInMode = true
+					}
 				}
 			}
 

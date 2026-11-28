@@ -135,3 +135,45 @@ func TestGateFailureContextReadsTheVerdictAndPlan(t *testing.T) {
 		t.Fatalf("the unit check watches %v, want [src/ out/]", watches["unit"])
 	}
 }
+
+func writeDeclFixture(t *testing.T, toml string) string {
+	t.Helper()
+	wt := t.TempDir()
+	for rel, body := range map[string]string{
+		".tillr.toml":              toml,
+		"custom/checks/c.json":     `{"id":"c-custom","reads":["a/"],"writes":["b/"]}`,
+		"tools/gate/checks/d.json": `{"id":"d-default","reads":["z/"]}`,
+	} {
+		p := filepath.Join(wt, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return wt
+}
+
+func TestGateDeclarationReadsIgnoreUnknownCandidateKeys(t *testing.T) {
+	wt := writeDeclFixture(t, "[gate]\nchecks_dir = \"custom/checks\"\ndisabled_tests = [\"pkg:TestX\"]\n[future]\nk = 1\n")
+	steps := &ProcessSteps{Root: t.TempDir()}
+	_, _, watches := steps.gateFailureContext(Candidate{Worktree: wt})
+	if !reflect.DeepEqual(watches["c-custom"], []string{"a/", "b/"}) || watches["d-default"] != nil {
+		t.Fatalf("watches = %v", watches)
+	}
+	reads := steps.gateCheckReads(Candidate{Worktree: wt}, nil)
+	if !reflect.DeepEqual(reads["c-custom"], []string{"a/"}) || reads["d-default"] != nil {
+		t.Fatalf("reads = %v", reads)
+	}
+}
+
+func TestGateDeclarationReadsDoNotFallBackOnInvalidChecksDir(t *testing.T) {
+	wt := writeDeclFixture(t, "[gate]\nchecks_dir = \"../x\"\n")
+	steps := &ProcessSteps{Root: t.TempDir()}
+	_, _, watches := steps.gateFailureContext(Candidate{Worktree: wt})
+	reads := steps.gateCheckReads(Candidate{Worktree: wt}, nil)
+	if len(watches) != 0 || len(reads) != 0 {
+		t.Fatalf("watches = %v, reads = %v; want none", watches, reads)
+	}
+}

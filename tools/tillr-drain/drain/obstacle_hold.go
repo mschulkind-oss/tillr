@@ -65,11 +65,11 @@ func (l *Loop) gateCheckInventory(ctx context.Context) (proof map[string]bool, o
 	if l.settingsUnreadable() {
 		checksDir = filepath.Join(l.cfg.Root, filepath.FromSlash(l.postLandingSettings().ChecksDir()))
 	} else {
-		s, err := settings.Read(l.cfg.Root)
+		configured, err := settings.ReadChecksDir(l.cfg.Root)
 		if err != nil {
 			return nil, nil, err
 		}
-		checksDir = filepath.Join(l.cfg.Root, filepath.FromSlash(s.ChecksDir()))
+		checksDir = filepath.Join(l.cfg.Root, filepath.FromSlash(configured))
 	}
 	entries, err := os.ReadDir(checksDir)
 	if err != nil && !os.IsNotExist(err) {

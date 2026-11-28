@@ -119,12 +119,12 @@ func checksFace(args []string) int {
 	}
 	checkDirectory := *directory
 	if checkDirectory == "" {
-		s, err := settings.Read(*root)
+		configured, err := settings.ReadChecksDir(*root)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "tillr-gate checks: could not judge:", err)
 			return record.ExitExternal
 		}
-		checkDirectory = s.ChecksDir()
+		checkDirectory = configured
 	}
 	if !filepath.IsAbs(checkDirectory) {
 		checkDirectory = filepath.Join(*root, checkDirectory)

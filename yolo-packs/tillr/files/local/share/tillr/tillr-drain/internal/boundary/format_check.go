@@ -25,11 +25,11 @@ type gateFormatCheckDecl struct {
 // e.g. `just format --check`) in `worktree` and returns the unformatted file paths when the
 // formatter would rewrite any file. Repositories or fixtures that declare no format check return nil.
 func UnformattedRepoFiles(ctx context.Context, worktree string) ([]string, error) {
-	s, err := settings.Read(worktree)
+	checksDir, err := settings.ReadChecksDir(worktree)
 	if err != nil {
 		return nil, drainmodel.Externalf("%v", err)
 	}
-	return UnformattedRepoFilesInChecksDir(ctx, worktree, s.ChecksDir())
+	return UnformattedRepoFilesInChecksDir(ctx, worktree, checksDir)
 }
 
 func UnformattedRepoFilesInChecksDir(ctx context.Context, worktree, checksDir string) ([]string, error) {

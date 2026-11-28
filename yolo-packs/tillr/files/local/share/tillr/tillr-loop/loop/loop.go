@@ -446,11 +446,11 @@ func composeGate(ctx Ctx, dry bool) ([]Step, error) {
 	}
 	registry := ctx.Registry
 	if registry == "" {
-		s, err := settings.Read(ctx.Worktree)
+		configured, err := settings.ReadChecksDir(ctx.Worktree)
 		if err != nil {
 			return nil, &Refusal{Code: ExitUsage, Message: err.Error()}
 		}
-		registry = filepath.Join(ctx.Worktree, filepath.FromSlash(s.ChecksDir()))
+		registry = filepath.Join(ctx.Worktree, filepath.FromSlash(configured))
 	}
 	var gpArgs []string
 	if ctx.GateProgram != "" {
@@ -930,11 +930,10 @@ func revisionCheck(kind string, args parsedArgs, stdin io.Reader, stdout, stderr
 	if workDir != "" {
 		targetDir = workDir
 	}
-	s, err := settings.Read(targetDir)
+	checksDir, err := settings.ReadChecksDir(targetDir)
 	if err != nil {
 		return 0, &Refusal{Code: ExitExternal, Message: err.Error()}
 	}
-	checksDir := s.ChecksDir()
 	scratch := os.Getenv("YOLO_DURABLE_DIR")
 	if scratch == "" {
 		if _, nonLanding := nonLandingStoreCharter(args.store); nonLanding || os.Getenv("TILLR_NON_LANDING") == "1" {

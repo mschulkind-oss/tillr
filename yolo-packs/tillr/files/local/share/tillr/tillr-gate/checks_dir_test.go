@@ -144,3 +144,35 @@ func TestChecksDirClassifyRepoLoader(t *testing.T) {
 		t.Fatalf("expected error for invalid .tillr.toml in worktreeSet")
 	}
 }
+
+func TestChecksDirReadersIgnoreUnknownSettings(t *testing.T) {
+	root, _, _ := initChecksDirRepo(t)
+	toml := "[gate]\nchecks_dir = \"custom/checks\"\ndisabled_tests = [\"pkg:TestX\"]\n\n[future]\nkey = 1\n"
+	if err := os.WriteFile(filepath.Join(root, ".tillr.toml"), []byte(toml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"add", "."}, {"-c", "user.name=Test", "-c", "user.email=t@example.invalid", "commit", "-qm", "unknown keys"}} {
+		if out, err := exec.Command("git", append([]string{"-C", root, "-c", "core.hooksPath=/dev/null"}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	loader, err := newClassifyRepoLoader(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	set, err := loader.commitSet("HEAD")
+	if err != nil || len(set.declarations) != 1 || set.declarations[0].ID != "custom-check" {
+		t.Fatalf("commitSet = %+v, %v", set, err)
+	}
+	set, err = loader.worktreeSet(".", "HEAD")
+	if err != nil || len(set.declarations) != 1 || set.declarations[0].ID != "custom-check" {
+		t.Fatalf("worktreeSet = %+v, %v", set, err)
+	}
+	if code := checksFace([]string{"--fast-tree", "--base", "HEAD", "--head", "HEAD", "--worktree", root, "--logs", filepath.Join(t.TempDir(), "logs")}); code != 0 {
+		t.Fatalf("checksFace exited %d", code)
+	}
+	t.Chdir(root)
+	if dir, err := resolveChecksDir(""); err != nil || dir != "custom/checks" {
+		t.Fatalf("resolveChecksDir = %q, %v", dir, err)
+	}
+}

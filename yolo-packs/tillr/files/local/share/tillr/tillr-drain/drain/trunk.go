@@ -149,8 +149,8 @@ func TrunkFixerFenceWithGate(suspect, watches, gatePaths []string) []string {
 func (l *Loop) fixerGateCodePaths() []string {
 	checksDir := l.postLandingSettings().ChecksDir()
 	if l.cfg.Root != "" {
-		if s, err := settings.Read(l.cfg.Root); err == nil {
-			checksDir = s.ChecksDir()
+		if configured, err := settings.ReadChecksDir(l.cfg.Root); err == nil {
+			checksDir = configured
 		}
 	}
 	return append(append([]string{}, GateCodePaths...), checksDir+"/")
