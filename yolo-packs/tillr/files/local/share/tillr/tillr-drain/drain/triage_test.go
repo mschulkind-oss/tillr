@@ -2,11 +2,15 @@ package drain
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/mschulkind-oss/tillr-drain/internal/bgactors"
+	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -123,5 +127,46 @@ func TestTriageBriefOffersThreeResultsAndStoredRequest(t *testing.T) {
 		if !strings.Contains(string(brief), want) {
 			t.Errorf("staged brief omits %q", want)
 		}
+	}
+}
+
+// A document-prerequisite cache is computed outside the pass (refreshSyncPlannerCaches), so
+// it can name an item unshared while that item's own landing is in flight: the landing's
+// retirement commit has already removed the block from the trunk, and the store still says
+// the item is open. Once the landing is recorded, the next pure pass reads the cache with
+// the item finished. A finished item has nothing to triage, and a policy with no design
+// seat must not fault the loop over it.
+func TestAStaleUnsharedCacheDoesNotTriageAFinishedItem(t *testing.T) {
+	f, l := triageFixture(t)
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := tx.Exec(`UPDATE items SET state='landed' WHERE item_id='item-request'`)
+		return err
+	})
+	s := openFixture(t, f.storePath)
+	defer s.Close()
+	if err := s.ReadTx(context.Background(), func(r *store.Reader) error {
+		declared, err := definition.ForReader(r)
+		if err != nil {
+			return err
+		}
+		avail := append([]string(nil), l.cfg.Lanes...)
+		tick := Pass{Now: l.cfg.Now().UTC().Format(time.RFC3339Nano), AvailableLanes: &avail,
+			docPrereqs: &bgactors.DocPrereqsCache{Valid: true, Unshared: map[string]bool{"item-request": true}}}
+		envs, err := planDefinition(r, tick, l.cfg.Policy, l.questions, declared.Parsed)
+		if err != nil {
+			return err
+		}
+		for _, env := range envs {
+			var d Decision
+			if err := json.Unmarshal(env.Payload, &d); err != nil {
+				return err
+			}
+			if d.ItemID == "item-request" && (d.Reason == ReasonTriageNoBlock || d.BlockConflict != nil || d.Seat == "design") {
+				t.Errorf("a landed item was sent to triage from a stale cache: %+v", d)
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 }

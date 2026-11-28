@@ -1291,7 +1291,10 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 		} else if iceboxReason != "" {
 			decision = Decision{ItemID: item.ItemID, Action: ActionHold, Reason: iceboxReason, From: "held", Attempt: p.nextAttempt(item.ItemID)}
 			identifyDecision(&decision)
-		} else if unshared[item.ItemID] {
+		} else if unshared[item.ItemID] && !p.finished(item.State) {
+			// Only an open item needs triage. A cached unshared set (DocPrereqsCache) can
+			// predate the landing that retired the item's block, so it is re-read against
+			// the item's state here rather than trusted.
 			decision, err = p.triageDecision(r, item)
 			if err != nil {
 				return nil, nil, err
