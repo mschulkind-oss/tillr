@@ -2321,10 +2321,11 @@ exec "$STUB_ITEM_REAL" "$@"
 	if err := os.Remove(calls); err != nil && !os.IsNotExist(err) {
 		t.Fatalf("clearing the item calls failed: %v", err)
 	}
+	recoveryAt := now().UTC().Format(time.RFC3339)
 	for _, id := range []string{"item_041", "item_042", "item_043"} {
 		itemPath := filepath.Join(scratch(t, "recover-"+id), id+".json")
 		writeFile(t, itemPath, itemRecord(id, "in-queue"))
-		driveOK(t, item, "apply", "--store", f.store, "--input", itemPath, "--now", "2026-11-12T00:00:30Z")
+		driveOK(t, item, "apply", "--store", f.store, "--input", itemPath, "--now", recoveryAt)
 		if got := itemStateOf(t, f.store, id); got != "in-queue" {
 			t.Fatalf("the blocked item %s is %q after apply, want in-queue", id, got)
 		}
@@ -2338,7 +2339,7 @@ exec "$STUB_ITEM_REAL" "$@"
 		{"item_044", drain.RetryAckUnjudged},
 	} {
 		code, out := authorizeRetryWith(t, f.store, c.id, failed[c.id],
-			"the owner", "recovering a non-landing outcome", "2026-11-12T00:00:30Z", c.ack)
+			"the owner", "recovering a non-landing outcome", recoveryAt, c.ack)
 		if code != 0 {
 			t.Fatalf("retry %s (%q) exited %d: %s", c.id, c.ack, code, out)
 		}
@@ -2351,7 +2352,7 @@ exec "$STUB_ITEM_REAL" "$@"
 
 	// The plan the next pass would run holds none of the four with not-ready: each is a
 	// retry the authorization makes dispatchable.
-	tickPath := tick(t, "2026-11-12T00:00:30Z", []string{"lane-1", "lane-2", "lane-3", "lane-4"}, 4, policy(t, "/bin/true"))
+	tickPath := tick(t, recoveryAt, []string{"lane-1", "lane-2", "lane-3", "lane-4"}, 4, policy(t, "/bin/true"))
 	for _, d := range plan(t, f.store, tickPath) {
 		if d.Payload.Action != drain.ActionRetry {
 			t.Fatalf("item %s plans %q / %q after recovery, want a retry", d.Payload.ItemID, d.Payload.Action, d.Payload.Reason)
