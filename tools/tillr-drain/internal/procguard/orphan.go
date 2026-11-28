@@ -567,6 +567,36 @@ func ReclaimOffRotationLease[W any](tx *store.Tx, work PendingWorkView[W], at ti
 	return nil
 }
 
+// RestartClaimOverEndedRun answers whether the run's latest dispatch claim is a workflow
+// restart recorded after the run's terminal record. A restarted evaluator node keeps its run
+// id (pendingDecision), so after a relaunch reclaims a live verify run, the restart's claim
+// leases the lane to a run whose terminal record is already written. When that claim's loop
+// dies before the run starts, the terminal record speaks for the earlier segment only: on
+// 2026-11-28 the reaper read it as the claim's end and kept the claim's lease, and the item
+// sat `running  no-lane` behind a run that did not exist across every later restart.
+func RestartClaimOverEndedRun(r interface {
+	QueryRow(string, ...any) *sql.Row
+}, id string) (bool, error) {
+	var ended sql.NullInt64
+	if err := r.QueryRow(`SELECT event_seq FROM runs WHERE run_id = ?`, id).Scan(&ended); err != nil {
+		if err == sql.ErrNoRows {
+			return false, nil
+		}
+		return false, err
+	}
+	var claimed int64
+	var restart sql.NullBool
+	err := r.QueryRow(`SELECT seq, json_extract(payload, '$.decision.workflow_restart') FROM events
+		WHERE object_type = 'run' AND object_id = ? AND kind = ? ORDER BY seq DESC LIMIT 1`, id, DispatchStartedKind).Scan(&claimed, &restart)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return restart.Valid && restart.Bool && ended.Valid && ended.Int64 > 0 && claimed > ended.Int64, nil
+}
+
 // ResumeUnfinished answers whether the run's last run.resume or run.finish event is a
 // run.resume: a continuation was claimed and has recorded no end since.
 func ResumeUnfinished(r interface {
@@ -798,6 +828,16 @@ func ReapDeadLoopRuns[W any](ctx context.Context, tx *store.Tx, at time.Time, ev
 		var terminal int
 		if err := tx.QueryRow(`SELECT COUNT(*) FROM runs WHERE run_id = ?`, id).Scan(&terminal); err != nil {
 			return err
+		}
+		if terminal > 0 {
+			// A restarted evaluator node keeps its run id, so its restart claim names a run
+			// that already ended. That earlier end is not this claim's: the claim is
+			// reaped as one with no terminal record (below), or its lease outlives it.
+			if over, err := RestartClaimOverEndedRun(tx.Reader(), id); err != nil {
+				return err
+			} else if over {
+				terminal = 0
+			}
 		}
 		if terminal > 0 {
 			resumed, err := RunHasActiveResume(tx.Reader(), id)

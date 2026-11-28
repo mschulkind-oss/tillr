@@ -882,7 +882,11 @@ func pendingDecisionInternal(r *store.Reader, work *pendingWork, at time.Time, i
 		if len(leases) == 0 && (rec == nil || (rec.State != run.StatePaused && (rec.State != run.StateExited || rec.ExitCode == nil || *rec.ExitCode != 0))) {
 			workCopy := *work
 			request := *d.RunRequest
-			if !evaluatorNode(d) {
+			// An evaluator with no record keeps its id, so a live judge's verdict is
+			// adopted. One that has ended cannot run again under that id: the start
+			// coordinator never launches a claim whose run already has a record
+			// (decisionRunRecordsExist), so reusing it leaves the claim leased forever.
+			if !evaluatorNode(d) || rec != nil {
 				request.RunID = markRunID(request.RunID, "restart")
 			}
 			d.RunRequest = &request
