@@ -13,14 +13,18 @@ related:
 # Live Drain Capacity and Allocation Changes
 
 **Status:** Partly built. Built: `tillr drain scale --lanes N`, the `ordinary_lanes` row of
-`drain_runtime_config`, the `drain.config-changed` event, and the startup lane-count line
-with fresh-start flag replacement (`Scale` and `refreshLaneCount` in
-[`live_scale.go`](../../tools/tillr-drain/drain/live_scale.go)). Not built: everything else
-here; `rg 'express_lanes|seat_share_epochs|backend_caps|seat_caps|work_caps|policy_path|settings-refused' tools config -g '!*.md'`
+`drain_runtime_config`, the `drain.config-changed` event, `.tillr.toml` reload between passes
+(`refreshSettings` in [`settings_reload.go`](../../tools/tillr-drain/drain/settings_reload.go)),
+and the startup lane-count line with fresh-start flag replacement (`Scale` and
+`refreshLaneCount` in [`live_scale.go`](../../tools/tillr-drain/drain/live_scale.go)). Not
+built: uniform `TILLR_DRAIN_<OPTION>` and `[drain] <option>` start defaults (`D-LD11`;
+`rg 'TILLR_DRAIN_LANES|TILLR_DRAIN_POLICY' tools -g '!*.md'` returns nothing), express
+scaling, concurrency caps, share epochs, and the `config` read face
+(`rg 'express_lanes|seat_share_epochs|backend_caps|seat_caps|work_caps|policy_path' tools config -g '!*.md'`
 returns nothing, and `scaleFace` in [`main.go`](../../tools/tillr-drain/main.go) takes no
-`--express`, `--pause` or `--wait`.
+`--express`, `--pause` or `--wait`).
 
-**Needs your ruling:** None. Seven designer's decisions (`D-LD4` to `D-LD10`) in
+**Needs your ruling:** None. Eight designer's decisions (`D-LD4` to `D-LD11`) in
 [Section 7](#7-decision-ledger) may be overturned by the owner.
 
 **Implementation plan:** none; [Section 8](#8-build-phases-sketch) holds the seed for one.
@@ -39,9 +43,9 @@ What the tree does:
   saves a target that the loop reads at each pass boundary. `[lanes] express` in `.tillr.toml`
   is read once at startup.
 - **Seat-to-backend routing reloads on file edits, with three gaps.** `refreshPolicy` in
-  [`policy_reload.go`](../../tools/tillr-drain/drain/policy_reload.go) hashes the active
+  [`policy_reload.go`](../../tools/tillr-drain/internal/policy/policy_reload.go) hashes the active
   backend policy file each pass and reloads it when it changes. Which file the loop watches
-  is fixed at startup; the policy schema in [`policy.go`](../../tools/tillr-drain/drain/policy.go)
+  is fixed at startup; the policy schema in [`policy.go`](../../tools/tillr-drain/internal/policy/policy.go)
   has no concurrency limits; and the share count in
   [`seat_shares.go`](../../tools/tillr-drain/drain/seat_shares.go) runs over the whole history
   of `seat_dispatches`, so a changed ratio on a live store starves one backend until lifetime
@@ -72,7 +76,7 @@ until running work falls below the limit.
 | Lowering finishes in-flight work above the target before retiring slots | The owner's request; it keeps work in progress and lands candidates already produced. |
 | The views say which lanes are draining out | Without it, 18 busy lanes after setting 16 looks like a failed command. |
 | An idle slot retires before a busy one; among equals, the highest number first | Frees capacity at once and keeps lane names compact. |
-| Desired state lives in the store, whether the loop is running or stopped | A process-id liveness check fails across container process namespaces, and a stopped drain must still accept the change. Loop presence is the file lease in [`presence.go`](../../tools/tillr-drain/drain/presence.go). |
+| Desired state lives in the store, whether the loop is running or stopped | A process-id liveness check fails across container process namespaces, and a stopped drain must still accept the change. Loop presence is the file lease in [`presence.go`](../../tools/tillr-drain/presence/presence.go). |
 | No tracked configuration file is the mutation path | Editing a tracked file dirties the trunk checkout and collides with landings. |
 | Zero lanes is allowed | It drains ordinary work to idle while the loop keeps landing, proving and running express items. |
 | No terminal hotkeys | The loop runs detached under its keeper with no terminal. |
@@ -178,7 +182,7 @@ Lowering a pool from `N` to `N'` moves `N - N'` slots out of `active`:
    - no dirty fork checkout;
    - a clean reset of the worktree to the trunk base.
 4. **Retired worktrees stay on disk.** Removing a worktree inside the pass loop contends with
-   the landing lock, changes what [`boundary.go`](../../tools/tillr-drain/drain/boundary.go)
+   the landing lock, changes what [`boundary.go`](../../tools/tillr-drain/internal/boundary/boundary.go)
    reads, and forces a full checkout on the next scale-up. Disk bounds belong to the worktree
    collector in [the vocabulary design](./tillr-vocabulary.md).
 
@@ -296,15 +300,20 @@ involved.
 
 | Priority | Source | When it wins |
 | :--- | :--- | :--- |
-| **1** | An explicit `--lanes N` on a fresh `tillr-drain loop` start (no restart handoff in the environment, not `--check`) | On that start, and it replaces the saved `ordinary_lanes` target, so later passes, unflagged starts and in-place restarts inherit `N` (`D-LD10`). |
-| **2** | `drain_runtime_config` | Across every pass boundary, across an in-place restart even when the inherited arguments hold an earlier `--lanes`, across keeper relaunches after a crash, and on any start that omits the flag. |
-| **3** | `.tillr.toml` ([`settings.go`](../../tools/tillr/settings/settings.go)) | For settings neither of the above sets. |
-| **4** | Compiled defaults | Two ordinary lanes, no express lanes. |
+| **1** | An explicit command-line option (`--lanes N` / `--max-agents N`, `--policy`, `--profile`, and the other standing start flags) on a fresh `tillr-drain loop` start (no `TILLR_RESTART_REQUEST` handoff in the environment, not `--check`) | On that start; for options backed by `drain_runtime_config` (`ordinary_lanes` today; `seat_profile` once built), it also replaces the saved target so later passes, unflagged starts and in-place restarts inherit it (`D-LD10`, `D-LD11`). |
+| **2** | `drain_runtime_config` (saved scale target / operator runtime override, a deliberate later act) | Across every pass boundary, across an in-place `exec` restart (`TILLR_RESTART_REQUEST` set) even when inherited `argv` holds an earlier `--lanes` or `--policy`, across keeper relaunches after a crash, and on any start that omits the CLI option. |
+| **3** | `.tillr.toml` ([`settings.go`](../../tools/tillr/settings/settings.go)), including `[drain] <snake_case>` keys (with path keys resolved relative to `<root>`) | For settings neither a fresh-start CLI option nor `drain_runtime_config` sets; overrides `TILLR_DRAIN_*` (`D-LD11`). |
+| **4** | `TILLR_DRAIN_<OPTION>` environment variable (`os.LookupEnv`) | Standing per-machine / jail defaults when none of priorities 1–3 sets the option; an invalid active value refuses startup with exit 2 naming the variable and value (`D-LD11`). |
+| **5** | Built-in defaults | Two ordinary lanes, no express lanes, `<root>/config/tillr/backend-policy.json`, and each flag's compiled default. |
 
-The keeper ([`tillr-drain keep`](../../tools/tillr-drain/keep/keep.go)) passes an explicit `--lanes`
-only on its first launch and omits it on crash relaunches, so a later `tillr drain scale`
-survives recovery. `tillr drain config --reset [lanes|express|policy|alloc|all]` deletes the
-named keys and falls back to the lower sources.
+The keeper ([`tillr-drain keep`](../../tools/tillr-drain/keep/keep.go)) and `tillr-drain keep --restart`
+(`just tillr-restart`) pass the environment (`TILLR_DRAIN_*`) through unchanged, pass an explicit
+`--lanes` / `--max-agents` only on the first launch (omitting it on crash relaunches after a runtime
+scale change so `tillr drain scale` survives recovery), synthesize no unset `--policy` or `--profile`
+flag, and supply `LoopCommand`'s default helper flags (`--gate`, `--land`, `--verdict`, `--brief-template`)
+only when not already provided in `extra`, `.tillr.toml` `[drain]`, or `TILLR_DRAIN_*` (`D-LD11`).
+`tillr drain config --reset [lanes|express|policy|alloc|all]` deletes the named keys and falls back
+to the lower sources.
 
 ### 5.3 How an operator reads the current value
 
@@ -330,21 +339,27 @@ work_caps        fixer=1 (0/1 active)
 `D-LD10`, which amends `D-LD6`. A saved target that silently overrode an explicit launch flag
 would let the loop run a lane count nobody asked for and nobody was told about.
 
-1. **The start line states the ordinary lane count and its source.** After the build line and
-   before staging, the loop reports one of:
-   - `loop: ordinary lanes: N (from --lanes flag; replaced saved target M)` (the replacement
-     clause appears only when a different target was saved);
+1. **The start lines state each effective start value and its source.** After the build line and
+   `.tillr.toml` summary, the loop reports the ordinary lane count and its source:
+   - `loop: ordinary lanes: N (from --lanes flag; replaced saved target M)` (or `--max-agents`;
+     the replacement clause appears only when a different target was saved);
    - `loop: ordinary lanes: N (from saved target)`;
+   - `loop: ordinary lanes: N (from .tillr.toml)`;
+   - `loop: ordinary lanes: N (from environment variable TILLR_DRAIN_LANES)` (or `TILLR_DRAIN_MAX_AGENTS`);
    - `loop: ordinary lanes: N (from default)`.
 
-   A live change between passes reports `loop: ordinary lane target is now N`.
-2. **An explicit `--lanes N` on a fresh start is the lane count and replaces the saved
-   target**, with a `drain.config-changed` event when it changes a saved value. `N < 0` is a
-   usage error; zero offers no ordinary lanes. `tillr-drain loop --check` never writes the
-   store.
-3. **Restart persistence holds.** An in-place restart ignores the inherited `--lanes` when a
-   target is saved; an unflagged start uses the saved target; a keeper crash relaunch omits
-   the flag.
+   Alongside it (`D-LD11`), the loop prints a start-options summary line and writes the resolved
+   start options and their sources (`option`, `saved scale target`, `.tillr.toml`, `environment variable`,
+   or `built-in default`) into `PolicyState` (`.tillr/loop/backend-policy.json`) so `tillr drain policy`
+   (text and `--json`) shows every start value in force and where it came from. A live lane change
+   between passes reports `loop: ordinary lane target is now N`.
+2. **An explicit `--lanes N` (or `--max-agents N`) on a fresh start is the lane count and replaces
+   the saved target**, with a `drain.config-changed` event when it changes a saved value. Standing
+   defaults in `.tillr.toml` and `TILLR_DRAIN_*` never overwrite `drain_runtime_config`. `N < 0` is a
+   usage error; zero offers no ordinary lanes. `tillr-drain loop --check` never writes the store.
+3. **Restart persistence holds.** An in-place restart (`TILLR_RESTART_REQUEST` set) ignores the
+   inherited `--lanes` / `--max-agents` when a target is saved; an unflagged start uses the saved
+   target before `.tillr.toml` and `TILLR_DRAIN_*`; a keeper crash relaunch omits the boot flag.
 
 | Alternative | Verdict |
 | :--- | :--- |
@@ -352,6 +367,31 @@ would let the loop run a lane count nobody asked for and nobody was told about.
 | Refuse to start when the flag and the saved target disagree | Rejected: a keeper launched with `--lanes` would crash-loop until someone intervened. |
 | Let inherited `--lanes` override the store on an in-place restart or `--check` | Rejected: every binary roll would wipe live scale changes (`D-LD3`). |
 | Honor `--lanes` in memory only | Rejected: the first pass re-reads the saved target and snaps back to it. |
+
+### 5.5 Uniform environment and `.tillr.toml` start defaults
+
+`D-LD11` (designer's decision from an operator request, paired with
+[`D-DSP19`](./tillr-seat-profiles.md#44-uniform-environment-and-tillrtoml-start-defaults-for-tillr-drain-loop);
+not an owner ruling — the owner may overturn it):
+
+1. **Uniform mapping:** Every standing `tillr-drain loop` start option (`25` options:
+   `--exit-when-drained`, `--store`, `--max-agents`, `--lanes`, `--worktree-count`,
+   `--worktree-disk-budget`, `--max-concurrent-triage`, `--lane-root`, `--backoff-base`,
+   `--fallback-poll`, `--no-notify`, `--policy`, `--profile`, `--run-bin`, `--item-bin`,
+   `--brief-template`, `--gate`, `--land`, `--verdict`, `--replay`, `--heavy-gate`,
+   `--rolling`, `--fixer-gate`, `--questions-cmd`, `--questions-index`) derives environment
+   variable `TILLR_DRAIN_<UPPER_SNAKE>` and `.tillr.toml` key `[drain] <snake_case>`, with no
+   per-option exception. Only `--check`, `--migrate-owner-questions`, `--now`, and `--root` are
+   excluded (one-shot modes, injected test clock, and checkout selector). Existing `[lanes] express`
+   stays in `[lanes]` (not a `loop` CLI flag), and existing `[brief] template` and `[worktrees]`
+   `max_count` / `disk_budget_bytes` remain `.tillr.toml`-rung aliases that refuse conflicting
+   values; conflicting `max-agents` and `lanes` values at the same rung also refuse with exit 2.
+2. **Portable paths in `.tillr.toml` and strict env validation:** Path-valued `[drain]` keys in
+   `.tillr.toml` (`policy`, `brief_template`, `store`, `questions_index` via `validRepoFilePath`,
+   and `lane_root` via `cleanChecksDir`) forbid absolute paths, `..` traversal, and `.git`, and
+   resolve against `<root>`. Any active `TILLR_DRAIN_<OPTION>` value that the option refuses exits
+   2 naming the variable and value — never falling through. `tools/tillr-drain/README.md` documents
+   the variables, excluded flags, and precedence order.
 
 ---
 
@@ -400,11 +440,12 @@ None of these is the owner's ruling; the owner may overturn any of them.
 | :--- | :--- | :--- | :--- | :--- |
 | `D-LD4` | A `lifecycle` column on `lanes` (`active`, `draining`, `retired`); rows are never deleted, retired worktrees stay on disk, idle excess slots retire at once, and a draining slot waits for seven preconditions. **Rejected:** deleting rows; retiring between nodes of a workflow; removing worktrees in the pass loop. | 2026-11-19 | [Section 3.2](#32-slot-lifecycle-in-tillrstatedb), [Section 3.4](#34-removing-lanes-gracefully-target--active) | No |
 | `D-LD5` | Zero is a valid lane count for either pool, and completions queue without a fixed buffer. **Rejected:** a minimum of one; a buffer sized at startup. | 2026-11-19 | [Section 3.1](#31-operator-command-surface), [Section 3.3](#33-adding-lanes-target--active_or_draining) | Partial: ordinary lanes |
-| `D-LD6` | Runtime overrides live in `drain_runtime_config` with `drain.config-changed` events and work whether the loop runs or not. Amended by `D-LD10`. **Rejected:** mutating tracked files; letting inherited arguments overwrite stored changes on restart. | 2026-11-19; amended 2026-11-23 | [Section 5.1](#51-canonical-storage-in-tillrstatedb), [Section 5.2](#52-precedence-across-startups-tillr-drain-restart-and-tillr-keep) | Partial: `ordinary_lanes` |
+| `D-LD6` | Runtime overrides live in `drain_runtime_config` with `drain.config-changed` events and work whether the loop runs or not. Amended by `D-LD10` and `D-LD11`. **Rejected:** mutating tracked files; letting inherited arguments overwrite stored changes on restart. | 2026-11-19; amended 2026-11-23, 2026-11-28 | [Section 5.1](#51-canonical-storage-in-tillrstatedb), [Section 5.2](#52-precedence-across-startups-tillr-drain-restart-and-tillr-keep) | Partial: `ordinary_lanes` |
 | `D-LD7` | Share deficits count from a per-seat epoch recorded when that seat's share map changes. **Rejected:** deleting dispatch history; all-time counting. | 2026-11-19 | [Section 4.1](#41-live-seat-to-backend-and-model-routing) | No |
 | `D-LD8` | Caps count claims inside the pass, count parallel children, put continuations ahead of fresh starts, and report their own wait reasons. **Rejected:** counting only after spawn; ignoring parallel children; reusing `backend-unavailable`. | 2026-11-19 | [Section 4.3](#43-four-scheduling-invariants-required-so-caps-work-cleanly) | No |
-| `D-LD9` | Settings consulted per pass, run or landing reload live and refuse invalid edits; settings that identify the instance or are compiled in need a restart. The owner may overturn this row by row. | 2026-11-19 | [Section 6](#6-survey-of-everything-fixed-at-loop-start-today) | No |
-| `D-LD10` | The start line states the ordinary lane count and its source; an explicit `--lanes` on a fresh start is the count and replaces the saved target; restarts, unflagged starts and keeper relaunches use the saved target. **Rejected:** the alternatives in Section 5.4. | 2026-11-23 | [Section 5.2](#52-precedence-across-startups-tillr-drain-restart-and-tillr-keep), [Section 5.4](#54-startup-lane-count-reporting-and-fresh-start-flag-replacement) | Yes |
+| `D-LD9` | Settings consulted per pass, run or landing reload live and refuse invalid edits; settings that identify the instance or are compiled in need a restart. The owner may overturn this row by row. | 2026-11-19 | [Section 6](#6-survey-of-everything-fixed-at-loop-start-today) | Partial: `.tillr.toml` reload |
+| `D-LD10` | The start line states the ordinary lane count and its source; an explicit `--lanes` on a fresh start is the count and replaces the saved target; restarts, unflagged starts and keeper relaunches use the saved target (extended across `.tillr.toml` and `TILLR_DRAIN_*` by `D-LD11`). **Rejected:** the alternatives in Section 5.4. | 2026-11-23; extended 2026-11-28 | [Section 5.2](#52-precedence-across-startups-tillr-drain-restart-and-tillr-keep), [Section 5.4](#54-startup-lane-count-reporting-and-fresh-start-flag-replacement) | Yes |
+| `D-LD11` | **From an operator request; the designer's decision, not an owner ruling (the owner may overturn it).** Extends `D-LD6` and `D-LD10` and pairs with [`D-DSP19`](./tillr-seat-profiles.md#decision-ledger): every standing `tillr-drain loop` start option (`25` options; excluding only `--check`, `--migrate-owner-questions`, `--now`, and `--root`) maps uniformly to `TILLR_DRAIN_<UPPER_SNAKE>` (`os.LookupEnv`) and `[drain] <snake_case>` in `.tillr.toml` (with path keys validated as clean `<root>`-relative paths and resolved against `<root>`, and existing `[brief] template` / `[worktrees]` keys kept as `.tillr.toml`-rung aliases). Precedence on a fresh start: CLI option > saved runtime target in `drain_runtime_config` (outranks inherited boot `argv` on `TILLR_RESTART_REQUEST` in-place `exec` restarts) > `.tillr.toml` > `TILLR_DRAIN_<OPTION>` > built-in default. Invalid active `TILLR_DRAIN_*` values exit 2 naming the variable and value; loop start output and `tillr drain policy` (`PolicyState`) report each value and its source; `tillr-drain keep` and `just tillr-restart` pass `TILLR_DRAIN_*` through unchanged without synthesizing unset CLI flags. **Rejected:** `environment > .tillr.toml`; skipping invalid `TILLR_DRAIN_*` values; letting `.tillr.toml` or `TILLR_DRAIN_*` overwrite `drain_runtime_config`. | 2026-11-28, designer, from an operator request | [Section 5.2](#52-precedence-across-startups-tillr-drain-restart-and-tillr-keep), [Section 5.4](#54-startup-lane-count-reporting-and-fresh-start-flag-replacement), [Section 5.5](#55-uniform-environment-and-tillrtoml-start-defaults) | No |
 
 ---
 
@@ -418,10 +459,10 @@ The phases are ordered so each slice compiles and passes its module's suite on t
 
 | Phase | Scope and target files | Rests on | Done when |
 | :--- | :--- | :--- | :--- |
-| **1. Runtime config store, precedence and keeper sync** | [`tools/tillr/store/schema.go`](../../tools/tillr/store/schema.go) and [`tools/tillr-drain/drain/schema.go`](../../tools/tillr-drain/drain/schema.go) (the lane lifecycle column and `seat_shares` epochs), [`live_scale.go`](../../tools/tillr-drain/drain/live_scale.go), [`loop.go`](../../tools/tillr-drain/drain/loop.go), [`main.go`](../../tools/tillr-drain/main.go) (a `config` read and reset face, and the lane count on the start line), [`tools/tillr-drain/keep/keep.go`](../../tools/tillr-drain/keep/keep.go) (read every runtime value from the store, and omit the boot-time `--lanes` on a crash relaunch) | `D-LD3`, `D-LD4`, `D-LD6`, `D-LD10` | Runtime values persist across an in-place `tillr drain restart`, an unflagged start and a `tillr-keep` crash relaunch; `tillr drain config [--json]` prints each effective value and its source |
+| **1. Runtime config store, precedence and keeper sync** | [`tools/tillr/store/schema.go`](../../tools/tillr/store/schema.go) and [`tools/tillr-drain/internal/storelog/schema.go`](../../tools/tillr-drain/internal/storelog/schema.go) (the lane lifecycle column and `seat_shares` epochs), [`live_scale.go`](../../tools/tillr-drain/drain/live_scale.go), [`loop.go`](../../tools/tillr-drain/drain/loop.go), [`main.go`](../../tools/tillr-drain/main.go) (a `config` read and reset face, and the lane count on the start line), [`tools/tillr-drain/keep/keep.go`](../../tools/tillr-drain/keep/keep.go) (read every runtime value from the store, and omit the boot-time `--lanes` on a crash relaunch) | `D-LD3`, `D-LD4`, `D-LD6`, `D-LD10`, `D-LD11` | Runtime values persist across an in-place `tillr drain restart`, an unflagged start and a `tillr-keep` crash relaunch; `tillr drain config [--json]` prints each effective value and its source |
 | **2. Lane scaling and graceful slot retirement** | [`main.go`](../../tools/tillr-drain/main.go) (the `scale` face), [`loop.go`](../../tools/tillr-drain/drain/loop.go) (an unbounded completion queue and slot reconciliation at the start of a pass), [`stage.go`](../../tools/tillr-drain/drain/stage.go), [`lane_base.go`](../../tools/tillr-drain/drain/lane_base.go), [`plan.go`](../../tools/tillr-drain/drain/plan.go) (eligibility by lifecycle, and the retirement preconditions the design lists), [`why.go`](../../tools/tillr-drain/why.go) | [OQ-LD1](#OQ-LD1) | Scaling ordinary or express lanes up stages or reactivates slots on the next pass; scaling down retires idle slots at once and holds busy slots in `draining` until every precondition clears, without deleting `lanes` rows or ending runs; `0` is allowed; a re-increase flips `draining` slots back to `active` first |
 | **3. Draining lanes in the view and the Observatory** | [`tools/tillr-view/lanes.go`](../../tools/tillr-view/lanes.go), [`serveread.go`](../../tools/tillr-view/serveread.go), [`LaneStrip.tsx`](../../tools/tillr-view/web/src/components/LaneStrip.tsx), and the header and status components and tests under [`tools/tillr-view/`](../../tools/tillr-view/) | [OQ-LD4](#OQ-LD4) | `retired` rows do not count toward the lane totals; `tillr view status`, `tillr view lanes` and the Observatory show target counts, active counts, and each `draining` lane with why it is still finishing |
-| **4. Policy switching, `seat_shares` epochs and concurrency caps** | [`policy.go`](../../tools/tillr-drain/drain/policy.go), [`policy_reload.go`](../../tools/tillr-drain/drain/policy_reload.go), [`seat_shares.go`](../../tools/tillr-drain/drain/seat_shares.go), [`plan.go`](../../tools/tillr-drain/drain/plan.go), [`parallel.go`](../../tools/tillr-drain/drain/parallel.go), [`main.go`](../../tools/tillr-drain/main.go) (the `policy set` and `alloc` faces) | [OQ-LD2](#OQ-LD2), [OQ-LD3](#OQ-LD3) | `tillr drain policy set <path>` swaps the active policy and refuses an invalid one; a `seat_shares` change counts from a fresh epoch; `backend_caps`, `seat_caps` and `work_caps` count claims made within a pass and parallel child runs, and `tillr drain why` names `backend-capped`, `seat-capped` or `work-capped` |
+| **4. Policy switching, `seat_shares` epochs and concurrency caps** | [`policy.go`](../../tools/tillr-drain/internal/policy/policy.go), [`policy_reload.go`](../../tools/tillr-drain/internal/policy/policy_reload.go), [`seat_shares.go`](../../tools/tillr-drain/drain/seat_shares.go), [`plan.go`](../../tools/tillr-drain/drain/plan.go), [`parallel.go`](../../tools/tillr-drain/drain/parallel.go), [`main.go`](../../tools/tillr-drain/main.go) (the `policy set` and `alloc` faces) | [OQ-LD2](#OQ-LD2), [OQ-LD3](#OQ-LD3) | `tillr drain policy set <path>` swaps the active policy and refuses an invalid one; a `seat_shares` change counts from a fresh epoch; `backend_caps`, `seat_caps` and `work_caps` count claims made within a pass and parallel child runs, and `tillr drain why` names `backend-capped`, `seat-capped` or `work-capped` |
 | **5. Reload of `.tillr.toml` and `gate-policy.json` between passes, and operating documents** | [`settings.go`](../../tools/tillr/settings/settings.go), [`redcap/policy.go`](../../tools/tillr-drain/redcap/policy.go), [`loop.go`](../../tools/tillr-drain/drain/loop.go), [the drain README](../../tools/tillr-drain/README.md), [the view README](../../tools/tillr-view/README.md) and the `tillr-operating` skill | `D-LD9` | Editing `.tillr.toml` or `config/tillr/gate-policy.json` takes effect at the next pass, an invalid file is refused with `drain.settings-refused` and the last valid values stay in force, and every new face answers `--help` |
 
 ### Checks for the planner
