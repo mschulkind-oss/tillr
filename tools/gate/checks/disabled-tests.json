@@ -1,0 +1,18 @@
+{
+  "id": "disabled-tests",
+  "label": "The tracked disabled-test list is well formed",
+  "command": [
+    "tools/gate/repo-gate",
+    "disabled-tests"
+  ],
+  "scope": "tree",
+  "tier": "fast",
+  "budget_ms": 200,
+  "reads": [
+    ".tillr.toml",
+    "tools/gate/disabled-tests.json"
+  ],
+  "tools": [
+    "go"
+  ]
+}

@@ -26,3 +26,7 @@ what = "green"
 [sync]
 # Scopes item sync to the listed roadmaps and their direct tracked Markdown links.
 roadmaps = ["docs/tillr/roadmap.md"]
+
+[gate]
+# Keeps the tracked list of disabled tests beside the other gate data files.
+disabled_tests = "tools/gate/disabled-tests.json"

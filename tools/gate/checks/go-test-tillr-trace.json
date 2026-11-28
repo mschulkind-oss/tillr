@@ -11,7 +11,9 @@
   "timeout_ms": 300000,
   "reads": [
     "tools/gate/checks/go-test-tillr-trace.json",
-    "tools/tillr-trace/"
+    "tools/tillr-trace/",
+    ".tillr.toml",
+    "tools/gate/disabled-tests.json"
   ],
   "tools": [
     "sh",

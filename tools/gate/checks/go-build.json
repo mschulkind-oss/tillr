@@ -7,7 +7,7 @@
   ],
   "scope": "tree",
   "tier": "fast",
-  "budget_ms": 2700,
+  "budget_ms": 2500,
   "reads": [
     "tools/tillr/",
     "tools/tillr-store/",

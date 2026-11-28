@@ -14,7 +14,8 @@
     "tools/gate/checks/go-test-tillr-loop.json",
     "tools/tillr-gate/",
     "tools/tillr-loop/",
-    "tools/tillr/"
+    "tools/tillr/",
+    ".tillr.toml"
   ],
   "tools": [
     "sh",

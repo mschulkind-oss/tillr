@@ -65,6 +65,9 @@ func RunCachedGroup(
 	if runPattern != "" {
 		command = append(command, "-run", runPattern)
 	}
+	if skip := opts.Disabled.SkipFor(pkg); skip != "" {
+		command = append(command, "-skip", skip)
+	}
 	command = append(command, pkg)
 
 	scratchDir, scratchCleanup, err := AcquireInvocationScratch(durable, scratchKey)
@@ -386,6 +389,9 @@ func RunCached(module string, count int, durations map[string]map[string]float64
 		sort.Strings(testFiles)
 
 		names := ScanPackageTests(pkg.Dir, ".", ip, "", testFiles)
+		allNames := len(names)
+		names = opts.Disabled.Plan(ip, names)
+		dropped := len(names) != allNames
 		if progress != nil {
 			progress.RecordPackage("discovered " + ip)
 		}
@@ -395,6 +401,8 @@ func RunCached(module string, count int, durations map[string]map[string]float64
 			runPattern := ""
 			if len(names) == 0 {
 				runPattern = "^$"
+			} else if dropped {
+				runPattern = namesPattern(names)
 			}
 			jobs = append(jobs, cachedJob{
 				ip:         ip,
@@ -433,11 +441,7 @@ func RunCached(module string, count int, durations map[string]map[string]float64
 			if hasEdgeTest {
 				shardNames = append(shardNames, "TestEdgeInputs")
 			}
-			quoted := make([]string, len(shardNames))
-			for i, n := range shardNames {
-				quoted[i] = regexp.QuoteMeta(n)
-			}
-			pattern := "^(" + strings.Join(quoted, "|") + ")$"
+			pattern := namesPattern(shardNames)
 			jobs = append(jobs, cachedJob{
 				ip:         ip,
 				names:      shardNames,
@@ -574,4 +578,13 @@ func RunCached(module string, count int, durations map[string]map[string]float64
 		}
 	}
 	return events, nil
+}
+
+// namesPattern builds the anchored -run pattern that selects exactly the named top-level tests.
+func namesPattern(names []string) string {
+	quoted := make([]string, len(names))
+	for i, n := range names {
+		quoted[i] = regexp.QuoteMeta(n)
+	}
+	return "^(" + strings.Join(quoted, "|") + ")$"
 }

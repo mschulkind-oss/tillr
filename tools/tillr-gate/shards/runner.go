@@ -314,6 +314,8 @@ type RunOptions struct {
 	ExplicitScratch  bool
 	DurableDir       string
 	UncachedEvents   *[]TestEvent
+	// Disabled lists the tests the tracked disabled list excludes from this run; nil excludes none.
+	Disabled         *DisabledSet
 	ExePath          string
 	Now              func() time.Time
 	PollInterval     time.Duration
@@ -422,17 +424,8 @@ func buildFailureMessage(label string, returnCode int, events []TestEvent, stder
 		}
 	}
 	var failedTests []string
-	for _, name := range rawFailed {
-		isParent := false
-		for _, other := range rawFailed {
-			if other != name && strings.HasPrefix(other, name+"/") {
-				isParent = true
-				break
-			}
-		}
-		if !isParent {
-			failedTests = append(failedTests, name)
-		}
+	for _, ft := range FailedTests(events) {
+		failedTests = append(failedTests, ft.Test)
 	}
 
 	output := allOutput.String()
@@ -622,6 +615,9 @@ func RunShard(
 		"go", "tool", "test2json", "-t", "-p", pkg, binary,
 		"-test.v=test2json", "-test.count=1", "-test.parallel=1",
 		"-test.timeout=" + timeout, "-test.run=" + pattern,
+	}
+	if skip := opts.Disabled.SkipFor(pkg); skip != "" {
+		command = append(command, "-test.skip="+skip)
 	}
 
 	outFile, err := os.CreateTemp(scratch, "shard-out-*")
@@ -906,6 +902,7 @@ func RunUncached(module string, count int, durations map[string]map[string]float
 					if progress != nil {
 						progress.RecordPackage("discovered " + pkg.ImportPath)
 					}
+					names = opts.Disabled.Plan(pkg.ImportPath, names)
 					groups := Assign(names, durations[pkg.ImportPath], count)
 					var localJobs []shardJob
 					for idx, group := range groups {

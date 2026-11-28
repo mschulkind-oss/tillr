@@ -26,7 +26,8 @@
     "tools/tillr-trace/",
     "tools/tillr-view/",
     "tools/tillr-watch/",
-    "tools/tillr/"
+    "tools/tillr/",
+    ".tillr.toml"
   ],
   "tools": [
     "sh",

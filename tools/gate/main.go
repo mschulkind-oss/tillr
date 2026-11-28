@@ -44,6 +44,8 @@ func run(args []string) int {
 		return cmdGoVet(rest)
 	case "go-module-inventory":
 		return cmdGoModuleInventory(rest)
+	case "disabled-tests":
+		return cmdDisabledTests(rest)
 	case "no-python":
 		return cmdNoPython(rest)
 	case "workflows":

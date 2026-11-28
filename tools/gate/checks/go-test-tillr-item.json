@@ -15,7 +15,9 @@
     "tools/go-test-durations.json",
     "tools/tillr-gate/",
     "tools/tillr-item/",
-    "tools/tillr/"
+    "tools/tillr/",
+    ".tillr.toml",
+    "tools/gate/disabled-tests.json"
   ],
   "tools": [
     "sh",

@@ -13,7 +13,8 @@
     "tools/gate/",
     "tools/tillr/",
     "tools/go-test-durations.json",
-    "tools/tillr-gate/"
+    "tools/tillr-gate/",
+    ".tillr.toml"
   ],
   "tools": [
     "sh",

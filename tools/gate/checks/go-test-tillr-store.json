@@ -21,7 +21,9 @@
     "tools/tillr-roll/",
     "tools/tillr-run/",
     "tools/tillr-store/",
-    "tools/tillr/"
+    "tools/tillr/",
+    ".tillr.toml",
+    "tools/gate/disabled-tests.json"
   ],
   "tools": [
     "sh",

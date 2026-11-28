@@ -32,6 +32,7 @@ type cliConfig struct {
 	hasProgressFile  bool
 	progressInterval float64
 	hasProgInterval  bool
+	proveDisabled    []string
 	help             bool
 }
 
@@ -49,7 +50,7 @@ func printUsage() {
                          [--durations DURATIONS] [--record RECORD] [--events EVENTS]
                          [--scratch SCRATCH] [--timeout TIMEOUT]
                          [--shard-timeout SECONDS] [--progress-file PROGRESS_FILE]
-                         [--progress-interval SECONDS]
+                         [--progress-interval SECONDS] [--prove-disabled SELECTOR]
                          [module]
 
 Build each Go package once; balance independent test processes on recorded durations.
@@ -74,6 +75,9 @@ options:
                         write throttled completion progress snapshots as JSON (or $TILLR_GO_SHARDS_PROGRESS_OUT)
   --progress-interval SECONDS
                         minimum seconds between completion progress snapshots (default 60)
+  --prove-disabled SELECTOR
+                        run this disabled test anyway (repeatable); the list is the
+                        [gate] disabled_tests file in .tillr.toml
 `)
 }
 
@@ -179,6 +183,12 @@ func parseArgs(args []string) (cliConfig, error) {
 			}
 			cfg.shardTimeout = f
 			cfg.hasShardTimeout = true
+		case "--prove-disabled":
+			val, err := nextVal(name)
+			if err != nil {
+				return cfg, err
+			}
+			cfg.proveDisabled = append(cfg.proveDisabled, val)
 		case "--progress-file":
 			val, err := nextVal(name)
 			if err != nil {
@@ -410,6 +420,13 @@ func RunCLI(args []string) int {
 		modAbs = real
 	}
 
+	disabled, derr := loadDisabledSet(modAbs, cfg.proveDisabled)
+	if derr != nil {
+		fmt.Fprintf(os.Stderr, "go-test-shards: %v\n", derr)
+		return 1
+	}
+	opts.Disabled = disabled
+
 	events, runErr := Run(modAbs, cfg.shards, durations, temporary, cfg.timeout, opts)
 	if runErr != nil {
 		var se *ShardError
@@ -467,6 +484,6 @@ func RunCLI(args []string) int {
 			passed++
 		}
 	}
-	fmt.Printf("go-test-shards: %s: %d tests passed, %d shards per package\n", cfg.module, passed, cfg.shards)
+	fmt.Printf("go-test-shards: %s: %d tests passed, %d shards per package, %d disabled\n", cfg.module, passed, cfg.shards, len(opts.Disabled.Applied()))
 	return 0
 }

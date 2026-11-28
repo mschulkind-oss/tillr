@@ -10,6 +10,7 @@
   "tier": "heavy",
   "timeout_ms": 3600000,
   "reads": [
+    ".tillr.toml",
     "config/tillr/backend-policy.json",
     "config/tillr/commands.json",
     "config/tillr/deny-list.json",
@@ -17,6 +18,7 @@
     "config/tillr/plan-guidance.md",
     "config/tillr/workflows/",
     "tools/gate/checks/go-test-tillr-drain.json",
+    "tools/gate/disabled-tests.json",
     "tools/gate/go-test-edges.json",
     "tools/go-test-durations.json",
     "tools/tillr-cli/",
