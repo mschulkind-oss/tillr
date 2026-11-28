@@ -207,6 +207,96 @@ func ReadRetryAcks(r *store.Reader) (map[string]string, error) {
 	return acks, nil
 }
 
+// ReadRetriesForItems reads the latest retry authorization for each named item.
+func ReadRetriesForItems(r *store.Reader, itemIDs []string) (map[string]RetryRow, error) {
+	retries := map[string]RetryRow{}
+	if len(itemIDs) == 0 {
+		return retries, nil
+	}
+	type rawRetry struct {
+		itemID string
+		row    RetryRow
+	}
+	var collected []rawRetry
+	var retryIDs []string
+	const chunk = 400
+	for start := 0; start < len(itemIDs); start += chunk {
+		end := start + chunk
+		if end > len(itemIDs) {
+			end = len(itemIDs)
+		}
+		batch := itemIDs[start:end]
+		args := make([]any, len(batch))
+		for i, id := range batch {
+			args[i] = id
+		}
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(batch)), ",")
+		rows, err := r.Query(
+			`SELECT retry_id, item_id, supersedes_run_id, requested_by, reason, requested_at
+			   FROM retries WHERE item_id IN (`+placeholders+`) ORDER BY requested_at, rowid`, args...)
+		if err != nil {
+			if strings.Contains(err.Error(), "no such table: retries") {
+				return retries, nil
+			}
+			return nil, storelog.ReadFailure(err)
+		}
+		for rows.Next() {
+			var (
+				itemID      string
+				requestedAt int64
+				row         RetryRow
+			)
+			if err := rows.Scan(&row.RetryID, &itemID, &row.SupersedesRunID, &row.RequestedBy, &row.Reason, &requestedAt); err != nil {
+				rows.Close()
+				return nil, storelog.ReadFailure(err)
+			}
+			row.RequestedAt = time.UnixMilli(requestedAt).UTC()
+			collected = append(collected, rawRetry{itemID: itemID, row: row})
+			retryIDs = append(retryIDs, row.RetryID)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, storelog.ReadFailure(err)
+		}
+		rows.Close()
+	}
+	if len(collected) == 0 {
+		return retries, nil
+	}
+	acks, err := ReadRetryAcksFor(r, retryIDs)
+	if err != nil {
+		return nil, err
+	}
+	for _, entry := range collected {
+		entry.row.Acknowledge = acks[entry.row.RetryID]
+		retries[entry.itemID] = entry.row
+	}
+	return retries, nil
+}
+
+// ReadRetryAcksFor answers retry acknowledgments for the named retry IDs.
+func ReadRetryAcksFor(r *store.Reader, retryIDs []string) (map[string]string, error) {
+	acks := map[string]string{}
+	if len(retryIDs) == 0 {
+		return acks, nil
+	}
+	events, err := r.EventsForObjects(0, retryIDs, RetryAckKind)
+	if err != nil {
+		return nil, storelog.ReadFailure(err)
+	}
+	for _, e := range events {
+		if e.Kind != RetryAckKind || e.ObjectType != "retry" || e.ObjectID == nil {
+			continue
+		}
+		var payload RetryAckPayload
+		if err := json.Unmarshal(e.Payload, &payload); err != nil || payload.Acknowledge == "" {
+			continue
+		}
+		acks[*e.ObjectID] = payload.Acknowledge
+	}
+	return acks, nil
+}
+
 // RunJudged answers whether the gate judged one run.
 func RunJudged(r *store.Reader, runID string) (bool, error) {
 	judged, _, err := RunGateResult(r, runID)

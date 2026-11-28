@@ -93,7 +93,7 @@ func acceptedBuildRetryCommand(r *store.Reader, itemID, fallbackRunID string) (s
 // no finished run row at all (an item inserted directly without event history), runID is
 // empty and the action directs the operator to record the item with `tillr item apply`.
 func runLinkMissingHold(r *store.Reader, itemID, fallbackRunID string) (runID, whyDetail, moverAction string) {
-	if conflicts, err := item.ReadConflicts(r); err == nil {
+	if conflicts, err := item.ReadConflictsForItems(r, []string{itemID}); err == nil {
 		if c, ok := conflicts[itemID]; ok && c.Status == "owner" && c.DesignRunID != "" && c.TriageVersion == "" {
 			cmd := retryCommand(itemID, c.DesignRunID, "")
 			return c.DesignRunID,

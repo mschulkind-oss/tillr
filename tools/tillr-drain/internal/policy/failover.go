@@ -14,6 +14,7 @@ import (
 	"github.com/mschulkind-oss/tillr-drain/internal/runhistory"
 	"github.com/mschulkind-oss/tillr-drain/internal/storelog"
 	"github.com/mschulkind-oss/tillr-run/run"
+	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -259,6 +260,51 @@ func ReadPriorRunsWith(
 	if err != nil {
 		return nil, storelog.ReadFailure(err)
 	}
+	judged, endings, finishPayloads, err := ReadRunJudgmentsAndEndings(r)
+	if err != nil {
+		return nil, storelog.ReadFailure(err)
+	}
+	return readPriorRunsCommon(r, nil, judged, endings, finishPayloads, interrupted, restaged, repeated, outcomes, latestFinished, designTransportErr)
+}
+
+// ReadPriorRunsForItems reads prior runs scoped to itemIDs and runIDs.
+func ReadPriorRunsForItems(
+	r *store.Reader,
+	itemIDs, runIDs []string,
+	outcomes []BackendOutcome,
+	latestFinished map[string]string,
+	designTransportErr func(rec run.Record, saved bool, class AttemptClass) (bool, error),
+) (map[string][]PriorRun, error) {
+	if len(itemIDs) == 0 {
+		return map[string][]PriorRun{}, nil
+	}
+	interrupted, restaged, err := ReadInterruptedRunsFor(r, runIDs)
+	if err != nil {
+		return nil, err
+	}
+	repeated, err := runhistory.ReadRepeatedCallsForRuns(r, runIDs)
+	if err != nil {
+		return nil, storelog.ReadFailure(err)
+	}
+	judged, endings, finishPayloads, err := ReadRunJudgmentsAndEndingsFor(r, runIDs)
+	if err != nil {
+		return nil, storelog.ReadFailure(err)
+	}
+	return readPriorRunsCommon(r, itemIDs, judged, endings, finishPayloads, interrupted, restaged, repeated, outcomes, latestFinished, designTransportErr)
+}
+
+func readPriorRunsCommon(
+	r *store.Reader,
+	itemIDs []string,
+	judged map[string]bool,
+	endings map[string]int64,
+	finishPayloads map[string][]byte,
+	interrupted, restaged map[string]bool,
+	repeated map[string]runhistory.RepeatedCall,
+	outcomes []BackendOutcome,
+	latestFinished map[string]string,
+	designTransportErr func(rec run.Record, saved bool, class AttemptClass) (bool, error),
+) (map[string][]PriorRun, error) {
 	type disposition struct {
 		class         AttemptClass
 		closes, saved bool
@@ -268,10 +314,6 @@ func ReadPriorRunsWith(
 		if _, seen := byID[o.Rec.RunID]; !seen {
 			byID[o.Rec.RunID] = disposition{o.Class, o.Closes, o.Saved}
 		}
-	}
-	judged, endings, finishPayloads, err := ReadRunJudgmentsAndEndings(r)
-	if err != nil {
-		return nil, storelog.ReadFailure(err)
 	}
 	var hasNodes bool
 	if err := r.QueryRow(`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='node_runs')`).Scan(&hasNodes); err != nil {
@@ -283,8 +325,21 @@ func ReadPriorRunsWith(
 	}
 	type nodeRecord struct{ node, outcome string }
 	nodeOf := map[string]nodeRecord{}
+	var itemFilter string
+	var itemArgs []any
+	if len(itemIDs) > 0 {
+		itemArgs = make([]any, len(itemIDs))
+		for i, id := range itemIDs {
+			itemArgs[i] = id
+		}
+		itemFilter = `item_id IN (` + strings.TrimSuffix(strings.Repeat("?,", len(itemIDs)), ",") + `)`
+	}
 	if hasNodes {
-		nodeRows, err := r.Query(`SELECT run_id, node_id, outcome FROM node_runs`)
+		nodeQuery := `SELECT run_id, node_id, outcome FROM node_runs`
+		if itemFilter != "" {
+			nodeQuery += ` WHERE ` + itemFilter
+		}
+		nodeRows, err := r.Query(nodeQuery, itemArgs...)
 		if err != nil {
 			return nil, storelog.ReadFailure(err)
 		}
@@ -303,13 +358,17 @@ func ReadPriorRunsWith(
 		}
 		nodeRows.Close()
 	}
+	runsWhere := `item_id IS NOT NULL`
+	if itemFilter != "" {
+		runsWhere = itemFilter
+	}
 	rows, err := r.Query(
-		`SELECT item_id, run_id, backend, state, exit_code, COALESCE(end_cause, ''), artifact_refs, event_seq, started_at, rowid, ` + isNode + `
-		   FROM runs WHERE item_id IS NOT NULL`)
+		`SELECT item_id, run_id, backend, state, exit_code, COALESCE(end_cause, ''), artifact_refs, event_seq, started_at, rowid, `+isNode+`
+		   FROM runs WHERE `+runsWhere, itemArgs...)
 	if err != nil && strings.Contains(err.Error(), "no such column: end_cause") {
 		rows, err = r.Query(
-			`SELECT item_id, run_id, backend, state, exit_code, '', artifact_refs, event_seq, started_at, rowid, ` + isNode + `
-			   FROM runs WHERE item_id IS NOT NULL`)
+			`SELECT item_id, run_id, backend, state, exit_code, '', artifact_refs, event_seq, started_at, rowid, `+isNode+`
+			   FROM runs WHERE `+runsWhere, itemArgs...)
 	}
 	if err != nil {
 		return nil, storelog.ReadFailure(err)
@@ -459,6 +518,24 @@ func ReadRunJudgmentsAndEndings(r *store.Reader) (map[string]bool, map[string]in
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	return foldRunJudgmentsAndEndings(events)
+}
+
+// ReadRunJudgmentsAndEndingsFor reads judgments and endings scoped to runIDs via events_by_object.
+func ReadRunJudgmentsAndEndingsFor(r *store.Reader, runIDs []string) (map[string]bool, map[string]int64, map[string][]byte, error) {
+	if len(runIDs) == 0 {
+		return map[string]bool{}, map[string]int64{}, map[string][]byte{}, nil
+	}
+	const judgeRequestKind = "drain.judge.request"
+	events, err := r.EventsForObjects(0, runIDs, judgeRequestKind, run.FinishKind, runhistory.RunSupersededKind)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return foldRunJudgmentsAndEndings(events)
+}
+
+func foldRunJudgmentsAndEndings(events []event.Event) (map[string]bool, map[string]int64, map[string][]byte, error) {
+	const judgeRequestKind = "drain.judge.request"
 	judged, endings, payloads := map[string]bool{}, map[string]int64{}, map[string][]byte{}
 	payloadSeq, supersededSeq := map[string]int64{}, map[string]int64{}
 	for _, e := range events {

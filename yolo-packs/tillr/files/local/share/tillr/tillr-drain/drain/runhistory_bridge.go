@@ -209,6 +209,9 @@ func authorizeStageRetry(tx *store.Tx, req RetryRequest, f ItemFault, at time.Ti
 }
 func RetryEnvelope(retry Retry) (record.Envelope, error)       { return runhistory.RetryEnvelope(retry) }
 func readRetries(r *store.Reader) (map[string]retryRow, error) { return runhistory.ReadRetries(r) }
+func readRetriesForItems(r *store.Reader, itemIDs []string) (map[string]retryRow, error) {
+	return runhistory.ReadRetriesForItems(r, itemIDs)
+}
 func readRetryAcks(r *store.Reader) (map[string]string, error) { return runhistory.ReadRetryAcks(r) }
 func runJudged(r *store.Reader, runID string) (bool, error)    { return runhistory.RunJudged(r, runID) }
 func runGateResult(r *store.Reader, runID string) (bool, string, error) {
@@ -261,6 +264,9 @@ func repeatedCallBrief(rc RepeatedCall) string { return runhistory.RepeatedCallB
 
 func ReadItemFaults(r *store.Reader) (map[string]ItemFault, error) {
 	return runhistory.ReadItemFaults(r)
+}
+func ReadItemFaultsForItems(r *store.Reader, itemIDs, runIDs []string) (map[string]ItemFault, error) {
+	return runhistory.ReadItemFaultsForItems(r, itemIDs, runIDs)
 }
 func faultClearDetail(f ItemFault, storePath string) string {
 	return runhistory.FaultClearDetail(f, storePath)

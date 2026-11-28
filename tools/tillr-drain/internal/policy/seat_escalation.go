@@ -102,6 +102,25 @@ func ReadEscalations(r *store.Reader) (map[string][]SeatEscalation, error) {
 	return out, rows.Err()
 }
 
+// ReadEscalationsForItems reads seat escalations for the named items via events_by_object.
+func ReadEscalationsForItems(r *store.Reader, itemIDs []string) (map[string][]SeatEscalation, error) {
+	out := map[string][]SeatEscalation{}
+	if len(itemIDs) == 0 {
+		return out, nil
+	}
+	events, err := r.EventsForObjects(0, itemIDs, SeatEscalatedKind)
+	if err != nil {
+		return nil, err
+	}
+	for _, ev := range events {
+		var e SeatEscalation
+		if json.Unmarshal(ev.Payload, &e) == nil && e.ItemID != "" {
+			out[e.ItemID] = append(out[e.ItemID], e)
+		}
+	}
+	return out, nil
+}
+
 // EscalatedBackend answers the backend an item's latest escalation moved it to, or "".
 func EscalatedBackend(escalations []SeatEscalation) string {
 	if len(escalations) == 0 {

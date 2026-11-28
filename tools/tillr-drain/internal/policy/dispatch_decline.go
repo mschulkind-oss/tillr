@@ -99,6 +99,33 @@ func ReadDispatchDeclines(r *store.Reader) (map[string]DispatchDecline, error) {
 	return latest, rows.Err()
 }
 
+// ReadDispatchDeclinesForItems reads the latest claim-wait dispatch decline for each named item.
+func ReadDispatchDeclinesForItems(r *store.Reader, itemIDs []string) (map[string]DispatchDecline, error) {
+	latest := map[string]DispatchDecline{}
+	if len(itemIDs) == 0 {
+		return latest, nil
+	}
+	events, err := r.EventsForObjects(0, itemIDs, DispatchDeclinedKind)
+	if err != nil {
+		return nil, err
+	}
+	for _, e := range events {
+		if e.ObjectID == nil {
+			continue
+		}
+		var decline DispatchDecline
+		if err := json.Unmarshal(e.Payload, &decline); err != nil {
+			return nil, err
+		}
+		if decline.WaitingOn == "" {
+			continue
+		}
+		decline.Seq = e.Seq
+		latest[*e.ObjectID] = decline
+	}
+	return latest, nil
+}
+
 func (v DispatchDecline) AppliesTo(r *store.Reader, action, decisionID, laneID, runID string) (bool, error) {
 	if v.Seq == 0 || !IsDispatchAction(action) || runID == "" || decisionID != v.DecisionID || laneID != v.LaneID || runID != v.RunID {
 		return false, nil

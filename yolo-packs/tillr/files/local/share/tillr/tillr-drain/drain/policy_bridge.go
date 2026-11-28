@@ -93,6 +93,9 @@ func (l *Loop) refreshPolicy() error {
 func readEscalations(r *store.Reader) (map[string][]seatEscalation, error) {
 	return policy.ReadEscalations(r)
 }
+func readEscalationsForItems(r *store.Reader, itemIDs []string) (map[string][]seatEscalation, error) {
+	return policy.ReadEscalationsForItems(r, itemIDs)
+}
 func escalatedBackend(escalations []seatEscalation) string {
 	return policy.EscalatedBackend(escalations)
 }
@@ -140,6 +143,9 @@ func dispatchStartedAfter(r *store.Reader, runID string, seq int64) (bool, error
 }
 func readDispatchDeclines(r *store.Reader) (map[string]dispatchDecline, error) {
 	return policy.ReadDispatchDeclines(r)
+}
+func readDispatchDeclinesForItems(r *store.Reader, itemIDs []string) (map[string]dispatchDecline, error) {
+	return policy.ReadDispatchDeclinesForItems(r, itemIDs)
 }
 
 // Forwarding wrappers for seat_shares.go.

@@ -3,10 +3,13 @@ package drain
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/mschulkind-oss/tillr-drain/internal/policy"
+	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -23,15 +26,142 @@ func readInfrastructureClosed(r *store.Reader) (map[string]bool, error) {
 // terminal event and an explicit successful probe share the store's event order;
 // a clock, policy edit, restart, or quota reading cannot reopen infrastructure.
 func readInfrastructureClosedFrom(r *store.Reader, byRun map[string]*pendingWork) (map[string]backendOutcome, error) {
-	outcomes, err := readBackendOutcomesFrom(r, byRun)
+	var maxSavedSeq int64
+	if err := r.QueryRow(`SELECT COALESCE(MAX(terminal_seq), 0) FROM backend_outcomes`).Scan(&maxSavedSeq); err != nil {
+		if strings.Contains(err.Error(), "no such table: backend_outcomes") {
+			outcomes, err := readBackendOutcomesFrom(r, byRun)
+			if err != nil {
+				return nil, err
+			}
+			probes, err := queryBackendProbes(r, 0)
+			if err != nil {
+				return nil, err
+			}
+			return resolveInfrastructureClosed(r, outcomes, probes, nil)
+		}
+		return nil, err
+	}
+
+	candidates := map[string]backendOutcome{}
+
+	// 1. Saved closing outcomes (typically 0 rows).
+	rows, err := r.Query(`SELECT o.terminal_seq, o.class, o.closes,
+ COALESCE(NULLIF(runs.run_id,''), NULLIF(e.object_id,''), json_extract(e.payload,'$.run_id'), ''),
+ COALESCE(NULLIF(runs.backend,''), json_extract(e.payload,'$.backend'), ''),
+ e.payload
+ FROM backend_outcomes o
+ JOIN events e ON e.seq=o.terminal_seq
+ LEFT JOIN runs ON runs.run_id=e.object_id
+ WHERE o.closes=1
+ ORDER BY o.terminal_seq DESC`)
+	if err != nil && strings.Contains(err.Error(), "no such table: runs") {
+		rows, err = r.Query(`SELECT o.terminal_seq, o.class, o.closes,
+ COALESCE(NULLIF(e.object_id,''), json_extract(e.payload,'$.run_id'), ''),
+ COALESCE(json_extract(e.payload,'$.backend'), ''),
+ e.payload
+ FROM backend_outcomes o
+ JOIN events e ON e.seq=o.terminal_seq
+ WHERE o.closes=1
+ ORDER BY o.terminal_seq DESC`)
+	}
 	if err != nil {
 		return nil, err
 	}
-	probes, err := queryBackendProbes(r, 0)
+	for rows.Next() {
+		var o backendOutcome
+		var runID, backend string
+		var raw []byte
+		if err := rows.Scan(&o.Seq, &o.Class, &o.Closes, &runID, &backend, &raw); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		o.Saved = true
+		if err := json.Unmarshal(raw, &o.Rec); err != nil {
+			o.Rec = run.Record{RunID: runID, Backend: backend}
+		}
+		if o.Rec.Backend == "" {
+			o.Rec.Backend = backend
+		}
+		if o.Rec.RunID == "" {
+			o.Rec.RunID = runID
+		}
+		if o.Rec.Backend == "" || o.Rec.Backend == "command" {
+			continue
+		}
+		if _, seen := candidates[o.Rec.Backend]; !seen {
+			candidates[o.Rec.Backend] = o
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+
+	// 2. Any unsaved run.finish events after maxSavedSeq.
+	unsaved, _, err := policy.QueryBackendOutcomes(r, maxSavedSeq)
 	if err != nil {
 		return nil, err
 	}
-	return resolveInfrastructureClosed(r, outcomes, probes, nil)
+	var latestNonCloseSeq = map[string]int64{}
+	if len(unsaved) > 0 {
+		offeredList, err := policy.QueryOfferedSeqs(r, maxSavedSeq)
+		if err != nil {
+			return nil, err
+		}
+		offered := make(map[int64]bool, len(offeredList))
+		for _, seq := range offeredList {
+			offered[seq] = true
+		}
+		if err := classifyUnsavedBackendOutcomes(r, unsaved, offered, byRun); err != nil {
+			return nil, err
+		}
+		for _, o := range unsaved {
+			if o.Rec.Backend == "" || o.Rec.Backend == "command" {
+				continue
+			}
+			if o.Closes {
+				if prev, seen := candidates[o.Rec.Backend]; !seen || o.Seq > prev.Seq {
+					candidates[o.Rec.Backend] = o
+				}
+			} else if o.Class != policy.AttemptInterrupted {
+				if o.Seq > latestNonCloseSeq[o.Rec.Backend] {
+					latestNonCloseSeq[o.Rec.Backend] = o.Seq
+				}
+			}
+		}
+	}
+
+	if len(candidates) == 0 {
+		return map[string]backendOutcome{}, nil
+	}
+
+	// 3. Check if any candidate was superseded by a newer non-interrupted outcome, probe, or offered call.
+	closed := map[string]backendOutcome{}
+	for backend, cand := range candidates {
+		if latestNonCloseSeq[backend] > cand.Seq {
+			continue
+		}
+		var superseded bool
+		if err := r.QueryRow(`SELECT EXISTS (
+  SELECT 1 FROM events e JOIN backend_outcomes o ON o.terminal_seq=e.seq
+  WHERE e.kind=? AND e.seq>? AND o.class<>'interrupted'
+    AND json_extract(e.payload,'$.backend')=?
+) OR EXISTS (
+  SELECT 1 FROM events p
+  WHERE p.kind='drain.backend-probe' AND p.object_id=? AND p.seq>?
+    AND json_extract(p.payload,'$.success')=1
+) OR EXISTS (
+  SELECT 1 FROM events p
+  WHERE p.kind='call.offered' AND json_extract(p.payload,'$.terminal_seq')=?
+)`, run.FinishKind, cand.Seq, backend, backend, cand.Seq, cand.Seq).Scan(&superseded); err != nil {
+			return nil, err
+		}
+		if !superseded {
+			closed[backend] = cand
+		}
+	}
+	return closed, nil
 }
 
 // ProbeBackend runs an operator-chosen smoke check, not a quota reading or a

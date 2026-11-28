@@ -159,6 +159,10 @@ func readDeliveries(r *store.Reader) (map[string]deliveryDecision, error) {
 	return boundary.ReadDeliveries(r)
 }
 
+func readDeliveriesForItems(r *store.Reader, itemIDs []string) (map[string]deliveryDecision, error) {
+	return boundary.ReadDeliveriesForItems(r, itemIDs)
+}
+
 func (l *Loop) refuseOutOfOrderDelivery(ctx context.Context, c Candidate, result *LoopResult) (bool, error) {
 	return boundary.RefuseOutOfOrderDelivery(ctx, l.cfg.Store, c.ItemID, c.RunID, c.BaseRef, func(ctx context.Context, detail string) error {
 		c.RefusalDetail = detail

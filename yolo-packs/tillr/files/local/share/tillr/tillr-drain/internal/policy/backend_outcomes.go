@@ -157,6 +157,83 @@ func QueryBackendOutcomes(r *store.Reader, afterSeq int64) ([]BackendOutcome, in
 	return out, unsaved, nil
 }
 
+// QueryBackendOutcomesForRuns reads backend outcomes scoped to runIDs via events_by_object.
+func QueryBackendOutcomesForRuns(r *store.Reader, runIDs []string) ([]BackendOutcome, int, error) {
+	if len(runIDs) == 0 {
+		return nil, 0, nil
+	}
+	var out []BackendOutcome
+	unsaved := 0
+	const chunk = 400
+	for start := 0; start < len(runIDs); start += chunk {
+		end := start + chunk
+		if end > len(runIDs) {
+			end = len(runIDs)
+		}
+		batch := runIDs[start:end]
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(batch)), ",")
+		args := make([]any, 0, len(batch)+1)
+		for _, id := range batch {
+			args = append(args, id)
+		}
+		args = append(args, run.FinishKind)
+		rows, err := r.Query(`SELECT e.seq, COALESCE(o.class,''), COALESCE(o.closes,0),
+ CASE WHEN o.class IS NOT NULL AND o.class <> '' THEN COALESCE(NULLIF(runs.run_id,''), NULLIF(e.object_id,''), json_extract(e.payload,'$.run_id'), '') ELSE '' END,
+ CASE WHEN o.class IS NOT NULL AND o.class <> '' THEN COALESCE(NULLIF(runs.backend,''), json_extract(e.payload,'$.backend'), '') ELSE '' END,
+ CASE WHEN o.class IS NULL OR o.class = '' THEN e.payload ELSE '' END
+ FROM events e
+ LEFT JOIN backend_outcomes o ON o.terminal_seq=e.seq
+ LEFT JOIN runs ON o.class IS NOT NULL AND o.class <> '' AND runs.run_id=e.object_id
+ WHERE e.object_id IN (`+placeholders+`) AND e.kind=? ORDER BY e.seq DESC`, args...)
+		if err != nil && strings.Contains(err.Error(), "no such table: backend_outcomes") {
+			rows, err = r.Query(`SELECT seq, '', 0, '', '', payload FROM events WHERE object_id IN (`+placeholders+`) AND kind=? ORDER BY seq DESC`, args...)
+		} else if err != nil && strings.Contains(err.Error(), "no such table: runs") {
+			rows, err = r.Query(`SELECT e.seq, COALESCE(o.class,''), COALESCE(o.closes,0),
+ CASE WHEN o.class IS NOT NULL AND o.class <> '' THEN COALESCE(NULLIF(e.object_id,''), json_extract(e.payload,'$.run_id'), '') ELSE '' END,
+ CASE WHEN o.class IS NOT NULL AND o.class <> '' THEN COALESCE(json_extract(e.payload,'$.backend'), '') ELSE '' END,
+ CASE WHEN o.class IS NULL OR o.class = '' THEN e.payload ELSE '' END
+ FROM events e
+ LEFT JOIN backend_outcomes o ON o.terminal_seq=e.seq
+ WHERE e.object_id IN (`+placeholders+`) AND e.kind=? ORDER BY e.seq DESC`, args...)
+		}
+		if err != nil {
+			return nil, 0, err
+		}
+		for rows.Next() {
+			var o BackendOutcome
+			var runID, backend, raw string
+			if err := rows.Scan(&o.Seq, &o.Class, &o.Closes, &runID, &backend, &raw); err != nil {
+				rows.Close()
+				return nil, 0, err
+			}
+			o.Saved = o.Class != ""
+			if o.Saved {
+				o.Rec = run.Record{RunID: runID, Backend: backend}
+			} else {
+				BackendOutcomeUnmarshals.Add(1)
+				if err := json.Unmarshal([]byte(raw), &o.Rec); err != nil {
+					rows.Close()
+					return nil, 0, err
+				}
+				unsaved++
+			}
+			if o.Rec.Backend == "command" {
+				if !o.Saved {
+					unsaved--
+				}
+				continue
+			}
+			out = append(out, o)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, 0, err
+		}
+		rows.Close()
+	}
+	return out, unsaved, nil
+}
+
 func QueryOfferedSeqs(r *store.Reader, afterSeq int64) ([]int64, error) {
 	offerRows, err := r.Query(`SELECT json_extract(payload,'$.terminal_seq') FROM events WHERE kind=? AND seq>?`, callOfferedKind, afterSeq)
 	if err != nil {
@@ -409,6 +486,32 @@ func ReadInterruptedRuns(r *store.Reader) (interrupted, restaged map[string]bool
 		case staleBaseKind:
 			// A stale base is the staging's failure, not the item's: like a loop stop,
 			// it ends the attempt without an outcome to hold the item on.
+			interrupted[*e.ObjectID], restaged[*e.ObjectID] = true, true
+		case run.ResumeKind:
+			delete(interrupted, *e.ObjectID)
+		}
+	}
+	return interrupted, restaged, nil
+}
+
+// ReadInterruptedRunsFor reads interrupted and restaged flags for the named run IDs via events_by_object.
+func ReadInterruptedRunsFor(r *store.Reader, runIDs []string) (interrupted, restaged map[string]bool, err error) {
+	interrupted, restaged = map[string]bool{}, map[string]bool{}
+	if len(runIDs) == 0 {
+		return interrupted, restaged, nil
+	}
+	events, err := r.EventsForObjects(0, runIDs, runhistory.LoopOrphanedKind, staleBaseKind, run.ResumeKind)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, e := range events {
+		if e.ObjectID == nil {
+			continue
+		}
+		switch e.Kind {
+		case runhistory.LoopOrphanedKind:
+			interrupted[*e.ObjectID] = true
+		case staleBaseKind:
 			interrupted[*e.ObjectID], restaged[*e.ObjectID] = true, true
 		case run.ResumeKind:
 			delete(interrupted, *e.ObjectID)

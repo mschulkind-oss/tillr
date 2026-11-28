@@ -141,6 +141,33 @@ func readPendingHistory(r *store.Reader) (map[string]*pendingWork, map[string]*p
 	return state.works, state.byRun, nil
 }
 
+// readPendingHistoryForItems folds pendingHistoryKinds scoped to itemIDs and runIDs
+// via events_by_object so callers never scan finished items' dispatch history.
+func readPendingHistoryForItems(r *store.Reader, itemIDs, runIDs []string) (map[string]*pendingWork, map[string]*pendingWork, error) {
+	pendingFolds.Add(1)
+	if pendingHistoryFoldHook != nil {
+		pendingHistoryFoldHook()
+	}
+	state := newPendingHistoryState()
+	if len(itemIDs) == 0 && len(runIDs) == 0 {
+		return state.works, state.byRun, nil
+	}
+	objectIDs := make([]string, 0, len(itemIDs)+len(runIDs))
+	objectIDs = append(objectIDs, itemIDs...)
+	objectIDs = append(objectIDs, runIDs...)
+	events, err := r.EventsForObjects(0, objectIDs, pendingHistoryKinds...)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(events) == 0 {
+		return state.works, state.byRun, nil
+	}
+	if err := foldPendingHistory(r, 0, state, events); err != nil {
+		return nil, nil, err
+	}
+	return state.works, state.byRun, nil
+}
+
 type pendingHistoryState struct {
 	works, byRun                map[string]*pendingWork
 	byParent                    map[string][]*pendingWork
@@ -3970,11 +3997,15 @@ func mergeExamination(dst, src *LoopResult) {
 // liveForks reads works, the pending runs its caller already folded (and, for a
 // claim, validated against the event high-water), rather than folding them again.
 func liveForks(r *store.Reader, at time.Time, works map[string]*pendingWork) ([]plannedFork, error) {
-	held, err := readLanes(r, at)
+	items, err := readItems(r)
 	if err != nil {
 		return nil, err
 	}
-	items, err := readItems(r)
+	return liveForksForItems(r, at, works, items)
+}
+
+func liveForksForItems(r *store.Reader, at time.Time, works map[string]*pendingWork, items []itemRow) ([]plannedFork, error) {
+	held, err := readLanes(r, at)
 	if err != nil {
 		return nil, err
 	}
@@ -3982,40 +4013,98 @@ func liveForks(r *store.Reader, at time.Time, works map[string]*pendingWork) ([]
 	for _, item := range items {
 		forks[item.ItemID] = item.Delivery.ActiveFork()
 	}
-	events, err := r.EventsOfKind(0, run.AllocateKind)
-	if err != nil {
-		return nil, err
-	}
-	owners := map[string]struct{ run, item string }{}
-	for _, e := range events {
-		if e.Kind != run.AllocateKind {
-			continue
-		}
-		var claim struct {
-			LaneID string `json:"lane_id"`
-			RunID  string `json:"run_id"`
-			ItemID string `json:"item_id"`
-		}
-		if err := json.Unmarshal(e.Payload, &claim); err != nil {
-			return nil, err
-		}
-		owners[claim.LaneID] = struct{ run, item string }{claim.RunID, claim.ItemID}
-	}
 	var out []plannedFork
 	for id, work := range works {
 		if !work.Done && forks[id] != "" && !awaitingForkClaim(work) {
 			out = append(out, plannedFork{id, forks[id]})
 		}
 	}
-	for lane, owner := range owners {
-		if !held[lane] {
-			continue
+	var heldLanes []string
+	for lane, isHeld := range held {
+		if isHeld {
+			heldLanes = append(heldLanes, lane)
 		}
+	}
+	if len(heldLanes) == 0 {
+		return out, nil
+	}
+	laneRun := map[string]string{}
+	var heldRunIDs []string
+	for _, lane := range heldLanes {
 		var current sql.NullString
 		if err := r.QueryRow(`SELECT run_id FROM lanes WHERE lane_id = ?`, lane).Scan(&current); err != nil {
 			return nil, err
 		}
-		if current.Valid && current.String == owner.run && forks[owner.item] != "" && !awaitingForkClaim(works[owner.item]) {
+		if current.Valid && current.String != "" {
+			laneRun[lane] = current.String
+			heldRunIDs = append(heldRunIDs, current.String)
+		}
+	}
+	if len(heldRunIDs) == 0 {
+		return out, nil
+	}
+	var missingForkItems []string
+	type laneOwner struct{ run, item string }
+	owners := map[string]laneOwner{}
+	const chunk = 400
+	for start := 0; start < len(heldRunIDs); start += chunk {
+		end := start + chunk
+		if end > len(heldRunIDs) {
+			end = len(heldRunIDs)
+		}
+		batch := heldRunIDs[start:end]
+		args := make([]any, 0, 1+len(batch))
+		args = append(args, run.AllocateKind)
+		for _, id := range batch {
+			args = append(args, id)
+		}
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(batch)), ",")
+		rows, err := r.Query(
+			`SELECT payload FROM events WHERE kind = ? AND json_valid(payload) AND json_extract(payload, '$.run_id') IN (`+placeholders+`) ORDER BY seq ASC`,
+			args...,
+		)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var payload []byte
+			if err := rows.Scan(&payload); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			var claim struct {
+				LaneID string `json:"lane_id"`
+				RunID  string `json:"run_id"`
+				ItemID string `json:"item_id"`
+			}
+			if err := json.Unmarshal(payload, &claim); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			if laneRun[claim.LaneID] == claim.RunID {
+				owners[claim.LaneID] = laneOwner{claim.RunID, claim.ItemID}
+				if _, ok := forks[claim.ItemID]; !ok && claim.ItemID != "" {
+					missingForkItems = append(missingForkItems, claim.ItemID)
+				}
+			}
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		rows.Close()
+	}
+	if len(missingForkItems) > 0 {
+		deliveries, err := readDeliveriesForItems(r, missingForkItems)
+		if err != nil {
+			return nil, err
+		}
+		for _, id := range missingForkItems {
+			forks[id] = deliveries[id].ActiveFork()
+		}
+	}
+	for _, owner := range owners {
+		if forks[owner.item] != "" && !awaitingForkClaim(works[owner.item]) {
 			out = append(out, plannedFork{owner.item, forks[owner.item]})
 		}
 	}

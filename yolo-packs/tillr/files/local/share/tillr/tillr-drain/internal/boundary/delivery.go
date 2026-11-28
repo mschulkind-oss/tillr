@@ -272,6 +272,31 @@ func ReadDeliveries(r *store.Reader) (map[string]DeliveryDecision, error) {
 	return out, nil
 }
 
+func ReadDeliveriesForItems(r *store.Reader, itemIDs []string) (map[string]DeliveryDecision, error) {
+	out := map[string]DeliveryDecision{}
+	if len(itemIDs) == 0 {
+		return out, nil
+	}
+	events, err := r.EventsForObjects(0, itemIDs, DeliveryDecisionKind, DeliveryPartialKind)
+	if err != nil {
+		return nil, err
+	}
+	for _, e := range events {
+		switch e.Kind {
+		case DeliveryDecisionKind, DeliveryPartialKind:
+			if e.ObjectID == nil {
+				return nil, fmt.Errorf("delivery record has no item")
+			}
+			var d DeliveryDecision
+			if err := json.Unmarshal(e.Payload, &d); err != nil {
+				return nil, fmt.Errorf("reading delivery for %s: %w", *e.ObjectID, err)
+			}
+			out[*e.ObjectID] = d
+		}
+	}
+	return out, nil
+}
+
 // DeliveryDecision describes the planner's delivery target independently of path hints.
 type DeliveryDecision struct {
 	Kind string `json:"kind"`

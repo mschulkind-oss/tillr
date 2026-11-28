@@ -106,6 +106,32 @@ func ReadRepeatedCalls(r *store.Reader) (map[string]RepeatedCall, error) {
 	return out, rows.Err()
 }
 
+// ReadRepeatedCallsForRuns reads repeating-call endings scoped to runIDs via events_by_object.
+func ReadRepeatedCallsForRuns(r *store.Reader, runIDs []string) (map[string]RepeatedCall, error) {
+	out := map[string]RepeatedCall{}
+	if len(runIDs) == 0 {
+		return out, nil
+	}
+	events, err := r.EventsForObjects(0, runIDs, RepeatingCallKind)
+	if err != nil {
+		return nil, err
+	}
+	for _, e := range events {
+		if e.ObjectID == nil {
+			continue
+		}
+		var rc RepeatedCall
+		if err := json.Unmarshal(e.Payload, &rc); err != nil {
+			return nil, drainmodel.Internalf("reading the repeating-call ending of %q: %v", *e.ObjectID, err)
+		}
+		if rc.Route == "failover" {
+			rc.Route, rc.NextBackend = RepeatActionHold, ""
+		}
+		out[*e.ObjectID] = rc
+	}
+	return out, nil
+}
+
 // RepeatedCallBrief is the brief's section for a run dispatched because an earlier
 // session repeated one identical call.
 func RepeatedCallBrief(rc RepeatedCall) string {

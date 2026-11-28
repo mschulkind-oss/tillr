@@ -34,6 +34,10 @@ func ReadObstacleHolds(r *store.Reader) (map[string]obstacles.Hold, map[string]s
 	return obstacles.Read(r)
 }
 
+func ReadObstacleHoldsForItems(r *store.Reader, itemIDs, runIDs []string) (map[string]obstacles.Hold, map[string]string, error) {
+	return obstacles.ReadForItems(r, itemIDs, runIDs)
+}
+
 type trunkObstacleKind int
 
 const (

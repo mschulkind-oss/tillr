@@ -75,3 +75,31 @@ func answeredObstacleCounts(r *store.Reader) (map[string]int, error) {
 	}
 	return counts, rows.Err()
 }
+
+func answeredObstacleCountsForItems(r *store.Reader, itemIDs []string) (map[string]int, error) {
+	counts := map[string]int{}
+	if len(itemIDs) == 0 {
+		return counts, nil
+	}
+	events, err := r.EventsForObjects(0, itemIDs, item.ConflictKind)
+	if err != nil {
+		return nil, err
+	}
+	seen := map[[2]string]bool{}
+	for _, e := range events {
+		var c item.Conflict
+		if err := json.Unmarshal(e.Payload, &c); err != nil {
+			return nil, err
+		}
+		if c.Status != "answered" || c.AnswerHead == "" || c.QuestionRef != "" {
+			continue
+		}
+		o := parseObstacle(workerConflictReport(c.Text))
+		key := [2]string{c.ItemID, c.ConflictID}
+		if !seen[key] && o.Kind != "" && o.Problem == "" {
+			seen[key] = true
+			counts[c.ItemID]++
+		}
+	}
+	return counts, nil
+}

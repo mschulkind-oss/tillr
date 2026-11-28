@@ -255,6 +255,44 @@ func readItemTitles(r *store.Reader) (map[string]string, error) {
 	return out, rows.Err()
 }
 
+func readItemTitlesFor(r *store.Reader, itemIDs []string) (map[string]string, error) {
+	out := map[string]string{}
+	if len(itemIDs) == 0 {
+		return out, nil
+	}
+	const chunk = 400
+	for start := 0; start < len(itemIDs); start += chunk {
+		end := start + chunk
+		if end > len(itemIDs) {
+			end = len(itemIDs)
+		}
+		batch := itemIDs[start:end]
+		args := make([]any, len(batch))
+		for i, id := range batch {
+			args[i] = id
+		}
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(batch)), ",")
+		rows, err := r.Query(`SELECT item_id, title FROM items WHERE item_id IN (`+placeholders+`)`, args...)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var id, title string
+			if err := rows.Scan(&id, &title); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			out[id] = title
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		rows.Close()
+	}
+	return out, nil
+}
+
 func formatSplitCounts(total, landed, working, held, queued, closed int) string {
 	var parts []string
 	if landed > 0 {
@@ -472,6 +510,10 @@ func (l *Loop) verifierSplitCall(ctx context.Context, candidate Candidate, size 
 }
 
 func readSplitCallsForPlanner(r *store.Reader) (pending map[string]item.SplitCall, noSplit map[string]item.SplitCall, err error) {
+	return readSplitCallsForPlannerForItems(r, nil)
+}
+
+func readSplitCallsForPlannerForItems(r *store.Reader, itemIDs []string) (pending map[string]item.SplitCall, noSplit map[string]item.SplitCall, err error) {
 	pending = map[string]item.SplitCall{}
 	noSplit = map[string]item.SplitCall{}
 	var exists bool
@@ -481,11 +523,17 @@ func readSplitCallsForPlanner(r *store.Reader) (pending map[string]item.SplitCal
 	if !exists {
 		return pending, noSplit, nil
 	}
-	rows, err := r.Query(
-		`SELECT call_id, item_id, caller, run_id, donor_ref, donor_sha, base_sha, signals, status, design_run_id, no_split_reason, last_rejection_reason, created_at, answered_at
-		 FROM split_calls WHERE status IN (?,?) ORDER BY call_id ASC`,
-		item.SplitCallStatusPending, item.SplitCallStatusNoSplit,
-	)
+	query := `SELECT call_id, item_id, caller, run_id, donor_ref, donor_sha, base_sha, signals, status, design_run_id, no_split_reason, last_rejection_reason, created_at, answered_at
+		 FROM split_calls WHERE status IN (?,?)`
+	args := []any{item.SplitCallStatusPending, item.SplitCallStatusNoSplit}
+	if len(itemIDs) > 0 {
+		query += ` AND item_id IN (` + strings.TrimSuffix(strings.Repeat("?,", len(itemIDs)), ",") + `)`
+		for _, id := range itemIDs {
+			args = append(args, id)
+		}
+	}
+	query += ` ORDER BY call_id ASC`
+	rows, err := r.Query(query, args...)
 	if err != nil {
 		return nil, nil, err
 	}

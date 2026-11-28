@@ -49,3 +49,22 @@ func readPriorRunsWithOutcomes(r *store.Reader, byRun map[string]*pendingWork, c
 		return piErr && isDesignWork(byRun[rec.RunID]), nil
 	})
 }
+
+func readPriorRunsWithOutcomesForItems(r *store.Reader, itemIDs, runIDs []string, byRun map[string]*pendingWork, latestFinished map[string]string) (map[string][]priorRun, error) {
+	outcomes, _, err := policy.QueryBackendOutcomesForRuns(r, runIDs)
+	if err != nil {
+		return nil, err
+	}
+	return policy.ReadPriorRunsForItems(r, itemIDs, runIDs, outcomes, latestFinished, func(rec run.Record, saved bool, class AttemptClass) (bool, error) {
+		piErr := false
+		if (!saved || class == AttemptInfrastructure) && (byRun == nil || isDesignWork(byRun[rec.RunID])) {
+			piErr = hasPiTransportError(rec)
+			if piErr && byRun == nil {
+				if _, byRun, err = readPendingHistoryForItems(r, itemIDs, runIDs); err != nil {
+					return false, err
+				}
+			}
+		}
+		return piErr && isDesignWork(byRun[rec.RunID]), nil
+	})
+}

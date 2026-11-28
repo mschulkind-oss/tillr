@@ -38,6 +38,10 @@ type ItemFault = faults.Hold
 
 func ReadItemFaults(r *store.Reader) (map[string]ItemFault, error) { return faults.Read(r) }
 
+func ReadItemFaultsForItems(r *store.Reader, itemIDs, runIDs []string) (map[string]ItemFault, error) {
+	return faults.ReadForItems(r, itemIDs, runIDs)
+}
+
 // FaultClearDetail renders the clear command after append: the event sequence binds it to this exact fault.
 func FaultClearDetail(f ItemFault, storePath string) string {
 	return f.Detail + "; after correcting the cause, run " + f.ClearCommand(storePath)
