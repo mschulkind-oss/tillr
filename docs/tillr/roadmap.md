@@ -192,8 +192,9 @@ Third by rule 2: each of these is a place where a red check costs more than the 
 
 15. [Judging flaky tests one test at a time in the trunk proof](../design/trunk-proof-per-test-flaky-judgment.md):
     after moving-trunk repair and test caching, which it depends on, and ahead of landing velocity
-    because one flaky test otherwise disables a whole module suite check. Independent slices
-    proceed while the owner's probe, subtest, verification and fingerprint rulings hold the rest.
+    because one flaky test otherwise disables a whole module suite check. The owner ruled on
+    2026-11-28 that a failed trunk test is disabled without a rerun, listed in the repository and
+    sent to the mechanic; no question is open, so every slice may start.
 
 16. [Keeping the trunk proof alive across a loop restart](../design/trunk-proof-survives-restart.md):
     ahead of landing velocity because an in-process trunk proof or culprit search holds pending
