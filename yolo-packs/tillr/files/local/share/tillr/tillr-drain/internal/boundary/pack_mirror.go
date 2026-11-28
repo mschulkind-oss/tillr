@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -136,13 +137,63 @@ func StagePackMirror(
 	if err != nil || !hasManifest {
 		return false, err
 	}
-	return SyncAndStagePackMirrorModules(ctx, worktree, itemID, selectedModules, git)
+	return syncAndStagePackMirrorModules(ctx, worktree, itemID, selectedModules, candidateChangesPackMirrorSync(changedPaths), git)
+}
+
+func candidateChangesPackMirrorSync(changedPaths []string) bool {
+	for _, path := range changedPaths {
+		if strings.HasSuffix(path, "_test.go") {
+			continue
+		}
+		if strings.HasPrefix(path, "tools/tillr/packmirror/") || strings.HasPrefix(path, "tools/tillr/cmd/pack-mirror/") {
+			return true
+		}
+	}
+	return false
+}
+
+func runCandidatePackMirrorSync(ctx context.Context, worktree, itemID string, selectedModules []string) error {
+	absWorktree, err := filepath.Abs(worktree)
+	if err != nil {
+		return drainmodel.Externalf("candidate pack-sync for %s: resolve worktree %s: %v", itemID, worktree, err)
+	}
+	modDir := filepath.Join(absWorktree, "tools", "tillr")
+	args := make([]string, 0, 5+len(selectedModules))
+	args = append(args, "run", "-C", modDir, "./cmd/pack-mirror", "--sync", absWorktree)
+	args = append(args, selectedModules...)
+	cmd := exec.CommandContext(ctx, "go", args...)
+	cmd.Dir = absWorktree
+	cmd.Env = BoundaryGitEnv()
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	if err := cmd.Run(); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		detail := strings.TrimSpace(out.String())
+		if detail != "" {
+			return drainmodel.Externalf("candidate pack-sync for %s failed: %v: %s", itemID, err, detail)
+		}
+		return drainmodel.Externalf("candidate pack-sync for %s failed: %v", itemID, err)
+	}
+	return nil
 }
 
 func SyncAndStagePackMirrorModules(
 	ctx context.Context,
 	worktree, itemID string,
 	selectedModules []string,
+	git func(ctx context.Context, dir string, args ...string) (string, error),
+) (bool, error) {
+	return syncAndStagePackMirrorModules(ctx, worktree, itemID, selectedModules, false, git)
+}
+
+func syncAndStagePackMirrorModules(
+	ctx context.Context,
+	worktree, itemID string,
+	selectedModules []string,
+	useCandidateSync bool,
 	git func(ctx context.Context, dir string, args ...string) (string, error),
 ) (bool, error) {
 	if len(selectedModules) == 0 {
@@ -164,12 +215,18 @@ func SyncAndStagePackMirrorModules(
 	} else if out != "" {
 		return false, drainmodel.Externalf("pack-sync requires a clean candidate worktree: %s", strings.TrimSpace(out))
 	}
-	var out bytes.Buffer
-	if rc := packmirror.Sync(worktree, selectedModules, &out, &out); rc != 0 {
-		if ctx.Err() != nil {
-			return false, ctx.Err()
+	if useCandidateSync {
+		if err := runCandidatePackMirrorSync(ctx, worktree, itemID, selectedModules); err != nil {
+			return false, err
 		}
-		return false, drainmodel.Externalf("pack-sync for %s: exit %d: %s", itemID, rc, strings.TrimSpace(out.String()))
+	} else {
+		var out bytes.Buffer
+		if rc := packmirror.Sync(worktree, selectedModules, &out, &out); rc != 0 {
+			if ctx.Err() != nil {
+				return false, ctx.Err()
+			}
+			return false, drainmodel.Externalf("pack-sync for %s: exit %d: %s", itemID, rc, strings.TrimSpace(out.String()))
+		}
 	}
 	// The renderer may not widen the maintenance commit beyond the selected mirrors.
 	outside := append(status, "--", ".")

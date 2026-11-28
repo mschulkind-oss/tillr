@@ -670,3 +670,312 @@ func TestConcurrentSupportFileLandingsKeepSupportRevisionFresh(t *testing.T) {
 		t.Fatalf("resulting trunk failed CaseWorkflows: %v\n%s", err, checkOut.String())
 	}
 }
+
+const candidatePackMirrorGoMod = "module github.com/mschulkind-oss/tillr\n\ngo 1.24\n"
+
+const candidatePackMirrorMain = `package main
+
+import (
+	"os"
+
+	"github.com/mschulkind-oss/tillr/packmirror"
+)
+
+func main() {
+	os.Exit(packmirror.Main(os.Args[1:], os.Stdout, os.Stderr))
+}
+`
+
+const candidatePackMirrorBase = `package packmirror
+
+import (
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+)
+
+func Main(args []string, stdout, stderr io.Writer) int {
+	if len(args) < 2 || args[0] != "--sync" {
+		fmt.Fprintln(stderr, "usage: pack-mirror --sync <root> [module...]")
+		return 2
+	}
+	root := args[1]
+	for _, mod := range args[2:] {
+		src := filepath.Join(root, "tools", mod, "main.go")
+		data, err := os.ReadFile(src)
+		if err != nil {
+			continue
+		}
+		dst := filepath.Join(root, "yolo-packs", "tillr", "files", "local", "share", "tillr", mod, "main.go")
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			fmt.Fprintf(stderr, "mkdir: %v\n", err)
+			return 1
+		}
+		if err := os.WriteFile(dst, data, 0o644); err != nil {
+			fmt.Fprintf(stderr, "write: %v\n", err)
+			return 1
+		}
+	}
+	return 0
+}
+`
+
+const candidatePackMirrorAddsDist = `package packmirror
+
+import (
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+)
+
+func Main(args []string, stdout, stderr io.Writer) int {
+	if len(args) < 2 || args[0] != "--sync" {
+		fmt.Fprintln(stderr, "usage: pack-mirror --sync <root> [module...]")
+		return 2
+	}
+	root := args[1]
+	for _, mod := range args[2:] {
+		modDst := filepath.Join(root, "yolo-packs", "tillr", "files", "local", "share", "tillr", mod)
+		src := filepath.Join(root, "tools", mod, "main.go")
+		if data, err := os.ReadFile(src); err == nil {
+			dst := filepath.Join(modDst, "main.go")
+			if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+				fmt.Fprintf(stderr, "mkdir: %v\n", err)
+				return 1
+			}
+			if err := os.WriteFile(dst, data, 0o644); err != nil {
+				fmt.Fprintf(stderr, "write: %v\n", err)
+				return 1
+			}
+		}
+		if mod == "tillr-view" {
+			distIndex := filepath.Join(modDst, "web", "dist", "index.html")
+			if err := os.MkdirAll(filepath.Dir(distIndex), 0o755); err != nil {
+				fmt.Fprintf(stderr, "mkdir dist: %v\n", err)
+				return 1
+			}
+			if err := os.WriteFile(distIndex, []byte("<html>observatory</html>\n"), 0o644); err != nil {
+				fmt.Fprintf(stderr, "write dist: %v\n", err)
+				return 1
+			}
+			digest := filepath.Join(modDst, "dist-source-digest")
+			if err := os.WriteFile(digest, []byte("sha256:abc123\n"), 0o644); err != nil {
+				fmt.Fprintf(stderr, "write digest: %v\n", err)
+				return 1
+			}
+		}
+	}
+	return 0
+}
+`
+
+func TestStagePackMirrorUsesCandidateSyncWhenSyncChanges(t *testing.T) {
+	const (
+		viewSrc     = "tools/tillr-view/main.go"
+		viewMirror  = tillrMirrorRoot + "tillr-view/main.go"
+		distIndex   = tillrMirrorRoot + "tillr-view/web/dist/index.html"
+		distDigest  = tillrMirrorRoot + "tillr-view/dist-source-digest"
+		syncSrc     = "tools/tillr/packmirror/packmirror.go"
+		syncMainSrc = "tools/tillr/cmd/pack-mirror/main.go"
+	)
+	setup := func(t *testing.T) (*Loop, string, string) {
+		t.Helper()
+		f, l := passFixture(t, "item-a")
+		for path, body := range map[string]string{
+			"yolo-packs/tillr/pack.json": "{}\n",
+			"tools/tillr/go.mod":         candidatePackMirrorGoMod,
+			syncMainSrc:                  candidatePackMirrorMain,
+			syncSrc:                      candidatePackMirrorBase,
+			viewSrc:                      "package main // v1\n",
+			viewMirror:                   "package main // v1\n",
+		} {
+			writePackFixture(t, f.root, path, body)
+		}
+		runGit(t, f.root, "add", ".")
+		runGit(t, f.root, "commit", "-m", "pack fixture with candidate sync")
+		base := runGit(t, f.root, "rev-parse", "HEAD")
+		lane := l.laneTarget("lane-1")
+		runGit(t, lane, "reset", "--hard", base)
+		return l, lane, base
+	}
+
+	t.Run("candidate added mirror files survive staging into gate", func(t *testing.T) {
+		ctx := context.Background()
+		l, lane, base := setup(t)
+		writePackFixture(t, lane, syncSrc, candidatePackMirrorAddsDist)
+		writePackFixture(t, lane, viewSrc, "package main // v2\n")
+		writePackFixture(t, lane, viewMirror, "package main // v2\n")
+		writePackFixture(t, lane, distIndex, "<html>observatory</html>\n")
+		writePackFixture(t, lane, distDigest, "sha256:abc123\n")
+		runGit(t, lane, "add", ".")
+		runGit(t, lane, "commit", "-m", "feat: add observatory dist to pack mirror")
+		worker := runGit(t, lane, "rev-parse", "HEAD")
+		writeForkFile(t, filepath.Join(l.laneDirPath("lane-1"), FenceFile), "tools/tillr/\ntools/tillr-view/\nyolo-packs/tillr/\n")
+		c := Candidate{ItemID: "item-a", LaneID: "lane-1", RunID: "run-cand-sync", Worktree: lane, BaseSHA: base, HeadSHA: worker}
+
+		gateStop := errors.New("stop after checking gate input")
+		calls := 0
+		l.cfg.Steps = packMirrorGate{Steps: l.cfg.Steps, gate: func(c Candidate) (GateOutcome, error) {
+			calls++
+			if got := runGit(t, lane, "show", c.HeadSHA+":"+distIndex); got != "<html>observatory</html>" {
+				t.Fatalf("gate lost candidate-added dist index: %q", got)
+			}
+			if got := runGit(t, lane, "show", c.HeadSHA+":"+distDigest); got != "sha256:abc123" {
+				t.Fatalf("gate lost candidate-added dist digest: %q", got)
+			}
+			if got := runGit(t, lane, "show", c.HeadSHA+":"+viewMirror); got != "package main // v2" {
+				t.Fatalf("gate saw stale view mirror: %q", got)
+			}
+			return GateOutcome{}, gateStop
+		}}
+		if _, _, err := l.verify(ctx, &c, &LoopResult{}, nil); !errors.Is(err, gateStop) || calls != 1 {
+			t.Fatalf("verify: calls=%d, err=%v", calls, err)
+		}
+	})
+
+	t.Run("staging regenerates added mirror files using candidate sync", func(t *testing.T) {
+		ctx := context.Background()
+		l, lane, base := setup(t)
+		writePackFixture(t, lane, syncSrc, candidatePackMirrorAddsDist)
+		writePackFixture(t, lane, viewSrc, "package main // v2\n")
+		runGit(t, lane, "add", ".")
+		runGit(t, lane, "commit", "-m", "feat: update sync without pre-generating mirror")
+		c := Candidate{ItemID: "item-a", Worktree: lane, BaseSHA: base, HeadSHA: runGit(t, lane, "rev-parse", "HEAD")}
+		changed, err := l.stagePackMirror(ctx, c)
+		if err != nil || !changed {
+			t.Fatalf("stagePackMirror = (%v, %v), want (true, nil)", changed, err)
+		}
+		if got := runGit(t, lane, "show", ":"+distIndex); got != "<html>observatory</html>" {
+			t.Fatalf("staged dist index = %q", got)
+		}
+		if got := runGit(t, lane, "show", ":"+distDigest); got != "sha256:abc123" {
+			t.Fatalf("staged dist digest = %q", got)
+		}
+	})
+}
+
+func TestStagePackMirrorUsesLoopSyncWhenSyncUnchanged(t *testing.T) {
+	ctx := context.Background()
+	f, l := passFixture(t, "item-a")
+	const (
+		viewSrc    = "tools/tillr-view/main.go"
+		viewMirror = tillrMirrorRoot + "tillr-view/main.go"
+	)
+	for path, body := range map[string]string{
+		"yolo-packs/tillr/pack.json":          "{}\n",
+		"tools/tillr/cmd/pack-mirror/main.go": "this is not valid go and would fail if executed\n",
+		viewSrc:                               "package main // v1\n",
+		viewMirror:                            "package main // v1\n",
+	} {
+		writePackFixture(t, f.root, path, body)
+	}
+	runGit(t, f.root, "add", ".")
+	runGit(t, f.root, "commit", "-m", "fixture with non-runnable candidate sync")
+	base := runGit(t, f.root, "rev-parse", "HEAD")
+	lane := l.laneTarget("lane-1")
+	runGit(t, lane, "reset", "--hard", base)
+	writePackFixture(t, lane, viewSrc, "package main // v2\n")
+	runGit(t, lane, "add", viewSrc)
+	runGit(t, lane, "commit", "-m", "feat: update view without touching sync")
+
+	c := Candidate{ItemID: "item-a", Worktree: lane, BaseSHA: base, HeadSHA: runGit(t, lane, "rev-parse", "HEAD")}
+	changed, err := l.stagePackMirror(ctx, c)
+	if err != nil || !changed {
+		t.Fatalf("stagePackMirror = (%v, %v), want (true, nil)", changed, err)
+	}
+	if got := runGit(t, lane, "show", ":"+viewMirror); got != "package main // v2" {
+		t.Fatalf("staged view mirror = %q, want updated copy from loop sync", got)
+	}
+}
+
+func TestStagePackMirrorRefusesBrokenCandidateSyncWithoutFallback(t *testing.T) {
+	const (
+		viewSrc     = "tools/tillr-view/main.go"
+		viewMirror  = tillrMirrorRoot + "tillr-view/main.go"
+		syncSrc     = "tools/tillr/packmirror/packmirror.go"
+		syncMainSrc = "tools/tillr/cmd/pack-mirror/main.go"
+	)
+	setup := func(t *testing.T) (*Loop, string, string) {
+		t.Helper()
+		f, l := passFixture(t, "item-a")
+		for path, body := range map[string]string{
+			"yolo-packs/tillr/pack.json": "{}\n",
+			"tools/tillr/go.mod":         candidatePackMirrorGoMod,
+			syncMainSrc:                  candidatePackMirrorMain,
+			syncSrc:                      candidatePackMirrorBase,
+			viewSrc:                      "package main // v1\n",
+			viewMirror:                   "package main // v1\n",
+		} {
+			writePackFixture(t, f.root, path, body)
+		}
+		runGit(t, f.root, "add", ".")
+		runGit(t, f.root, "commit", "-m", "pack fixture")
+		base := runGit(t, f.root, "rev-parse", "HEAD")
+		lane := l.laneTarget("lane-1")
+		runGit(t, lane, "reset", "--hard", base)
+		return l, lane, base
+	}
+
+	t.Run("unbuildable candidate sync is refused without falling back", func(t *testing.T) {
+		ctx := context.Background()
+		l, lane, base := setup(t)
+		writePackFixture(t, lane, syncSrc, "package packmirror\n\nimport \"io\"\n\nfunc Main(args []string, stdout, stderr io.Writer) int {\n\treturn undefinedCandidateSyncSymbol()\n}\n")
+		writePackFixture(t, lane, viewSrc, "package main // v2\n")
+		runGit(t, lane, "add", ".")
+		runGit(t, lane, "commit", "-m", "break packmirror build")
+		worker := runGit(t, lane, "rev-parse", "HEAD")
+		writeForkFile(t, filepath.Join(l.laneDirPath("lane-1"), FenceFile), "tools/tillr/\ntools/tillr-view/\n")
+		c := Candidate{ItemID: "item-a", LaneID: "lane-1", RunID: "run-broken-build", Worktree: lane, BaseSHA: base, HeadSHA: worker}
+
+		gateCalls := 0
+		l.cfg.Steps = packMirrorGate{Steps: l.cfg.Steps, gate: func(Candidate) (GateOutcome, error) {
+			gateCalls++
+			return GateOutcome{}, nil
+		}}
+		if _, _, err := l.verify(ctx, &c, &LoopResult{}, nil); !errors.Is(err, errItemFaultHeld) {
+			t.Fatalf("verify err = %v, want errItemFaultHeld", err)
+		}
+		if gateCalls != 0 {
+			t.Fatalf("gate was called %d times, want 0 when candidate sync cannot build", gateCalls)
+		}
+		if got, err := os.ReadFile(filepath.Join(lane, viewMirror)); err != nil || string(got) != "package main // v1\n" {
+			t.Fatalf("loop sync fell back and overwrote mirror: err=%v got=%q", err, string(got))
+		}
+		if err := l.readStore(ctx, func(r *store.Reader) error {
+			faults, err := ReadItemFaults(r)
+			if err != nil {
+				return err
+			}
+			fault := faults["item-a"]
+			if len(faults) != 1 || fault.Reason != ReasonPackSyncFailed || !strings.Contains(fault.Detail, "candidate pack-sync") || !strings.Contains(fault.Detail, "undefinedCandidateSyncSymbol") {
+				t.Fatalf("wanted pack-sync-failed hold naming candidate sync build error; got %+v", faults)
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("failing candidate sync is refused without falling back", func(t *testing.T) {
+		ctx := context.Background()
+		l, lane, base := setup(t)
+		writePackFixture(t, lane, syncMainSrc, "package main\nimport (\"fmt\"; \"os\")\nfunc main() { fmt.Fprintln(os.Stderr, \"candidate sync boom\"); os.Exit(1) }\n")
+		writePackFixture(t, lane, viewSrc, "package main // v2\n")
+		runGit(t, lane, "add", ".")
+		runGit(t, lane, "commit", "-m", "make candidate sync fail at runtime")
+		c := Candidate{ItemID: "item-a", Worktree: lane, BaseSHA: base, HeadSHA: runGit(t, lane, "rev-parse", "HEAD")}
+
+		changed, err := l.stagePackMirror(ctx, c)
+		if err == nil || changed {
+			t.Fatalf("stagePackMirror = (%v, %v), want (false, error)", changed, err)
+		}
+		if !strings.Contains(err.Error(), "candidate sync boom") {
+			t.Fatalf("error %q did not carry candidate sync failure output", err.Error())
+		}
+		if got, err := os.ReadFile(filepath.Join(lane, viewMirror)); err != nil || string(got) != "package main // v1\n" {
+			t.Fatalf("loop sync fell back and overwrote mirror: err=%v got=%q", err, string(got))
+		}
+	})
+}
