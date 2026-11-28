@@ -186,7 +186,7 @@ func (s *trunkBranchTestSteps) ItemState(_ context.Context, itemID, runID, state
 	}
 	defer db.Close()
 	return db.WriteTx(context.Background(), func(tx *store.Tx) error {
-		_, err := tx.Exec(`UPDATE items SET state = ? WHERE id = ?`, state, itemID)
+		_, err := tx.Exec(`UPDATE items SET state = ? WHERE item_id = ?`, state, itemID)
 		return err
 	})
 }
