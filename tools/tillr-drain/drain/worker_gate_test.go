@@ -156,7 +156,6 @@ func TestWorkerEndStartsGateWithoutPassOrSiblingLanding(t *testing.T) {
 		"restart_lock_wait",
 		"claim_worker_settlement",
 		"settle",
-		"claim_settled_judge",
 		"verify_pre_gate",
 		"candidate_gate",
 		"post_gate",

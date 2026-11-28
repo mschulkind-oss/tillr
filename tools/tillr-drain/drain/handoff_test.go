@@ -357,8 +357,6 @@ func TestExaminationRecordsSubPhasesAndAccountsForWallTime(t *testing.T) {
 			"read_terminal_record",
 			"record_settlement_spend",
 			"settle",
-			"claim_settled_judge",
-			"claim_judge_plan",
 			"verify_pre_gate",
 			"candidate_gate",
 			"post_gate",
@@ -395,8 +393,8 @@ func TestExaminationRecordsSubPhasesAndAccountsForWallTime(t *testing.T) {
 			"read_terminal_record",
 			"record_settlement_spend",
 			"settle",
-			"claim_settled_judge",
-			"claim_judge_plan",
+			"candidate_gate",
+			"post_gate",
 			"release_examination",
 		})
 	})
