@@ -559,6 +559,14 @@ Wanted, not now, by the owner's call. Picking one up means giving it a place abo
   [`OQ-QR1`](../design/tillr-queue-rescue.md#OQ-QR1) to
   [`OQ-QR3`](../design/tillr-queue-rescue.md#OQ-QR3).
 
+- **Restarting the store's write-ahead log when the loop's own short reads are dense**
+  ([design](../design/store-checkpoint-restart.md)). Listed here unplaced until the owner sets its
+  roadmap order above. Three slices ([`D-SCR1`](../design/store-checkpoint-restart.md#D-SCR1) to
+  [`D-SCR5`](../design/store-checkpoint-restart.md#D-SCR5)) wait on no question once placed:
+  bounded two-beat in-process read fencing and tail write catch-up in `CheckpointOwner`,
+  per-call-site missed-cycle read attribution on `drain.checkpoint-not-restarted`, and
+  checkpoint-before-CPU heartbeat ordering with the loop-level dense-read test.
+
 ## What this page does not cover
 
 - **What is built.** The references under [`docs/reference/`](../reference/) and each module's
