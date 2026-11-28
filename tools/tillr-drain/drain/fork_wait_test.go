@@ -12,6 +12,7 @@ import (
 
 func TestForkHeldContinuationLeavesLaneForNextItem(t *testing.T) {
 	f, l := passFixture(t, "item-a", "item-b", "item-c")
+	l.cfg.Policy.Seats = map[string]string{"plan": "fixture", "build": "fixture"}
 	ctx := context.Background()
 	base := runGit(t, f.root, "rev-parse", TrunkRef)
 	fixtureWrite(t, f, func(tx *store.Tx) error {
