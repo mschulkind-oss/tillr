@@ -1724,10 +1724,39 @@ func (l *Loop) stageFaultBackoffReadyLocked() bool {
 		!l.gateLand.AnyRunning() && l.stageLaunch.RunCount() == 0
 }
 
-func (l *Loop) stageFaultBackoffReady() bool {
+// retractingStageFaultsLocked names the recorded staging faults whose claim is still
+// retracting, in l.active or in the stage/launch coordinators.
+func (l *Loop) retractingStageFaultsLocked() map[string]bool {
+	var ids map[string]bool
+	for id := range l.stageLaunch.Faults {
+		if l.active[id] || l.stageLaunch.HasRun(id) {
+			if ids == nil {
+				ids = map[string]bool{}
+			}
+			ids[id] = true
+		}
+	}
+	return ids
+}
+
+// retractedStageFaultBackoffReady reports whether idle backoff is ready for a staging
+// fault that was still retracting when the pass began (one of retracting). Faults the
+// pass's own dispatches record are not in that set, so they never stop the rest of the
+// batch: each is staged, counted, and the backoff waits until the pass ends.
+func (l *Loop) retractedStageFaultBackoffReady(retracting map[string]bool) bool {
+	if len(retracting) == 0 {
+		return false
+	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return l.stageFaultBackoffReadyLocked()
+	carried := false
+	for id := range retracting {
+		if _, ok := l.stageLaunch.Faults[id]; ok {
+			carried = true
+			break
+		}
+	}
+	return carried && l.stageFaultBackoffReadyLocked()
 }
 
 // consumeStageFaultBackoff reports whether the loop should enter idle backoff

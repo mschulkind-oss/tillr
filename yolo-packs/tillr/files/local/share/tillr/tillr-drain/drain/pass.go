@@ -3219,6 +3219,13 @@ func (l *Loop) passMode(ctx context.Context, result *LoopResult) (stop string, e
 			}
 		}
 	}
+	// A staging fault still retracting when the pass began was recorded by an earlier
+	// pass's claim: when its retraction finishes mid-pass, this pass stops dispatching so
+	// runPasses backs off first. A fault this pass's own batch records does not stop the
+	// rest of the batch; it counts, and the backoff follows the pass.
+	l.mu.Lock()
+	retractingFaults := l.retractingStageFaultsLocked()
+	l.mu.Unlock()
 	var coordEpoch uint64
 	plan := func(ctx context.Context, at time.Time, generation *string) ([]plannedApplication, []LaneLease, error) {
 		l.mu.Lock()
@@ -3422,7 +3429,7 @@ plans:
 				continue
 			}
 		}
-		if (d.Action == ActionDispatch || d.Action == ActionRetry) && l.stageFaultBackoffReady() {
+		if (d.Action == ActionDispatch || d.Action == ActionRetry) && l.retractedStageFaultBackoffReady(retractingFaults) {
 			// A retracted staging fault is waiting for idle backoff in runPasses;
 			// return so the loop backs off before re-dispatching.
 			return "", nil

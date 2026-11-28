@@ -402,3 +402,44 @@ func TestPassReplansInsteadOfLanesLeasedWhenCoordinatorCompletesMidPass(t *testi
 		t.Fatalf("second pass stop = %q (detail=%q), want %q", stop, res.Detail, StopQueueDrained)
 	}
 }
+
+// The mid-pass dispatch pause is for a staging fault an earlier pass's claim was still
+// retracting when this pass began. A fault the pass's own batch records is not that: the
+// rest of the batch still stages and counts, and the backoff waits for the pass to end.
+func TestMidPassStageFaultPauseOnlyForFaultsRetractingAtPassStart(t *testing.T) {
+	f := newRefusalLoopFixture(t, "item-b")
+	l, _ := stageFaultLoop(t, f, &recordingSteps{})
+	l.mu.Lock()
+	l.stageLaunch.Ensure()
+	l.stageLaunch.Stage.MarkStart("item-b", "run-item-b-a1")
+	l.stageLaunch.RecordFault("run-item-b-a1")
+	l.infraStreak = 1
+	retracting := l.retractingStageFaultsLocked()
+	l.mu.Unlock()
+	if !retracting["run-item-b-a1"] || len(retracting) != 1 {
+		t.Fatalf("retracting at pass start = %v, want only run-item-b-a1", retracting)
+	}
+	if l.retractedStageFaultBackoffReady(retracting) {
+		t.Fatal("paused while the carried fault's claim was still retracting")
+	}
+	l.mu.Lock()
+	l.stageLaunch.Stage.MarkDone("item-b", "run-item-b-a1")
+	l.mu.Unlock()
+	if !l.retractedStageFaultBackoffReady(retracting) {
+		t.Fatal("did not pause once the carried fault's retraction finished and the loop was idle")
+	}
+
+	// A fault recorded by this pass's own dispatch, with nothing retracting at its start.
+	l.mu.Lock()
+	l.stageLaunch.ClearFaults()
+	atStart := l.retractingStageFaultsLocked()
+	l.stageLaunch.RecordFault("run-item-a-a1")
+	idle := l.stageFaultBackoffReadyLocked()
+	l.mu.Unlock()
+	if !idle {
+		t.Fatal("control: the loop should be idle with a recorded fault")
+	}
+	if l.retractedStageFaultBackoffReady(atStart) {
+		t.Fatal("a fault the pass's own batch recorded stopped the rest of the batch")
+	}
+}
