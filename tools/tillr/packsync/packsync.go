@@ -230,6 +230,9 @@ func CaseTreeMatchesSource(root string, candidate bool, stdout io.Writer) error 
 				module, len(missing), strings.Join(missing[:limit], ", "), ellipsis)
 		}
 		for k := range copyFiles {
+			if module == "tillr-view" && packmirror.IsGeneratedWebDistPath(k) {
+				continue
+			}
 			if _, ok := sourceFiles[k]; !ok {
 				extra = append(extra, k)
 			}
@@ -1160,6 +1163,67 @@ func findRepoRoot() string {
 	return wd
 }
 
+// CaseWebDist checks that the pack's shipped observatory front end exists, contains no
+// symlinks, and matches the current digest of its sources under tools/tillr-view/web/.
+func CaseWebDist(root string, candidate bool, stdout io.Writer) error {
+	if candidate {
+		if stdout != nil {
+			fmt.Fprintln(stdout, "n/a  the tillr pack's observatory front end: a candidate does not carry the generated tree")
+		}
+		return nil
+	}
+	pkgPath := filepath.Join(root, filepath.FromSlash(packmirror.WebSourceDir), "package.json")
+	if fi, err := os.Stat(pkgPath); err != nil || !fi.Mode().IsRegular() {
+		return nil
+	}
+	wantDigest, err := packmirror.ComputeWebSourceDigest(root)
+	if err != nil {
+		return err
+	}
+	viewCopy := filepath.Join(copyDir(root), "tillr-view")
+	distDir := filepath.Join(viewCopy, filepath.FromSlash(packmirror.WebDistRel))
+	indexPath := filepath.Join(distDir, "index.html")
+	if sym, err := isSymlink(indexPath); err != nil || sym {
+		return fmt.Errorf("missing or symlinked pack observatory front end (%s): run `just pack-sync`", indexPath)
+	}
+	if fi, err := os.Stat(indexPath); err != nil || !fi.Mode().IsRegular() {
+		return fmt.Errorf("missing pack observatory front end (%s): run `just pack-sync`", indexPath)
+	}
+	fileCount := 0
+	if err := filepath.WalkDir(distDir, func(p string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.Type()&os.ModeSymlink != 0 {
+			return fmt.Errorf("the pack's observatory front end contains a symlink (%s); the committed tree must be self-contained", p)
+		}
+		if !d.IsDir() {
+			fileCount++
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	digestPath := filepath.Join(viewCopy, filepath.FromSlash(packmirror.WebDistDigestRel))
+	if sym, err := isSymlink(digestPath); err != nil || sym {
+		return fmt.Errorf("missing or symlinked pack observatory front-end digest (%s): run `just pack-sync`", digestPath)
+	}
+	rawDigest, err := os.ReadFile(digestPath)
+	if err != nil {
+		return fmt.Errorf("missing pack observatory front-end digest (%s): run `just pack-sync`: %w", digestPath, err)
+	}
+	gotDigest := strings.TrimSpace(string(rawDigest))
+	if gotDigest != wantDigest {
+		return fmt.Errorf("the pack's shipped observatory front end is older than its sources (%s != %s): run `just pack-sync`", gotDigest, wantDigest)
+	}
+	short := wantDigest
+	if len(short) > 19 {
+		short = short[:19]
+	}
+	ok(stdout, fmt.Sprintf("the pack's observatory front end matches its sources (%s, %d files)", short, fileCount))
+	return nil
+}
+
 // Main is the CLI entrypoint for pack-sync-check. args should be os.Args[1:].
 func Main(args []string, stdout, stderr io.Writer) int {
 	root := findRepoRoot()
@@ -1183,6 +1247,7 @@ func Main(args []string, stdout, stderr io.Writer) int {
 		func() error { return CaseTreeMatchesSource(root, candidate, stdout) },
 		func() error { return CaseBytes(root, candidate, stdout) },
 		func() error { return CaseModes(root, candidate, stdout) },
+		func() error { return CaseWebDist(root, candidate, stdout) },
 		func() error { return CaseLoopAdapter(root, candidate, stdout) },
 		func() error { return CaseWorkflows(root, candidate, stdout) },
 		func() error { return CaseSupportRevision(root, candidate, stdout) },

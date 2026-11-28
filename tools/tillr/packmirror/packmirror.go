@@ -25,6 +25,9 @@ const (
 	WorkflowsMount                   = "workflows"
 	SupportRevisionRelPath           = "tools/tillr/buildstamp/support-revision"
 	SupportRevisionBuildstampRelPath = "tillr/buildstamp/support-revision"
+	WebSourceDir                     = "tools/tillr-view/web"
+	WebDistRel                       = "web/dist"
+	WebDistDigestRel                 = "web/dist-source-digest"
 )
 
 // BuildOutputRe matches Python bytecode caches that are build outputs rather than source.
@@ -268,6 +271,27 @@ func MirrorModule(root, module string, stdout io.Writer) error {
 		}
 	}
 
+	var preservedDistDir string
+	var wantWebDigest string
+	if module == "tillr-view" && hasWebSource(root) {
+		var derr error
+		wantWebDigest, derr = ComputeWebSourceDigest(root)
+		if derr != nil {
+			return derr
+		}
+		if existingDistMatches(dest, wantWebDigest) {
+			tmpDir, terr := os.MkdirTemp("", "tillr-packmirror-web-*")
+			if terr != nil {
+				return terr
+			}
+			defer os.RemoveAll(tmpDir)
+			if cerr := copyTree(filepath.Join(dest, filepath.FromSlash(WebDistRel)), filepath.Join(tmpDir, "dist")); cerr != nil {
+				return cerr
+			}
+			preservedDistDir = filepath.Join(tmpDir, "dist")
+		}
+	}
+
 	if fi, err := os.Lstat(dest); err == nil {
 		if fi.Mode()&os.ModeSymlink != 0 || !fi.IsDir() {
 			if err := os.Remove(dest); err != nil {
@@ -297,12 +321,206 @@ func MirrorModule(root, module string, stdout io.Writer) error {
 			return err
 		}
 	}
+	if module == "tillr-view" && wantWebDigest != "" {
+		if err := syncWebDist(root, dest, wantWebDigest, preservedDistDir, stdout); err != nil {
+			return err
+		}
+	}
 	if err := RewriteReadmes(dest, stdout); err != nil {
 		return err
 	}
 	if stdout != nil {
 		relDst, _ := filepath.Rel(root, dest)
 		fmt.Fprintf(stdout, "pack-sync: mirrored %s -> %s\n", sourceRel, filepath.ToSlash(relDst))
+	}
+	return nil
+}
+
+// IsGeneratedWebDistPath reports whether a path relative to tillr-view/ belongs to the
+// generated observatory front-end bundle or its source-digest stamp.
+func IsGeneratedWebDistPath(rel string) bool {
+	p := strings.TrimPrefix(filepath.ToSlash(rel), "./")
+	return p == WebDistDigestRel || p == WebDistRel || strings.HasPrefix(p, WebDistRel+"/")
+}
+
+// IsWebBuildInput reports whether a path relative to tools/tillr-view/web/ contributes to
+// the built observatory front end.
+func IsWebBuildInput(rel string) bool {
+	p := strings.TrimPrefix(filepath.ToSlash(rel), "./")
+	switch p {
+	case "index.html", "package.json", "package-lock.json", "tsconfig.json", "vite.config.ts":
+		return true
+	}
+	return strings.HasPrefix(p, "src/")
+}
+
+func hasWebSource(root string) bool {
+	fi, err := os.Stat(filepath.Join(root, filepath.FromSlash(WebSourceDir), "package.json"))
+	return err == nil && fi.Mode().IsRegular()
+}
+
+// ComputeWebSourceDigest computes the deterministic SHA-256 digest ("sha256:<64-hex>")
+// over sorted (relative_path, sha256(file_bytes)) entries of the observatory front-end
+// build inputs under tools/tillr-view/web/.
+func ComputeWebSourceDigest(root string) (string, error) {
+	cmd := exec.Command("git", "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", WebSourceDir)
+	cmd.Dir = root
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("list observatory web sources under %s: %w", root, err)
+	}
+	type entry struct {
+		rel    string
+		digest string
+	}
+	prefix := WebSourceDir + "/"
+	var entries []entry
+	for _, raw := range bytes.Split(out, []byte{0}) {
+		if len(raw) == 0 {
+			continue
+		}
+		repoRel := string(raw)
+		rel := strings.TrimPrefix(repoRel, prefix)
+		if !IsWebBuildInput(rel) {
+			continue
+		}
+		full := filepath.Join(root, filepath.FromSlash(repoRel))
+		info, err := os.Stat(full)
+		if err != nil || !info.Mode().IsRegular() {
+			continue
+		}
+		data, err := os.ReadFile(full)
+		if err != nil {
+			return "", fmt.Errorf("read observatory web source %s: %w", repoRel, err)
+		}
+		sum := sha256.Sum256(data)
+		entries = append(entries, entry{
+			rel:    rel,
+			digest: hex.EncodeToString(sum[:]),
+		})
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].rel < entries[j].rel
+	})
+	h := sha256.New()
+	for _, e := range entries {
+		fmt.Fprintf(h, "%s\x00%s\n", e.rel, e.digest)
+	}
+	return "sha256:" + hex.EncodeToString(h.Sum(nil)), nil
+}
+
+func existingDistMatches(dest, wantDigest string) bool {
+	indexPath := filepath.Join(dest, filepath.FromSlash(WebDistRel), "index.html")
+	if fi, err := os.Stat(indexPath); err != nil || !fi.Mode().IsRegular() {
+		return false
+	}
+	raw, err := os.ReadFile(filepath.Join(dest, filepath.FromSlash(WebDistDigestRel)))
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(string(raw)) == wantDigest
+}
+
+func copyTree(srcDir, dstDir string) error {
+	return filepath.WalkDir(srcDir, func(p string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		rel, err := filepath.Rel(srcDir, p)
+		if err != nil {
+			return err
+		}
+		dst := filepath.Join(dstDir, rel)
+		if d.IsDir() {
+			return os.MkdirAll(dst, 0o755)
+		}
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			return err
+		}
+		return copyFile(p, dst)
+	})
+}
+
+func ensureWebModules(webDir string, stdout io.Writer) error {
+	if _, err := exec.LookPath("node"); err != nil {
+		return fmt.Errorf("building observatory front end requires node on PATH: %w", err)
+	}
+	if _, err := exec.LookPath("npm"); err != nil {
+		return fmt.Errorf("building observatory front end requires npm on PATH: %w", err)
+	}
+	platOut, _ := exec.Command("node", "-p",
+		`process.platform + "-" + process.arch + (process.platform === "linux" ? (process.report.getReport().header.glibcVersionRuntime ? "-gnu" : "-musl") : "")`,
+	).Output()
+	platform := strings.TrimSpace(string(platOut))
+
+	nmDir := filepath.Join(webDir, "node_modules")
+	lockSrc := filepath.Join(webDir, "package-lock.json")
+	lockInstalled := filepath.Join(nmDir, ".package-lock.json")
+	stamp := filepath.Join(nmDir, ".tillr-platform")
+
+	needCI := false
+	if fi, err := os.Stat(nmDir); err != nil || !fi.IsDir() {
+		needCI = true
+	} else if srcInfo, err := os.Stat(lockSrc); err == nil {
+		if dstInfo, derr := os.Stat(lockInstalled); derr != nil || srcInfo.ModTime().After(dstInfo.ModTime()) {
+			needCI = true
+		}
+	}
+	if !needCI && platform != "" {
+		raw, err := os.ReadFile(stamp)
+		if err != nil || strings.TrimSpace(string(raw)) != platform {
+			needCI = true
+		}
+	}
+	if !needCI {
+		return nil
+	}
+	cmd := exec.Command("npm", "--prefix", webDir, "ci", "--no-audit", "--no-fund")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("npm ci in %s failed: %w\n%s", webDir, err, strings.TrimSpace(string(out)))
+	}
+	if platform != "" {
+		_ = os.WriteFile(stamp, []byte(platform+"\n"), 0o644)
+	}
+	if stdout != nil {
+		fmt.Fprintf(stdout, "pack-sync: installed observatory web dependencies in %s\n", webDir)
+	}
+	return nil
+}
+
+func syncWebDist(root, dest, wantDigest, preservedDistDir string, stdout io.Writer) error {
+	dstDist := filepath.Join(dest, filepath.FromSlash(WebDistRel))
+	dstDigest := filepath.Join(dest, filepath.FromSlash(WebDistDigestRel))
+
+	if preservedDistDir != "" {
+		if err := copyTree(preservedDistDir, dstDist); err != nil {
+			return err
+		}
+		return os.WriteFile(dstDigest, []byte(wantDigest+"\n"), 0o644)
+	}
+
+	webDir := filepath.Join(root, filepath.FromSlash(WebSourceDir))
+	if err := ensureWebModules(webDir, stdout); err != nil {
+		return err
+	}
+	cmd := exec.Command("npm", "--prefix", webDir, "run", "build")
+	cmd.Env = append(os.Environ(), "TILLR_VIEW_PAGE_BUILD="+wantDigest)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("npm run build in %s failed: %w\n%s", webDir, err, strings.TrimSpace(string(out)))
+	}
+	srcDist := filepath.Join(webDir, "dist")
+	if fi, err := os.Stat(filepath.Join(srcDist, "index.html")); err != nil || !fi.Mode().IsRegular() {
+		return fmt.Errorf("observatory front-end build produced no %s", filepath.Join(srcDist, "index.html"))
+	}
+	if err := copyTree(srcDist, dstDist); err != nil {
+		return err
+	}
+	if err := os.WriteFile(dstDigest, []byte(wantDigest+"\n"), 0o644); err != nil {
+		return err
+	}
+	if stdout != nil {
+		relDst, _ := filepath.Rel(root, dstDist)
+		fmt.Fprintf(stdout, "pack-sync: built observatory front end -> %s\n", filepath.ToSlash(relDst))
 	}
 	return nil
 }

@@ -201,6 +201,91 @@ func TestMainExitCodes(t *testing.T) {
 	}
 }
 
+func TestComputeWebSourceDigestAndPreservation(t *testing.T) {
+	repo := t.TempDir()
+	runGit := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	runGit("init")
+
+	webDir := filepath.Join(repo, "tools", "tillr-view", "web")
+	for rel, content := range map[string]string{
+		"package.json":       `{"name":"test"}` + "\n",
+		"package-lock.json":  `{}` + "\n",
+		"index.html":         "<!doctype html>\n",
+		"tsconfig.json":      "{}\n",
+		"vite.config.ts":     "export default {}\n",
+		"src/App.tsx":        "export const App = () => null;\n",
+		"tests/app.test.tsx": "test('a', () => {});\n",
+		"README.md":          "# Web\n",
+	} {
+		p := filepath.Join(webDir, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runGit("add", ".")
+
+	d1, err := ComputeWebSourceDigest(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Editing a test file or README must not change the build-input digest.
+	if err := os.WriteFile(filepath.Join(webDir, "tests", "app.test.tsx"), []byte("test('b', () => {});\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(webDir, "README.md"), []byte("# Updated\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	d2, err := ComputeWebSourceDigest(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d2 != d1 {
+		t.Fatalf("non-build input changed digest: %s != %s", d2, d1)
+	}
+
+	// Pre-populate a matching pack copy dist and verify MirrorModule preserves it without npm.
+	destWeb := filepath.Join(repo, filepath.FromSlash(MirrorRoot), "tillr-view", "web")
+	if err := os.MkdirAll(filepath.Join(destWeb, "dist"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(destWeb, "dist", "index.html"), []byte("<!doctype html>built"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(destWeb, "dist-source-digest"), []byte(d1+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := MirrorModule(repo, "tillr-view", &out); err != nil {
+		t.Fatalf("MirrorModule with matching web dist failed: %v", err)
+	}
+	gotHTML, err := os.ReadFile(filepath.Join(destWeb, "dist", "index.html"))
+	if err != nil || string(gotHTML) != "<!doctype html>built" {
+		t.Fatalf("preserved index.html = %q, err = %v", string(gotHTML), err)
+	}
+
+	// Editing a build input under src/ must change the digest.
+	if err := os.WriteFile(filepath.Join(webDir, "src", "App.tsx"), []byte("export const App = () => 'v2';\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	d3, err := ComputeWebSourceDigest(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d3 == d1 {
+		t.Fatalf("changing src/App.tsx did not change digest (%s)", d3)
+	}
+}
+
 func TestSupportRevisionDeterministicAndExclusions(t *testing.T) {
 	repo := t.TempDir()
 	runGit := func(args ...string) {

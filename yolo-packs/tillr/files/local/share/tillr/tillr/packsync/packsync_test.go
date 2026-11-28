@@ -312,3 +312,71 @@ func TestCaseSupportRevision(t *testing.T) {
 		t.Fatalf("CaseSupportRevision after sync failed: %v", err)
 	}
 }
+
+func TestCaseWebDist(t *testing.T) {
+	repo := t.TempDir()
+	runGit := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	runGit("init")
+
+	webDir := filepath.Join(repo, "tools", "tillr-view", "web")
+	for rel, content := range map[string]string{
+		"package.json":      `{"name":"test"}` + "\n",
+		"package-lock.json": `{}` + "\n",
+		"index.html":        "<!doctype html>\n",
+		"tsconfig.json":     "{}\n",
+		"vite.config.ts":    "export default {}\n",
+		"src/App.tsx":       "export const App = () => null;\n",
+	} {
+		p := filepath.Join(webDir, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runGit("add", ".")
+
+	var out bytes.Buffer
+	if err := CaseWebDist(repo, true, &out); err != nil {
+		t.Fatalf("candidate mode failed: %v", err)
+	}
+	if err := CaseWebDist(repo, false, &out); err == nil {
+		t.Fatal("expected error when shipped web/dist is missing")
+	}
+
+	digest, err := packmirror.ComputeWebSourceDigest(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	copyWeb := filepath.Join(copyDir(repo), "tillr-view", "web")
+	if err := os.MkdirAll(filepath.Join(copyWeb, "dist"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(copyWeb, "dist", "index.html"), []byte("<!doctype html>\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(copyWeb, "dist-source-digest"), []byte(digest+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out.Reset()
+	if err := CaseWebDist(repo, false, &out); err != nil {
+		t.Fatalf("CaseWebDist with matching dist failed: %v", err)
+	}
+
+	// Changing a web source makes the shipped front end older than its sources, so the gate fails.
+	if err := os.WriteFile(filepath.Join(webDir, "src", "App.tsx"), []byte("export const App = () => 'newer';\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := CaseWebDist(repo, false, &out); err == nil || !strings.Contains(err.Error(), "older than its sources") {
+		t.Fatalf("expected stale web/dist error, got %v", err)
+	}
+}

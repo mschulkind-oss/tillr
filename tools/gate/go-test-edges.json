@@ -1053,8 +1053,6 @@
         "TestLiveWaitingKeepsConflictTransitions",
         "TestObstacleHoldsShowRealReasonAndMoverInWaitingAndAgreeWithPlan",
         "TestQueueReadsOmitOrderRecordStatus",
-        "TestShippedLauncherBuildsObservatoryWhenToolchainPresent",
-        "TestShippedLauncherWithoutNodeWarnsAtBuildTimeAndKeepsNoFrontEndNote",
         "TestViewCheckRefusesAMissingFrontEnd",
         "TestViewRestartKeepsServingWhenTheExecFailsAfterTheCheck",
         "TestViewRestartRefusesABinaryThatFailsItsCheck",

@@ -97,45 +97,18 @@ func TestShippedLauncherTableFaceSkipsFrontEndBuildWithoutNodeModules(t *testing
 		}
 	}
 
-	// A subsequent serve call still attempts the front-end build, explains once
-	// what the failure means for serve, and still serves the API without UI.
+	// A subsequent serve call also never runs npm: it embeds the pre-built front end
+	// shipped with the pack and serves the observatory UI.
 	serveOut1 := filepath.Join(dir, "serve1.out")
 	base1, stop1 := startLauncherServe(t, launcher, env, store, planner, serveOut1)
-	if fe := waitForFrontEnd(t, base1, serveOut1); fe != "none" {
+	if fe := waitForFrontEnd(t, base1, serveOut1); fe != "embedded" {
 		raw, _ := os.ReadFile(serveOut1)
-		t.Fatalf("first serve front_end = %q, want %q\n%s", fe, "none", raw)
+		t.Fatalf("first serve front_end = %q, want %q\n%s", fe, "embedded", raw)
 	}
 	stop1()
 
-	raw1, _ := os.ReadFile(serveOut1)
-	wantNote := "tillr-view serve: observatory front-end build failed; serve will run without the observatory web UI"
-	if !strings.Contains(string(raw1), wantNote) {
-		t.Fatalf("first serve output missing %q:\n%s", wantNote, raw1)
-	}
-	npmCalls, err := os.ReadFile(npmLog)
-	if err != nil {
-		t.Fatalf("expected serve to attempt npm once: %v", err)
-	}
-	if lines := strings.Split(strings.TrimSpace(string(npmCalls)), "\n"); len(lines) != 1 {
-		t.Fatalf("first serve invoked npm %d times, want 1:\n%s", len(lines), npmCalls)
-	}
-
-	// A second serve call on the unchanged installed copy does not re-run the
-	// failed front-end build or repeat the failure note.
-	serveOut2 := filepath.Join(dir, "serve2.out")
-	base2, stop2 := startLauncherServe(t, launcher, env, store, planner, serveOut2)
-	if fe := waitForFrontEnd(t, base2, serveOut2); fe != "none" {
-		raw, _ := os.ReadFile(serveOut2)
-		t.Fatalf("second serve front_end = %q, want %q\n%s", fe, "none", raw)
-	}
-	stop2()
-
-	raw2, _ := os.ReadFile(serveOut2)
-	if strings.Contains(string(raw2), "observatory front-end build failed") {
-		t.Fatalf("second serve repeated front-end failure note:\n%s", raw2)
-	}
-	npmCalls2, _ := os.ReadFile(npmLog)
-	if lines := strings.Split(strings.TrimSpace(string(npmCalls2)), "\n"); len(lines) != 1 {
-		t.Fatalf("second serve re-invoked npm (total %d calls, want 1):\n%s", len(lines), npmCalls2)
+	if _, err := os.Stat(npmLog); !os.IsNotExist(err) {
+		raw, _ := os.ReadFile(npmLog)
+		t.Fatalf("serve invoked npm:\n%s", raw)
 	}
 }

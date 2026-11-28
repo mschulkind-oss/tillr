@@ -1,8 +1,6 @@
 package main_test
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net"
@@ -85,6 +83,11 @@ func seedNoObsLauncherCache(t *testing.T, home string) {
 			t.Fatal(werr)
 		}
 	}
+	if _, err := os.Stat(sharedNoObsBin + ".obs"); err == nil {
+		if werr := os.WriteFile(dst+".obs", nil, 0o644); werr != nil {
+			t.Fatal(werr)
+		}
+	}
 }
 
 func stubPlanner(t *testing.T, dir string) string {
@@ -156,99 +159,6 @@ func noNodeEnv(t *testing.T, dir, home string) []string {
 	return append(env, launcherBaseEnv(t, home)...)
 }
 
-// linkCachedNodeModules links webDir/node_modules to a shared content-addressed
-// cache keyed by package-lock.json and the launcher's node platform string.
-// That avoids unpacking thousands of files via `npm ci` on every test run while
-// leaving `npm run build` (`tsc --noEmit && vite build`) and `go build -tags observatory`
-// to run through the shipped launcher as usual. If the cache cannot be prepared,
-// it returns quietly and lets the launcher run `npm ci` itself.
-func linkCachedNodeModules(t *testing.T, webDir string) {
-	t.Helper()
-	lockPath := filepath.Join(webDir, "package-lock.json")
-	lockBytes, err := os.ReadFile(lockPath)
-	if err != nil {
-		return
-	}
-	platOut, err := exec.Command("node", "-p",
-		`process.platform + "-" + process.arch + (process.platform === "linux" ? (process.report.getReport().header.glibcVersionRuntime ? "-gnu" : "-musl") : "")`,
-	).Output()
-	if err != nil {
-		return
-	}
-	platform := strings.TrimSpace(string(platOut))
-	if platform == "" {
-		return
-	}
-	sum := sha256.Sum256(lockBytes)
-	key := hex.EncodeToString(sum[:8]) + "-" + platform
-
-	cacheRoot, err := os.UserCacheDir()
-	if err != nil || cacheRoot == "" {
-		cacheRoot = os.Getenv("YOLO_DURABLE_DIR")
-	}
-	if cacheRoot == "" {
-		return
-	}
-	cacheParent := filepath.Join(cacheRoot, "tillr", "test-web-node-modules")
-	if err := os.MkdirAll(cacheParent, 0o755); err != nil {
-		return
-	}
-	cachedEntry := filepath.Join(cacheParent, key)
-	cached := filepath.Join(cachedEntry, "node_modules")
-	stamp := filepath.Join(cached, ".tillr-platform")
-	cachedLock := filepath.Join(cached, ".package-lock.json")
-
-	ready := func() bool {
-		raw, err := os.ReadFile(stamp)
-		if err != nil || strings.TrimSpace(string(raw)) != platform {
-			return false
-		}
-		_, err = os.Stat(cachedLock)
-		return err == nil
-	}
-
-	if !ready() {
-		tmp, err := os.MkdirTemp(cacheParent, "nm-build-*")
-		if err != nil {
-			return
-		}
-		defer os.RemoveAll(tmp)
-		pkgBytes, err := os.ReadFile(filepath.Join(webDir, "package.json"))
-		if err != nil {
-			return
-		}
-		if err := os.WriteFile(filepath.Join(tmp, "package.json"), pkgBytes, 0o644); err != nil {
-			return
-		}
-		if err := os.WriteFile(filepath.Join(tmp, "package-lock.json"), lockBytes, 0o644); err != nil {
-			return
-		}
-		ci := exec.Command("npm", "--prefix", tmp, "ci", "--no-audit", "--no-fund")
-		if err := ci.Run(); err != nil {
-			return
-		}
-		tmpNM := filepath.Join(tmp, "node_modules")
-		if err := os.WriteFile(filepath.Join(tmpNM, ".tillr-platform"), []byte(platform+"\n"), 0o644); err != nil {
-			return
-		}
-		if err := os.Rename(tmp, cachedEntry); err != nil && !ready() {
-			return
-		}
-	}
-
-	info, err := os.Stat(cachedLock)
-	if err != nil {
-		return
-	}
-	// Ensure package-lock.json is not newer than node_modules/.package-lock.json
-	// (cp -r resets mtime to now), so the launcher skips `npm ci` and runs `npm run build`.
-	older := info.ModTime().Add(-time.Second)
-	if err := os.Chtimes(lockPath, older, older); err != nil {
-		return
-	}
-	_ = os.Symlink(cached, filepath.Join(webDir, "node_modules"))
-}
-
 func goEnvVal(t *testing.T, name string) string {
 	t.Helper()
 	out, err := exec.Command("go", "env", name).Output()
@@ -287,18 +197,60 @@ func waitForFrontEnd(t *testing.T, base, outPath string) string {
 	}
 }
 
-func TestShippedLauncherBuildsObservatoryWhenToolchainPresent(t *testing.T) {
-	if _, err := exec.LookPath("node"); err != nil {
-		t.Skip("node not on PATH")
+func makeReadOnlyTree(t *testing.T, root string) {
+	t.Helper()
+	var dirs []string
+	err := filepath.WalkDir(root, func(p string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() {
+			dirs = append(dirs, p)
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		return os.Chmod(p, info.Mode().Perm()&^0o222)
+	})
+	if err != nil {
+		t.Fatalf("chmod files read-only under %s: %v", root, err)
 	}
-	if _, err := exec.LookPath("npm"); err != nil {
-		t.Skip("npm not on PATH")
+	for i := len(dirs) - 1; i >= 0; i-- {
+		info, err := os.Stat(dirs[i])
+		if err != nil {
+			t.Fatalf("stat dir %s: %v", dirs[i], err)
+		}
+		if err := os.Chmod(dirs[i], info.Mode().Perm()&^0o222); err != nil {
+			t.Fatalf("chmod dir read-only %s: %v", dirs[i], err)
+		}
 	}
+	t.Cleanup(func() {
+		for _, d := range dirs {
+			_ = os.Chmod(d, 0o755)
+		}
+		_ = filepath.WalkDir(root, func(p string, d os.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return nil
+			}
+			if d.IsDir() {
+				_ = os.Chmod(p, 0o755)
+			} else {
+				_ = os.Chmod(p, 0o644)
+			}
+			return nil
+		})
+	})
+}
+
+func TestShippedLauncherServesObservatoryWithoutNodeOnReadOnlyInstall(t *testing.T) {
 	t.Parallel()
 
 	dir, home, launcher, planner := renderPackTree(t)
-	linkCachedNodeModules(t, filepath.Join(home, ".local", "share", "tillr", "tillr-view", "web"))
-	env := append(os.Environ(), launcherBaseEnv(t, home)...)
+	installRoot := filepath.Join(home, ".local", "share", "tillr")
+	makeReadOnlyTree(t, installRoot)
+	env := noNodeEnv(t, dir, home)
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -344,62 +296,28 @@ func TestShippedLauncherBuildsObservatoryWhenToolchainPresent(t *testing.T) {
 	}
 }
 
-func TestShippedLauncherWithoutNodeWarnsAtBuildTimeAndKeepsNoFrontEndNote(t *testing.T) {
+func TestShippedLauncherServeRefusesWhenFrontEndMissing(t *testing.T) {
 	t.Parallel()
 	dir, home, launcher, planner := renderPackTree(t)
-	seedNoObsLauncherCache(t, home)
+	distDir := filepath.Join(home, ".local", "share", "tillr", "tillr-view", "web", "dist")
+	if err := os.RemoveAll(distDir); err != nil {
+		t.Fatal(err)
+	}
 	env := noNodeEnv(t, dir, home)
 
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	addr := listener.Addr().String()
-	listener.Close()
-
 	store := fixture(t)
-	outPath := filepath.Join(dir, "serve.out")
-	out, err := os.Create(outPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer out.Close()
-
-	cmd := exec.Command(launcher, "serve", "--store", store, "--addr", addr, "--perf-log", "off", "--tillr-drain", planner)
+	cmd := exec.Command(launcher, "serve", "--store", store, "--addr", "127.0.0.1:0", "--perf-log", "off", "--tillr-drain", planner)
 	cmd.Env = env
-	cmd.Stdout, cmd.Stderr = out, out
-	if err := cmd.Start(); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { cmd.Process.Kill(); cmd.Wait() })
-
-	base := "http://" + addr
-	frontEnd := waitForFrontEnd(t, base, outPath)
-	if frontEnd != "none" {
-		raw, _ := os.ReadFile(outPath)
-		t.Fatalf("snapshot.build.front_end = %q, want %q\n%s", frontEnd, "none", raw)
-	}
-
-	rawOut, _ := os.ReadFile(outPath)
-	if !strings.Contains(string(rawOut), "node and npm not found; building without observatory web UI") {
-		t.Fatalf("build output did not explain how to get the observatory UI:\n%s", rawOut)
-	}
-
-	resp, err := http.Get(base + "/")
-	if err != nil {
-		t.Fatalf("GET /: %v", err)
-	}
-	defer resp.Body.Close()
-	page, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusNotFound {
-		t.Fatalf("GET / status = %d, want 404:\n%s", resp.StatusCode, page)
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected serve to refuse when front end is missing, but it exited 0:\n%s", out)
 	}
 	for _, want := range []string{
-		"carries no built front end",
-		"the pack-delivered `tillr-view` on PATH never carries a front end",
+		"observatory front end is missing",
+		filepath.Join("web", "dist", "index.html"),
 	} {
-		if !strings.Contains(string(page), want) {
-			t.Errorf("GET / 404 body missing %q:\n%s", want, page)
+		if !strings.Contains(string(out), want) {
+			t.Errorf("refusal output missing %q:\n%s", want, out)
 		}
 	}
 }

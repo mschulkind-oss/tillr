@@ -1,9 +1,10 @@
 #!/bin/sh
-# tillr-land -- the launcher the tillr pack puts on PATH at ~/.local/bin/tillr-view.
+# tillr-land -- the launcher the tillr pack puts on PATH at ~/.local/bin/tillr-land.
 #
 # The toolset itself is a `files` contribution of this pack, delivered whole to
-# ~/.local/share/tillr: Go source, never a compiled artifact. This launcher builds one
-# binary from that tree, once per source digest, into
+# ~/.local/share/tillr: Go source, never a compiled artifact (plus the pre-built
+# observatory front end under tillr-view/web/dist). This launcher builds one binary
+# from that tree, once per source digest, into
 # ${XDG_CACHE_HOME:-$HOME/.cache}/tillr/bin/<name>-<digest>, and execs that copy; a warm
 # cache runs no Go command at all.
 #
@@ -37,8 +38,8 @@ fi
 current=$cache/current-$bin-$(printf %s "$root" | sha256 | cut -c1-16)
 
 # Only the observatory server (`tillr-view serve`, and `TILLR_LAUNCHER_RESOLVE` when
-# `serve` restarts in place) needs the web front end. Read faces that print tables or
-# records skip the front-end build entirely.
+# `serve` restarts in place) needs the embedded web front end. Read faces that print
+# tables or records, or `serve` with `--help`, `--web-dist` or `--ui-at`, skip it.
 need_web=
 if [ "$mod" = tillr-view ]; then
 	if [ "${1:-}" = serve ] || [ -n "${TILLR_LAUNCHER_RESOLVE:-}" ]; then
@@ -47,9 +48,20 @@ if [ "$mod" = tillr-view ]; then
 	if [ "${1:-}" = serve ]; then
 		for arg in "$@"; do
 			case $arg in
-			-h | --help) need_web= ;;
+			-h | --help | --web-dist | --web-dist=* | --ui-at | --ui-at=*) need_web= ;;
 			esac
 		done
+	fi
+fi
+
+# The pack ships the pre-built observatory front end so `serve` needs no Node, no npm,
+# no network, and no writable install tree. If it is missing, refuse instead of silently
+# serving without a UI.
+if [ -n "$need_web" ]; then
+	web_built=$root/$mod/web/dist/index.html
+	if [ ! -f "$web_built" ]; then
+		echo "$bin serve: observatory front end is missing ($web_built); reinstall the tillr pack or pass --web-dist <dir>" >&2
+		exit 1
 	fi
 fi
 
@@ -66,7 +78,8 @@ newer() {
 		[ -e "$entry" ] || continue
 		if [ -d "$entry" ]; then
 			case ${entry##*/} in
-			node_modules | dist) continue ;;
+			node_modules) continue ;;
+			dist) [ -n "$need_web" ] || continue ;;
 			esac
 			newer "$entry" && return 0
 		else
@@ -76,14 +89,7 @@ newer() {
 			esac
 			if [ -n "$need_web" ]; then
 				case $entry in
-				"$root/tillr-view/web/tests/"*) ;;
-				"$root/tillr-view/web/"*)
-					case ${entry##*/} in
-					*.ts | *.tsx | *.js | *.jsx | *.css | *.html | package.json | package-lock.json)
-						[ "$entry" -nt "$current" ] && return 0
-						;;
-					esac
-					;;
+				"$root/tillr-view/web/dist/"*) [ "$entry" -nt "$current" ] && return 0 ;;
 				esac
 			fi
 		fi
@@ -106,7 +112,7 @@ resolve() {
 }
 
 if [ -x "$current" ] && ! newer "$root"; then
-	if [ -z "$need_web" ] || [ -e "$current.obs" ] || { [ -e "$current.obs-tried" ] && [ ! -f "$root/tillr-view/web/dist/index.html" ]; }; then
+	if [ -z "$need_web" ] || [ -e "$current.obs" ]; then
 		resolve "$current"
 		exec "$current" "$@"
 	fi
@@ -121,13 +127,21 @@ sources() {
 			[ -e "$entry" ] || continue
 			if [ -d "$entry" ]; then
 				case ${entry##*/} in
-				node_modules | dist) continue ;;
+				node_modules) continue ;;
+				dist) [ -n "$need_web" ] || continue ;;
 				esac
 				sources "$entry"
 			else
 				case ${entry##*/} in
 				*_test.go) ;;
 				*.go | *.toml | *.json | go.mod | go.sum | support-revision) echo "$entry" ;;
+				*)
+					if [ -n "$need_web" ]; then
+						case $entry in
+						./tillr-view/web/dist/*) echo "$entry" ;;
+						esac
+					fi
+					;;
 				esac
 			fi
 		done
@@ -143,89 +157,13 @@ digest=$(
 )
 
 built=$cache/$bin-$digest
-
-web_newer() {
-	for entry in "$1"/*; do
-		[ -e "$entry" ] || continue
-		if [ -d "$entry" ]; then
-			case ${entry##*/} in
-			node_modules | dist | tests) continue ;;
-			esac
-			web_newer "$entry" && return 0
-		else
-			case ${entry##*/} in
-			*.ts | *.tsx | *.js | *.jsx | *.css | *.html | package.json | package-lock.json)
-				[ "$entry" -nt "$web_built" ] && return 0
-				;;
-			esac
-		fi
-	done
-	return 1
-}
-
 web_tags=
-web_rebuilt=
-web_failed=
 obs_marker=$built.obs
 if [ -n "$need_web" ]; then
-	web=$root/$mod/web
-	web_built=$web/dist/index.html
-	if [ -d "$web" ]; then
-		if [ ! -f "$web_built" ] || web_newer "$web"; then
-			if command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
-				web_platform=$(node -p 'process.platform + "-" + process.arch + (process.platform === "linux" ? (process.report.getReport().header.glibcVersionRuntime ? "-gnu" : "-musl") : "")' 2>/dev/null || true)
-				stamp=$web/node_modules/.tillr-platform
-				need_ci=
-				if [ ! -d "$web/node_modules" ]; then
-					need_ci=1
-				elif [ "$web/package-lock.json" -nt "$web/node_modules/.package-lock.json" ]; then
-					need_ci=1
-				elif [ -n "$web_platform" ]; then
-					if [ ! -f "$stamp" ] || [ "$(cat "$stamp")" != "$web_platform" ]; then
-						need_ci=1
-					fi
-				fi
-				if [ -n "$need_ci" ]; then
-					if npm --prefix "$web" ci --no-audit --no-fund >&2; then
-						[ -n "$web_platform" ] && printf '%s\n' "$web_platform" >"$stamp"
-					else
-						need_ci=failed
-					fi
-				fi
-				if [ "$need_ci" != failed ] && npm --prefix "$web" run build >&2 && [ -f "$web_built" ]; then
-					web_rebuilt=1
-				else
-					web_failed=1
-				fi
-			elif [ ! -f "$web_built" ]; then
-				echo "$bin: node and npm not found; building without observatory web UI (install node and npm to build it, or pass --web-dist)" >&2
-			fi
-		fi
-		if [ -f "$web_built" ]; then
-			web_tags="-tags observatory"
-			if [ -n "$web_failed" ]; then
-				if [ "${1:-}" = serve ]; then
-					echo "$bin serve: observatory front-end rebuild failed; serve will use the previously built observatory web UI" >&2
-				else
-					echo "$bin: observatory front-end rebuild failed; building with the previously built observatory web UI" >&2
-				fi
-			fi
-		elif [ -n "$web_failed" ]; then
-			if [ "${1:-}" = serve ]; then
-				echo "$bin serve: observatory front-end build failed; serve will run without the observatory web UI (pass --web-dist to serve external assets)" >&2
-			else
-				echo "$bin: observatory front-end build failed; building without the observatory web UI (pass --web-dist to serve external assets)" >&2
-			fi
-		fi
-	fi
-	if [ -n "$web_tags" ] && [ ! -e "$obs_marker" ]; then
-		web_rebuilt=1
-	elif [ -z "$web_tags" ] && [ -e "$obs_marker" ]; then
-		web_rebuilt=1
-	fi
+	web_tags="-tags observatory"
 fi
 
-if [ ! -x "$built" ] || [ -n "$web_rebuilt" ]; then
+if [ ! -x "$built" ] || { [ -n "$web_tags" ] && [ ! -e "$obs_marker" ]; }; then
 	command -v go >/dev/null 2>&1 || {
 		echo "$bin: no cached binary for $digest and no go toolchain to build it" >&2
 		exit 1
@@ -239,7 +177,7 @@ if [ ! -x "$built" ] || [ -n "$web_rebuilt" ]; then
 	) || exit 1
 	# Two callers racing a cold cache build the same source: whoever moves second finds
 	# the winner's binary already in place and keeps it.
-	if [ -x "$built" ] && [ -z "$web_rebuilt" ]; then
+	if [ -x "$built" ] && { [ -z "$web_tags" ] || [ -e "$obs_marker" ]; }; then
 		rm -f "$tmp"
 	else
 		mv -f "$tmp" "$built"
@@ -260,12 +198,8 @@ ln -sfn "$built" "$current"
 if [ "$mod" = tillr-view ]; then
 	if [ -e "$obs_marker" ]; then
 		: >"$current.obs"
-		rm -f "$current.obs-tried"
-	elif [ -n "$need_web" ]; then
-		rm -f "$current.obs"
-		: >"$current.obs-tried"
 	else
-		rm -f "$current.obs" "$current.obs-tried"
+		rm -f "$current.obs"
 	fi
 fi
 resolve "$built"
