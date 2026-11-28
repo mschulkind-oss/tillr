@@ -95,6 +95,8 @@ CREATE TABLE IF NOT EXISTS items (
   finding TEXT NOT NULL DEFAULT ''
 );
 
+CREATE INDEX IF NOT EXISTS items_state ON items (state, item_id);
+
 -- Sync warnings are document observations, not item state. Sync replaces this
 -- set atomically and keeps first_seen for a document until its warning clears.
 CREATE TABLE IF NOT EXISTS design_without_item (
@@ -119,6 +121,8 @@ CREATE TABLE IF NOT EXISTS item_edges (
   kind       TEXT NOT NULL DEFAULT 'blocked_by',
   PRIMARY KEY (item_id, blocked_by)
 );
+
+CREATE INDEX IF NOT EXISTS item_edges_blocked_by ON item_edges (blocked_by);
 
 CREATE TABLE IF NOT EXISTS item_requests (
   idempotency_key TEXT PRIMARY KEY,

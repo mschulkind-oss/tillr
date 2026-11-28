@@ -72,6 +72,26 @@ func ReadConflicts(r *store.Reader) (map[string]Conflict, error) {
 	return result, rows.Err()
 }
 
+// ReadConflictsForItems returns the last recorded conflict transition for each named item.
+func ReadConflictsForItems(r *store.Reader, itemIDs []string) (map[string]Conflict, error) {
+	result := map[string]Conflict{}
+	if len(itemIDs) == 0 {
+		return result, nil
+	}
+	events, err := r.EventsForObjects(0, itemIDs, ConflictKind)
+	if err != nil {
+		return nil, err
+	}
+	for _, e := range events {
+		var c Conflict
+		if err := json.Unmarshal(e.Payload, &c); err != nil {
+			return nil, err
+		}
+		result[c.ItemID] = c
+	}
+	return result, nil
+}
+
 func (c Conflict) wait() WaitingOn {
 	reason, _, _ := strings.Cut(c.Text, "\n")
 	return WaitingOn{Waiter: c.WaitingOn, Reason: strings.TrimSpace(reason), Source: "conflict:" + c.ConflictID}

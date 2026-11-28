@@ -72,3 +72,49 @@ func ReadOwnerCriteriaForItem(r *store.Reader, itemID string) (*OwnerCriterion, 
 	}
 	return &c, nil
 }
+
+// ReadOwnerCriteriaForItems reads the first unfinished owner-only criterion for each named item.
+func ReadOwnerCriteriaForItems(r *store.Reader, itemIDs []string) (map[string]*OwnerCriterion, error) {
+	out := map[string]*OwnerCriterion{}
+	if len(itemIDs) == 0 {
+		return out, nil
+	}
+	var hasClass bool
+	if err := r.QueryRow(`SELECT EXISTS(SELECT 1 FROM pragma_table_info('item_criteria') WHERE name='claim_class')`).Scan(&hasClass); err != nil || !hasClass {
+		return out, err
+	}
+	const chunk = 400
+	for start := 0; start < len(itemIDs); start += chunk {
+		end := start + chunk
+		if end > len(itemIDs) {
+			end = len(itemIDs)
+		}
+		batch := itemIDs[start:end]
+		args := make([]any, len(batch))
+		for i, id := range batch {
+			args[i] = id
+		}
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(batch)), ",")
+		rows, err := r.Query(`SELECT item_id, criterion_id, text FROM item_criteria WHERE item_id IN (`+placeholders+`) AND claim_class='owner-only' AND state <> 'done' ORDER BY item_id, criterion_id`, args...)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var id string
+			c := new(OwnerCriterion)
+			if err := rows.Scan(&id, &c.CriterionID, &c.Text); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			if out[id] == nil {
+				out[id] = c
+			}
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		rows.Close()
+	}
+	return out, nil
+}

@@ -313,3 +313,100 @@ func TestReadIgnoresPartialLandingsSchemaWithoutItemID(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestLandedItemsForAndReadForItems(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "obstacles-scoped.sqlite3")
+	st, err := store.InitFixture(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	if _, err := db.Exec(`CREATE TABLE landings(item_id TEXT, result TEXT)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO landings(item_id, result) VALUES ('item-landed', 'landed'), ('item-refused', 'refused')`); err != nil {
+		t.Fatal(err)
+	}
+
+	insertHold := func(ts int64, itemID, runID, question string) {
+		t.Helper()
+		raw, err := json.Marshal(NewHold(itemID, runID, "owner", map[string]string{"QUESTION": question}, nil, "aaa", []string{"a/"}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(`INSERT INTO events (ts, kind, object_type, object_id, payload) VALUES (?, ?, 'item', ?, ?)`, ts, HeldKind, itemID, string(raw)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	insertHold(1000, "item-a", "run-a", "Question A?")
+	insertHold(1001, "item-b", "run-b", "Question B?")
+	insertHold(1002, "item-c", "run-c", "Question C?")
+	if _, err := db.Exec(`INSERT INTO events (ts, kind, object_type, object_id, payload) VALUES (1003, ?, 'item', 'item-c', '{"item_id":"item-c"}')`, ClearedKind); err != nil {
+		t.Fatal(err)
+	}
+
+	rs, err := store.OpenRead(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rs.Close()
+	if err := rs.ReadTx(ctx, func(r *store.Reader) error {
+		qBefore := store.SQLQueriesIssued()
+		emptyLanded, err := LandedItemsFor(r, nil)
+		if err != nil {
+			return err
+		}
+		if len(emptyLanded) != 0 {
+			t.Fatalf("empty LandedItemsFor = %+v, want empty", emptyLanded)
+		}
+		if got := store.SQLQueriesIssued() - qBefore; got != 0 {
+			t.Fatalf("empty LandedItemsFor issued %d queries, want 0", got)
+		}
+
+		landed, err := LandedItemsFor(r, []string{"item-landed", "item-refused"})
+		if err != nil {
+			return err
+		}
+		if len(landed) != 1 || !landed["item-landed"] {
+			t.Fatalf("LandedItemsFor = %+v, want only item-landed", landed)
+		}
+
+		qBefore = store.SQLQueriesIssued()
+		emptyActive, emptyRel, err := ReadForItems(r, nil, nil)
+		if err != nil {
+			return err
+		}
+		if len(emptyActive) != 0 || len(emptyRel) != 0 {
+			t.Fatalf("empty ReadForItems = %+v, %+v", emptyActive, emptyRel)
+		}
+		if got := store.SQLQueriesIssued() - qBefore; got != 0 {
+			t.Fatalf("empty ReadForItems issued %d queries, want 0", got)
+		}
+
+		active, _, err := ReadForItems(r, []string{"item-a", "item-c"}, []string{"run-a"})
+		if err != nil {
+			return err
+		}
+		if len(active) != 1 || active["item-a"].ItemID != "item-a" {
+			t.Fatalf("ReadForItems active = %+v, want only item-a", active)
+		}
+		if _, ok := active["item-b"]; ok {
+			t.Fatalf("unexpected out-of-scope item-b: %+v", active)
+		}
+		if _, ok := active["item-c"]; ok {
+			t.Fatalf("cleared item-c still active: %+v", active)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}

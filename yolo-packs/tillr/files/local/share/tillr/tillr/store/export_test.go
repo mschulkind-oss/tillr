@@ -10,9 +10,6 @@ func SetAfterCheckpoint(f func()) func() {
 	return func() { afterCheckpoint = previous }
 }
 
-// EventRowsRead answers how many event rows this process has read from SQLite.
-func EventRowsRead() int64 { return eventRowsRead.Load() }
-
 // WritersWaiting answers how many of this process's writers wait for their turn on the
 // store at path (writequeue.go).
 func WritersWaiting(path string) int64 { return writeQueueFor(path).waiting.Load() }

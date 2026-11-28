@@ -94,6 +94,8 @@ CREATE TABLE IF NOT EXISTS candidates (
   event_seq    INTEGER NOT NULL DEFAULT 0
 );
 
+CREATE INDEX IF NOT EXISTS candidates_item ON candidates (item_id);
+
 -- Legacy: the retired landing attempt ledger, which serveread.go and the drain still
 -- read. Read-only; nothing writes it.
 CREATE TABLE IF NOT EXISTS landing_attempts (
@@ -109,6 +111,8 @@ CREATE TABLE IF NOT EXISTS landing_attempts (
   carried      INTEGER NOT NULL DEFAULT 0,
   event_seq    INTEGER NOT NULL DEFAULT 0
 );
+
+CREATE INDEX IF NOT EXISTS landing_attempts_candidate ON landing_attempts (candidate_id);
 `
 
 // init registers land's contract from land's own package: its DDL and its event kind.

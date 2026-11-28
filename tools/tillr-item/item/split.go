@@ -1213,6 +1213,64 @@ func ReadAllSplits(r *store.Reader) (map[string]SplitStatement, error) {
 	return out, nil
 }
 
+// ReadSplitsForItems reads filed split statements for the named parent items, falling back
+// to ReadAllSplits only if one of the named items is a split part whose parent was not
+// among itemIDs.
+func ReadSplitsForItems(r *store.Reader, itemIDs []string) (map[string]SplitStatement, error) {
+	out := map[string]SplitStatement{}
+	if len(itemIDs) == 0 {
+		return out, nil
+	}
+	const chunk = 400
+	for start := 0; start < len(itemIDs); start += chunk {
+		end := start + chunk
+		if end > len(itemIDs) {
+			end = len(itemIDs)
+		}
+		batch := itemIDs[start:end]
+		args := make([]any, len(batch))
+		for i, id := range batch {
+			args[i] = id
+		}
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(batch)), ",")
+		rows, err := r.Query(`SELECT parent_id, statement FROM item_splits WHERE parent_id IN (`+placeholders+`)`, args...)
+		if isMissingSplitsTable(err) {
+			return out, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var parentID string
+			var raw []byte
+			if err := rows.Scan(&parentID, &raw); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			var st SplitStatement
+			if err := json.Unmarshal(raw, &st); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			out[parentID] = st
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		rows.Close()
+	}
+	partIdx := SplitPartIndex(out)
+	for _, id := range itemIDs {
+		if strings.HasPrefix(id, "item-part-") {
+			if _, ok := partIdx[id]; !ok {
+				return ReadAllSplits(r)
+			}
+		}
+	}
+	return out, nil
+}
+
 // SplitPartIndex maps each part's item ID to its parent membership.
 func SplitPartIndex(splits map[string]SplitStatement) map[string]SplitPartMembership {
 	out := make(map[string]SplitPartMembership)

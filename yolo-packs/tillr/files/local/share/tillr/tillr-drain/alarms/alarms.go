@@ -146,49 +146,112 @@ func (s *Stored) At(r *store.Reader, now time.Time, policy *Policy, current ...H
 // The saved closes bit is the measured availability fact, not an inference from
 // a nonzero exit code. A later ending or successful probe supersedes it in event order.
 func infrastructure(r *store.Reader) ([]Alarm, error) {
-	rows, err := r.Query(`WITH endings AS (
-  SELECT e.seq, e.ts, e.payload, o.closes,
-   json_extract(e.payload,'$.backend') AS backend,
-   row_number() OVER (PARTITION BY json_extract(e.payload,'$.backend') ORDER BY e.seq DESC) AS newest
+	rows, err := r.Query(`SELECT o.terminal_seq, e.ts, e.payload
   FROM backend_outcomes o JOIN events e ON e.seq=o.terminal_seq
-  WHERE o.class <> 'interrupted'
- ) SELECT backend, ts, json_extract(payload,'$.run_id'), json_extract(payload,'$.state'),
-   coalesce('exit ' || json_extract(payload,'$.exit_code'), 'no exit code'),
-   coalesce((SELECT json_extract(o.payload,'$.cause') FROM events o
-     WHERE o.kind='drain.backend-outcome' AND o.object_id=endings.backend
-     AND json_extract(o.payload,'$.terminal_seq')=endings.seq), ''),
-   coalesce(json_extract(payload,'$.stderr_tail'), '')
- FROM endings WHERE newest=1 AND closes=1 AND backend NOT IN ('', 'command')
- AND NOT EXISTS (SELECT 1 FROM events p WHERE p.kind='drain.backend-probe' AND p.object_id=backend
-  AND p.seq>endings.seq AND json_extract(p.payload,'$.success')=1)
- AND NOT EXISTS (SELECT 1 FROM events p WHERE p.kind='call.offered'
-  AND json_extract(p.payload,'$.terminal_seq')=endings.seq)`)
+  WHERE o.closes=1
+  ORDER BY o.terminal_seq DESC`)
 	if missingTable(err, "backend_outcomes") {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var out []Alarm
+	type closedCandidate struct {
+		seq        int64
+		ts         int64
+		backend    string
+		runID      string
+		state      string
+		exit       string
+		stderrTail string
+	}
+	newestByBackend := map[string]closedCandidate{}
+	var order []string
 	for rows.Next() {
-		var name, runID, state, exit, cause, stderrTail string
-		var since int64
-		if err := rows.Scan(&name, &since, &runID, &state, &exit, &cause, &stderrTail); err != nil {
+		var seq, ts int64
+		var raw []byte
+		if err := rows.Scan(&seq, &ts, &raw); err != nil {
+			rows.Close()
 			return nil, err
 		}
+		var rec struct {
+			Backend    string `json:"backend"`
+			RunID      string `json:"run_id"`
+			State      string `json:"state"`
+			ExitCode   *int   `json:"exit_code"`
+			StderrTail string `json:"stderr_tail"`
+		}
+		if err := json.Unmarshal(raw, &rec); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		if rec.Backend == "" || rec.Backend == "command" {
+			continue
+		}
+		if _, seen := newestByBackend[rec.Backend]; seen {
+			continue
+		}
+		exit := "no exit code"
+		if rec.ExitCode != nil {
+			exit = fmt.Sprintf("exit %d", *rec.ExitCode)
+		}
+		newestByBackend[rec.Backend] = closedCandidate{
+			seq:        seq,
+			ts:         ts,
+			backend:    rec.Backend,
+			runID:      rec.RunID,
+			state:      rec.State,
+			exit:       exit,
+			stderrTail: rec.StderrTail,
+		}
+		order = append(order, rec.Backend)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+	if len(order) == 0 {
+		return nil, nil
+	}
+	sort.Strings(order)
+	var out []Alarm
+	for _, name := range order {
+		c := newestByBackend[name]
+		var superseded bool
+		if err := r.QueryRow(`SELECT EXISTS (
+  SELECT 1 FROM events e JOIN backend_outcomes o ON o.terminal_seq=e.seq
+  WHERE e.kind='run.finish' AND e.seq>? AND o.class<>'interrupted'
+    AND json_extract(e.payload,'$.backend')=?
+) OR EXISTS (
+  SELECT 1 FROM events p
+  WHERE p.kind='drain.backend-probe' AND p.object_id=? AND p.seq>?
+    AND json_extract(p.payload,'$.success')=1
+) OR EXISTS (
+  SELECT 1 FROM events p
+  WHERE p.kind='call.offered' AND json_extract(p.payload,'$.terminal_seq')=?
+)`, c.seq, name, name, c.seq, c.seq).Scan(&superseded); err != nil {
+			return nil, err
+		}
+		if superseded {
+			continue
+		}
+		var cause string
+		_ = r.QueryRow(`SELECT COALESCE(json_extract(payload,'$.cause'), '') FROM events
+  WHERE kind='drain.backend-outcome' AND object_id=? AND json_extract(payload,'$.terminal_seq')=?
+  ORDER BY seq DESC LIMIT 1`, name, c.seq).Scan(&cause)
 		if cause == "" {
-			cause = fmt.Sprintf("infrastructure failure: run %s (%s, %s)", runID, state, exit)
-			if tail := strings.TrimSpace(stderrTail); tail != "" {
+			cause = fmt.Sprintf("infrastructure failure: run %s (%s, %s)", c.runID, c.state, c.exit)
+			if tail := strings.TrimSpace(c.stderrTail); tail != "" {
 				cause += ": " + strings.ReplaceAll(tail, "\n", " | ")
 			}
 		}
-		out = append(out, Alarm{Kind: Closed, Backend: name, Since: easternTime(time.UnixMilli(since)),
+		out = append(out, Alarm{Kind: Closed, Backend: name, Since: easternTime(time.UnixMilli(c.ts)),
 			Cause:   cause,
 			Clears:  "a successful probe or a later non-infrastructure ending",
 			Command: fmt.Sprintf("fix the reported cause, then tillr drain probe-backend --store <store> --backend %s -- <smoke-check>", name)})
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 func quotaAlarms(r *store.Reader, now time.Time, policy *Policy) ([]Alarm, error) {
@@ -322,13 +385,14 @@ func readHolds(r *store.Reader) ([]Hold, error) {
 	// Old stores may lack dispatch metadata. Those stores cannot attribute a
 	// backend hold, but can still surface measured backend facts.
 	rows, err := r.Query(`WITH latest AS (
-  SELECT *,row_number() OVER (PARTITION BY item_id ORDER BY dispatched_at DESC,rowid DESC) AS newest FROM dispatches
+  SELECT *,row_number() OVER (PARTITION BY item_id ORDER BY dispatched_at DESC,rowid DESC) AS newest
+  FROM dispatches
+  WHERE item_id IN (SELECT item_id FROM items WHERE state IN ('in-queue','in-progress','blocked'))
  ) SELECT d.item_id,coalesce(d.lane_id,''),d.reason,coalesce(d.deferred_by,''),
  coalesce(d.seat='review' AND EXISTS (SELECT 1 FROM events c WHERE c.object_id=d.run_id
   AND c.kind IN ('drain.candidate','drain.prepared-candidate')),0)
- FROM latest d JOIN items i ON i.item_id=d.item_id
- WHERE newest=1 AND action='hold' AND reason IN ('backend-closed','backend-window')
- AND i.state IN ('in-queue','in-progress','blocked')`)
+ FROM latest d
+ WHERE newest=1 AND action='hold' AND reason IN ('backend-closed','backend-window')`)
 	var out []Hold
 	if err == nil {
 		for rows.Next() {

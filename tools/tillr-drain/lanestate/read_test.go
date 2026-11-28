@@ -204,3 +204,72 @@ func TestHeldByLaneMatchesUnfinishedUnreleasedReservations(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestReadForItems(t *testing.T) {
+	ctx := context.Background()
+	s, err := store.InitFixture(ctx, filepath.Join(t.TempDir(), "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	appendRunEvent := func(runID, kind string, payload any) {
+		t.Helper()
+		raw, err := json.Marshal(payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.WriteTx(ctx, func(tx *store.Tx) error {
+			_, err := tx.Exec(`INSERT INTO events (ts,kind,object_type,object_id,payload) VALUES (1,?,'run',?,?)`, kind, runID, string(raw))
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	appendRunEvent("run-a", "drain.started", map[string]any{"decision": map[string]any{"item_id": "item-a"}})
+	appendRunEvent("run-a", "drain.red-cap", map[string]any{"candidate": map[string]any{}})
+	appendRunEvent("run-b", "drain.started", map[string]any{"decision": map[string]any{"item_id": "item-b"}})
+	appendRunEvent("run-b", "drain.red-cap", map[string]any{"candidate": map[string]any{}})
+
+	ro, err := store.OpenRead(ctx, s.Path())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ro.Close()
+
+	if err := ro.ReadTx(ctx, func(r *store.Reader) error {
+		qBefore := store.SQLQueriesIssued()
+		empty, err := ReadForItems(r, nil)
+		if err != nil {
+			return err
+		}
+		if len(empty) != 0 {
+			t.Fatalf("empty ReadForItems = %+v, want empty", empty)
+		}
+		if got := store.SQLQueriesIssued() - qBefore; got != 0 {
+			t.Fatalf("empty ReadForItems issued %d queries, want 0", got)
+		}
+
+		all, err := Read(r)
+		if err != nil {
+			return err
+		}
+		scoped, err := ReadForItems(r, []string{"item-a"})
+		if err != nil {
+			return err
+		}
+		if len(scoped) != 1 {
+			t.Fatalf("ReadForItems returned %d items, want 1: %+v", len(scoped), scoped)
+		}
+		if scoped["item-a"] != all["item-a"] {
+			t.Fatalf("scoped[item-a] = %+v, want %+v", scoped["item-a"], all["item-a"])
+		}
+		if _, ok := scoped["item-b"]; ok {
+			t.Fatalf("unexpected out-of-scope item-b: %+v", scoped)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}

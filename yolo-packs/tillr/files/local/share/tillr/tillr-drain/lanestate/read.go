@@ -4,11 +4,14 @@
 package lanestate
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"strings"
 
 	"github.com/mschulkind-oss/tillr-drain/faults"
+	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -122,6 +125,24 @@ func replay(r *store.Reader) (map[string]*pending, error) {
 	if err != nil {
 		return nil, err
 	}
+	return replayEvents(events)
+}
+
+func replayForItems(r *store.Reader, itemIDs, runIDs []string) (map[string]*pending, error) {
+	if len(itemIDs) == 0 && len(runIDs) == 0 {
+		return map[string]*pending{}, nil
+	}
+	objectIDs := make([]string, 0, len(itemIDs)+len(runIDs))
+	objectIDs = append(objectIDs, itemIDs...)
+	objectIDs = append(objectIDs, runIDs...)
+	events, err := r.EventsForObjects(0, objectIDs, replayKinds...)
+	if err != nil {
+		return nil, err
+	}
+	return replayEvents(events)
+}
+
+func replayEvents(events []event.Event) (map[string]*pending, error) {
 	works, byRun := map[string]*pending{}, map[string]*pending{}
 	judged, segments := map[string]bool{}, map[string]bool{}
 	for _, e := range events {
@@ -298,7 +319,107 @@ func Read(r *store.Reader) (map[string]State, error) {
 	return out, nil
 }
 
-// HeldByLane answers each lane still held by unfinished, unreleased work from
+// ReadForItems replays reservation effects scoped to itemIDs via events_by_object.
+func ReadForItems(r *store.Reader, itemIDs []string) (map[string]State, error) {
+	if len(itemIDs) == 0 {
+		return map[string]State{}, nil
+	}
+	runIDs, err := runIDsForItems(r, itemIDs)
+	if err != nil {
+		return nil, err
+	}
+	works, err := replayForItems(r, itemIDs, runIDs)
+	if err != nil {
+		return nil, err
+	}
+	holds, err := faults.ReadForItems(r, itemIDs, runIDs)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]State{}
+	for id, w := range works {
+		if w.done {
+			continue
+		}
+		s := State{Status: "kept", Reason: w.LaneKeepReason}
+		if w.LaneReleased {
+			s.Status, s.Reason = "released", ""
+		} else {
+			s.Reason = keptReason(w, holds[id].Reason)
+		}
+		out[id] = s
+	}
+	return out, nil
+}
+
+func runIDsForItems(r *store.Reader, itemIDs []string) ([]string, error) {
+	seen := map[string]bool{}
+	var out []string
+	add := func(id string) {
+		if id != "" && !seen[id] {
+			seen[id] = true
+			out = append(out, id)
+		}
+	}
+	const chunk = 400
+	for start := 0; start < len(itemIDs); start += chunk {
+		end := start + chunk
+		if end > len(itemIDs) {
+			end = len(itemIDs)
+		}
+		batch := itemIDs[start:end]
+		args := make([]any, len(batch))
+		for i, id := range batch {
+			args[i] = id
+		}
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(batch)), ",")
+		rows, err := r.Query(`SELECT run_id FROM runs WHERE item_id IN (`+placeholders+`)`, args...)
+		if err != nil && !strings.Contains(err.Error(), "no such table:") {
+			return nil, err
+		}
+		if err == nil {
+			for rows.Next() {
+				var id string
+				if err := rows.Scan(&id); err != nil {
+					rows.Close()
+					return nil, err
+				}
+				add(id)
+			}
+			if err := rows.Err(); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			rows.Close()
+		}
+		for _, kind := range []string{"drain.started", "drain.node-advanced", "drain.graph-changed"} {
+			sArgs := make([]any, 0, 1+len(batch))
+			sArgs = append(sArgs, kind)
+			sArgs = append(sArgs, args...)
+			sRows, err := r.Query(`SELECT object_id FROM events WHERE kind=? AND json_valid(payload) AND json_extract(payload,'$.decision.item_id') IN (`+placeholders+`)`, sArgs...)
+			if err != nil {
+				return nil, err
+			}
+			for sRows.Next() {
+				var id sql.NullString
+				if err := sRows.Scan(&id); err != nil {
+					sRows.Close()
+					return nil, err
+				}
+				if id.Valid {
+					add(id.String)
+				}
+			}
+			if err := sRows.Err(); err != nil {
+				sRows.Close()
+				return nil, err
+			}
+			sRows.Close()
+		}
+	}
+	return out, nil
+}
+
 // the same pending reservation history readPassPlans consumes.
 func HeldByLane(r *store.Reader) (map[string]HeldLane, error) {
 	works, err := replay(r)

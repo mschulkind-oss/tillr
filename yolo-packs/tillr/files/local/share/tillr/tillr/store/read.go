@@ -289,6 +289,62 @@ func (r *Reader) EventsOfKind(since int64, kinds ...string) ([]event.Event, erro
 	return r.EventsSelected(since, EventSelection{Kinds: kinds})
 }
 
+// EventsForObjects answers the events with seq greater than since whose object_id is in
+// objectIDs (and whose kind is in kinds when kinds is non-empty), in seq order. It queries
+// via the events_by_object index so its cost scales with the named objects rather than the
+// store's whole history.
+func (r *Reader) EventsForObjects(since int64, objectIDs []string, kinds ...string) ([]event.Event, error) {
+	seen := make(map[string]struct{}, len(objectIDs))
+	unique := make([]string, 0, len(objectIDs))
+	for _, id := range objectIDs {
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		unique = append(unique, id)
+	}
+	if len(unique) == 0 {
+		return nil, nil
+	}
+	eventLogReads.Add(1)
+
+	const batchSize = 400
+	var out []event.Event
+	for start := 0; start < len(unique); start += batchSize {
+		end := start + batchSize
+		if end > len(unique) {
+			end = len(unique)
+		}
+		batch := unique[start:end]
+		args := make([]any, 0, 1+len(batch)+len(kinds))
+		query := `SELECT seq, ts, kind, object_type, object_id, revision, payload
+		   FROM events WHERE object_id IN (` + strings.TrimSuffix(strings.Repeat("?,", len(batch)), ",") + `) AND seq > ?`
+		for _, id := range batch {
+			args = append(args, id)
+		}
+		args = append(args, since)
+		if len(kinds) > 0 {
+			query += ` AND kind IN (` + strings.TrimSuffix(strings.Repeat("?,", len(kinds)), ",") + `)`
+			for _, k := range kinds {
+				args = append(args, k)
+			}
+		}
+		query += ` ORDER BY seq`
+		part, err := queryEvents(r.ctx, r.q, query, args...)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, part...)
+	}
+	if len(unique) > batchSize {
+		sort.Slice(out, func(i, j int) bool { return out[i].Seq < out[j].Seq })
+	}
+	return out, nil
+}
+
 // SchemaVersion answers the highest migration the store has applied.
 func (r *Reader) SchemaVersion() (int, error) { return schemaVersion(r.ctx, r.q) }
 

@@ -121,6 +121,9 @@ CREATE TABLE IF NOT EXISTS runs (
   event_seq     INTEGER NOT NULL DEFAULT 0,
   extension_set TEXT
 );
+
+CREATE INDEX IF NOT EXISTS runs_started_at ON runs (started_at);
+CREATE INDEX IF NOT EXISTS runs_lane_started ON runs (lane_id, started_at);
 `
 
 // init registers run's contract from run's own package: its DDL, its event kinds and

@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS graph_revisions (
  after_nodes INTEGER NOT NULL,
  recorded_at INTEGER NOT NULL
 );
+CREATE INDEX IF NOT EXISTS graph_revisions_item ON graph_revisions (item_id, revision_id);
 CREATE TRIGGER IF NOT EXISTS graph_revisions_no_update BEFORE UPDATE ON graph_revisions
 BEGIN SELECT RAISE(ABORT,'graph_revisions is append-only'); END;
 CREATE TRIGGER IF NOT EXISTS graph_revisions_no_delete BEFORE DELETE ON graph_revisions
@@ -63,6 +64,7 @@ CREATE TABLE IF NOT EXISTS retries (
   reason            TEXT NOT NULL,
   requested_at      INTEGER NOT NULL
 );
+CREATE INDEX IF NOT EXISTS retries_item ON retries (item_id);
 `
 
 // GateSpanDDL is the table of recorded gate check spans.
@@ -128,7 +130,8 @@ const BackendOutcomesDDL = `CREATE TABLE IF NOT EXISTS backend_outcomes (
  terminal_seq INTEGER PRIMARY KEY REFERENCES events(seq),
  class TEXT NOT NULL,
  closes INTEGER NOT NULL DEFAULT 0
-);`
+);
+CREATE INDEX IF NOT EXISTS backend_outcomes_closes ON backend_outcomes (closes, terminal_seq);`
 
 // RuntimeConfigSchema is the table of operator-configured runtime settings.
 const RuntimeConfigSchema = `CREATE TABLE IF NOT EXISTS drain_runtime_config (
@@ -225,6 +228,24 @@ func init() {
 	}
 
 	if err := store.RegisterDDL("drain-runtime-config", RuntimeConfigSchema); err != nil {
+		panic(err)
+	}
+
+	if err := store.RegisterDDL("run-indexes", `
+CREATE INDEX IF NOT EXISTS runs_item_started ON runs (item_id, started_at);
+`); err != nil {
+		panic(err)
+	}
+
+	if err := store.RegisterDDL("drain-event-indexes", `
+CREATE INDEX IF NOT EXISTS events_call_offered_run ON events(json_extract(payload, '$.run_id')) WHERE kind = 'call.offered' AND json_valid(payload);
+CREATE INDEX IF NOT EXISTS events_drain_started_item ON events(json_extract(payload, '$.decision.item_id')) WHERE kind = 'drain.started' AND json_valid(payload);
+CREATE INDEX IF NOT EXISTS events_node_advanced_item ON events(json_extract(payload, '$.decision.item_id')) WHERE kind = 'drain.node-advanced' AND json_valid(payload);
+CREATE INDEX IF NOT EXISTS events_graph_changed_item ON events(json_extract(payload, '$.decision.item_id')) WHERE kind = 'drain.graph-changed' AND json_valid(payload);
+CREATE INDEX IF NOT EXISTS events_drain_refusal_item ON events(json_extract(payload, '$.item_id')) WHERE kind = 'drain.refusal' AND json_valid(payload);
+CREATE INDEX IF NOT EXISTS events_run_allocate_run ON events(json_extract(payload, '$.run_id')) WHERE kind = 'run.allocate' AND json_valid(payload);
+CREATE INDEX IF NOT EXISTS events_boundary_dirty ON events(seq) WHERE kind = 'boundary.check' AND json_valid(payload) AND json_extract(payload, '$.clean') = 0;
+`); err != nil {
 		panic(err)
 	}
 }

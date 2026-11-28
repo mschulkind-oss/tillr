@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS dispatches (
   pass_id       TEXT,
   backend       TEXT
 );
+CREATE INDEX IF NOT EXISTS dispatches_item ON dispatches (item_id);
 CREATE TABLE IF NOT EXISTS seat_dispatches (
   ordinal INTEGER PRIMARY KEY AUTOINCREMENT,
   run_id TEXT NOT NULL UNIQUE,

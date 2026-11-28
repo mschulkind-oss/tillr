@@ -2,10 +2,13 @@
 package faults
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/store"
@@ -43,6 +46,72 @@ func Read(r *store.Reader) (map[string]Hold, error) {
 		return nil, err
 	}
 	return Resolve(byItem), nil
+}
+
+// ReadForItems reads faults and boundary convictions scoped to itemIDs and runIDs via events_by_object
+// and historical dirty boundary.check events via events_boundary_dirty.
+func ReadForItems(r *store.Reader, itemIDs, runIDs []string) (map[string]Hold, error) {
+	if len(itemIDs) == 0 && len(runIDs) == 0 {
+		return map[string]Hold{}, nil
+	}
+	objectIDs := make([]string, 0, len(itemIDs)+len(runIDs))
+	objectIDs = append(objectIDs, itemIDs...)
+	objectIDs = append(objectIDs, runIDs...)
+	events, err := r.EventsForObjects(0, objectIDs, HeldKind, ClearedKind)
+	if err != nil {
+		return nil, err
+	}
+	dirtyRows, err := r.Query(`SELECT seq, ts, kind, COALESCE(object_type, ''), object_id, revision, payload FROM events WHERE kind = 'boundary.check' AND json_valid(payload) AND json_extract(payload, '$.clean') = 0 ORDER BY seq`)
+	if err != nil {
+		return nil, err
+	}
+	defer dirtyRows.Close()
+	for dirtyRows.Next() {
+		var e event.Event
+		var ts int64
+		var objID sql.NullString
+		var rev sql.NullInt64
+		var payload string
+		if err := dirtyRows.Scan(&e.Seq, &ts, &e.Kind, &e.ObjectType, &objID, &rev, &payload); err != nil {
+			return nil, err
+		}
+		e.At = time.UnixMilli(ts).UTC()
+		if objID.Valid {
+			v := objID.String
+			e.ObjectID = &v
+		}
+		if rev.Valid {
+			v := rev.Int64
+			e.Revision = &v
+		}
+		e.Payload = json.RawMessage(payload)
+		events = append(events, e)
+	}
+	if err := dirtyRows.Err(); err != nil {
+		return nil, err
+	}
+	if len(events) == 0 {
+		return map[string]Hold{}, nil
+	}
+	sort.Slice(events, func(i, j int) bool { return events[i].Seq < events[j].Seq })
+	byItem := map[string]map[string]Hold{}
+	if err := Fold(r, 0, byItem, events); err != nil {
+		return nil, err
+	}
+	resolved := Resolve(byItem)
+	if len(itemIDs) == 0 {
+		return resolved, nil
+	}
+	wanted := make(map[string]bool, len(itemIDs))
+	for _, id := range itemIDs {
+		wanted[id] = true
+	}
+	for id := range resolved {
+		if !wanted[id] {
+			delete(resolved, id)
+		}
+	}
+	return resolved, nil
 }
 
 // Fold extends per-item, per-reason state with ordered events. With no supplied

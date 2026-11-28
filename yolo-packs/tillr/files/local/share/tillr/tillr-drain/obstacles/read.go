@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 
+	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -252,6 +253,49 @@ func LandedItems(r *store.Reader) (map[string]bool, error) {
 	return out, rows.Err()
 }
 
+// LandedItemsFor answers which of itemIDs have a landed row in landings.
+func LandedItemsFor(r *store.Reader, itemIDs []string) (map[string]bool, error) {
+	out := map[string]bool{}
+	if len(itemIDs) == 0 {
+		return out, nil
+	}
+	ok, err := landingsHasItemResultColumns(r)
+	if err != nil || !ok {
+		return out, err
+	}
+	const chunk = 400
+	for start := 0; start < len(itemIDs); start += chunk {
+		end := start + chunk
+		if end > len(itemIDs) {
+			end = len(itemIDs)
+		}
+		batch := itemIDs[start:end]
+		args := make([]any, len(batch))
+		for i, id := range batch {
+			args[i] = id
+		}
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(batch)), ",")
+		rows, err := r.Query(`SELECT DISTINCT item_id FROM landings WHERE result = 'landed' AND item_id IN (`+placeholders+`)`, args...)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			out[id] = true
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		rows.Close()
+	}
+	return out, nil
+}
+
 // OneLine collapses whitespace runs (including newlines) into single spaces.
 func OneLine(s string) string {
 	return strings.Join(strings.Fields(s), " ")
@@ -286,6 +330,37 @@ func Read(r *store.Reader) (map[string]Hold, map[string]string, error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	return foldObstacleEvents(r, events)
+}
+
+// ReadForItems folds obstacle-hold events scoped to itemIDs and runIDs via events_by_object.
+func ReadForItems(r *store.Reader, itemIDs, runIDs []string) (map[string]Hold, map[string]string, error) {
+	if len(itemIDs) == 0 && len(runIDs) == 0 {
+		return map[string]Hold{}, map[string]string{}, nil
+	}
+	objectIDs := make([]string, 0, len(itemIDs)+len(runIDs))
+	objectIDs = append(objectIDs, itemIDs...)
+	objectIDs = append(objectIDs, runIDs...)
+	events, err := r.EventsForObjects(0, objectIDs,
+		HeldKind,
+		ClearedKind,
+		"item.state",
+		"item.reopen",
+		"item.close",
+		"item.retire",
+		"item.resolve",
+		"item.lifecycle",
+		"item.update",
+		"run.allocate",
+		"drain.started",
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+	return foldObstacleEvents(r, events)
+}
+
+func foldObstacleEvents(r *store.Reader, events []event.Event) (map[string]Hold, map[string]string, error) {
 	active := map[string]Hold{}
 	released := map[string]string{}
 	for _, e := range events {
@@ -408,7 +483,11 @@ func Read(r *store.Reader) (map[string]Hold, map[string]string, error) {
 		}
 	}
 	if len(active) > 0 {
-		landed, err := LandedItems(r)
+		activeIDs := make([]string, 0, len(active))
+		for id := range active {
+			activeIDs = append(activeIDs, id)
+		}
+		landed, err := LandedItemsFor(r, activeIDs)
 		if err != nil {
 			return nil, nil, err
 		}

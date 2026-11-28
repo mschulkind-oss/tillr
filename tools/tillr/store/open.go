@@ -132,7 +132,7 @@ func open(ctx context.Context, path string, create, migrate bool, options ...Ope
 	if _, err := os.Stat(path); err == nil {
 		attached = s.attachSidecar(ctx, trace)
 	}
-	db, err := sql.Open("sqlite", dsn(path, false, cfg.busyTimeout))
+	db, err := openSQLite(dsn(path, false, cfg.busyTimeout))
 	if err != nil {
 		s.release(nil)
 		return nil, fmt.Errorf("store: opening %s: %w", path, err)
@@ -302,7 +302,7 @@ var failSidecar func() error
 func (s *Store) attachSidecar(ctx context.Context, trace *sqliteTraceSpan) bool {
 	trace.record("sidecar.begin", nil)
 	if s.sidecar == nil {
-		db, err := sql.Open("sqlite", dsn(s.path, true, s.busyTimeout))
+		db, err := openSQLite(dsn(s.path, true, s.busyTimeout))
 		if err != nil {
 			trace.record("sidecar.end", err)
 			return false
@@ -352,7 +352,7 @@ func openRead(ctx context.Context, path, params string, options ...OpenOption) (
 		uriPath := url.URL{Path: path}
 		dbPath = uriPath.EscapedPath()
 	}
-	db, err := sql.Open("sqlite", dsn(dbPath, true, cfg.busyTimeout)+params)
+	db, err := openSQLite(dsn(dbPath, true, cfg.busyTimeout) + params)
 	if err != nil {
 		return nil, fmt.Errorf("store: opening %s read-only: %w", path, err)
 	}
@@ -364,7 +364,7 @@ func openRead(ctx context.Context, path, params string, options ...OpenOption) (
 	}
 	s := &Store{db: db, path: path, busyTimeout: cfg.busyTimeout, events: eventCacheFor(path)}
 	if cfg.readConns > 1 {
-		stamp, err := sql.Open("sqlite", dsn(dbPath, true, cfg.busyTimeout)+params)
+		stamp, err := openSQLite(dsn(dbPath, true, cfg.busyTimeout) + params)
 		if err == nil {
 			stamp.SetMaxOpenConns(1)
 			stamp.SetMaxIdleConns(1)
