@@ -436,3 +436,125 @@ func assertCandidateRecordedNotDone(t *testing.T, storePath, itemID string) {
 		t.Fatal(err)
 	}
 }
+
+func TestExecuteGateCandidateReleasesLaneOnSettleFailed(t *testing.T) {
+	f, l := passFixture(t, "item-a")
+	l.cfg.Lanes = []string{"lane-1"}
+	l.cfg.Steps = &faultSteps{fault: "internal"}
+	d := stageFinishedCandidateOnLane(t, f, l, "item-a", "lane-1")
+	lane := l.lanePath("lane-1")
+	base := runGit(t, f.root, "rev-parse", TrunkRef)
+	head := runGit(t, lane, "rev-parse", "HEAD")
+	cand := Candidate{
+		ItemID:   "item-a",
+		LaneID:   "lane-1",
+		RunID:    d.RunRequest.RunID,
+		Worktree: lane,
+		BaseSHA:  base,
+		HeadSHA:  head,
+	}
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		return appendEffect(tx, candidateReadyKind, cand.RunID, cand, l.cfg.Now())
+	})
+
+	ctx := context.Background()
+	claim, err := l.claimCandidateGate(ctx, "item-a", cand.RunID, l.cfg.Now().UTC())
+	if err != nil || !claim.claimed {
+		t.Fatalf("claimCandidateGate: claimed=%v err=%v", claim.claimed, err)
+	}
+	timing := &PassTiming{TickID: claim.tickID, AtMS: l.cfg.Now().UTC().UnixMilli()}
+	comp := l.executeGateCandidate(ctx, claim.decision, claim.work, timing)
+	if comp.outcome.stop != "" || comp.outcome.err != nil {
+		t.Fatalf("executeGateCandidate outcome = %+v, want empty stop and nil err", comp.outcome)
+	}
+
+	fixtureRead(t, f, func(r *store.Reader) error {
+		var state string
+		var runID *string
+		if err := r.QueryRow(`SELECT state, run_id FROM lanes WHERE lane_id = ?`, "lane-1").Scan(&state, &runID); err != nil {
+			return err
+		}
+		if state != run.LaneStateIdle || runID != nil {
+			t.Fatalf("lane-1 = (%q, %v), want idle with nil run_id", state, runID)
+		}
+		works, err := readPending(r)
+		if err != nil {
+			return err
+		}
+		w := works["item-a"]
+		if w == nil || !w.LaneReleased || w.Examiner != nil || w.Examining {
+			t.Fatalf("pending work after settle-failed = %+v, want LaneReleased=true and no examiner", w)
+		}
+		faults, err := ReadItemFaults(r)
+		if err != nil {
+			return err
+		}
+		if faults["item-a"].Reason != ReasonSettleFailed {
+			t.Fatalf("item-a fault = %+v, want %q", faults["item-a"], ReasonSettleFailed)
+		}
+		return nil
+	})
+}
+
+func TestFinishCandidateOutcomeKeepsRetiredHeadAndReleasesExamination(t *testing.T) {
+	f, l, c := heldCandidateFixture(t)
+	writeForkFile(t, filepath.Join(c.Worktree, "candidate.txt"), "candidate\nretired block\n")
+	runGit(t, c.Worktree, "commit", "-qam", "chore: retire landed document block")
+	retired := runGit(t, c.Worktree, "rev-parse", "HEAD")
+	c.WorkerHeadSHA = c.HeadSHA
+	c.RetirementTreeSHA = runGit(t, c.Worktree, "rev-parse", "HEAD^{tree}")
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		return appendEffect(tx, candidateRetirementKind, c.RunID, c, l.cfg.Now())
+	})
+
+	ctx := context.Background()
+	claim, err := l.claimCandidateGate(ctx, c.ItemID, c.RunID, l.cfg.Now().UTC())
+	if err != nil || !claim.claimed {
+		t.Fatalf("claimCandidateGate: claimed=%v err=%v", claim.claimed, err)
+	}
+	if err := l.holdItemFault(ctx, c, StopGateHarnessError, "the gate step could not start"); err != nil {
+		t.Fatal(err)
+	}
+	retiredCand := c
+	retiredCand.HeadSHA = retired
+	out := l.finishCandidateOutcome(ctx, claim.work, &retiredCand, "", false, errItemFaultHeld)
+	if out.stop != "" || out.err != nil {
+		t.Fatalf("finishCandidateOutcome = %+v, want empty stop and nil err", out)
+	}
+	if err := l.releaseExamination(ctx, claim.decision); err != nil {
+		t.Fatalf("releaseExamination: %v", err)
+	}
+
+	if got := laneStateOf(t, f.storePath, c.ItemID); got.Status != "kept" || got.Reason != retiredHeadKeep {
+		t.Fatalf("lane state = %+v, want kept as %q", got, retiredHeadKeep)
+	}
+	if got := runGit(t, c.Worktree, "rev-parse", "HEAD"); got != retired {
+		t.Fatalf("lane HEAD = %s, want retired commit %s", got, retired)
+	}
+	fixtureRead(t, f, func(r *store.Reader) error {
+		var state string
+		var runID *string
+		if err := r.QueryRow(`SELECT state, run_id FROM lanes WHERE lane_id = ?`, c.LaneID).Scan(&state, &runID); err != nil {
+			return err
+		}
+		if state != run.LaneStateIdle || runID != nil {
+			t.Fatalf("lane %s = (%q, %v), want idle with nil run_id", c.LaneID, state, runID)
+		}
+		works, err := readPending(r)
+		if err != nil {
+			return err
+		}
+		w := works[c.ItemID]
+		if w == nil || w.Examiner != nil || w.Examining {
+			t.Fatalf("pending work = %+v, want no active examination reservation", w)
+		}
+		return nil
+	})
+	before := eventCount(t, f.storePath)
+	if err := l.releaseIdleHeldCandidates(ctx); err != nil {
+		t.Fatalf("releaseIdleHeldCandidates: %v", err)
+	}
+	if got := eventCount(t, f.storePath); got != before {
+		t.Fatalf("releaseIdleHeldCandidates appended %d event(s) after finishCandidateOutcome already recorded keep", got-before)
+	}
+}

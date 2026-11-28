@@ -101,7 +101,11 @@ func (l *Loop) finishCandidateOutcome(ctx context.Context, work *pendingWork, c 
 		err = nil
 		if !keep {
 			cp := *work
-			cp.Candidate = c
+			relCand := *c
+			if relCand.WorkerHeadSHA != "" && relCand.RetirementTreeSHA != "" {
+				relCand.HeadSHA = relCand.WorkerHeadSHA
+			}
+			cp.Candidate = &relCand
 			reason := ""
 			if repairHeld {
 				reason = ReasonRepairStagingFailed
@@ -734,6 +738,19 @@ func (l *Loop) executeGateCandidate(ctx context.Context, d Decision, work *pendi
 		completion.outcome.err = l.holdExaminationFailure(ctx, d, work, completion.step, completion.outcome.err)
 		endHold()
 		completion.outcome = retainedOutcome(completion.outcome)
+		if completion.outcome.stop == "" && completion.outcome.err == nil && !l.isRestartReplaced() && work != nil && work.Candidate != nil {
+			cp := *work
+			relCand := *work.Candidate
+			if relCand.WorkerHeadSHA != "" && relCand.RetirementTreeSHA != "" {
+				relCand.HeadSHA = relCand.WorkerHeadSHA
+			}
+			cp.Candidate = &relCand
+			endRelease := timeHandoffPhase(ctx, "release_candidate")
+			if _, relErr := l.releaseCandidate(ctx, &cp, "", true); relErr != nil {
+				completion.outcome.err = relErr
+			}
+			endRelease()
+		}
 	}
 	if !l.nonLanding && !l.isRestartReplaced() && d.LaneID != "" {
 		checkout := l.laneForkTarget(d.LaneID)
