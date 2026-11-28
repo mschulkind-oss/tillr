@@ -59,6 +59,9 @@ func TestForkLandingWritesPinInTrunkCommit(t *testing.T) {
 	if trunkAfter == trunkBefore {
 		t.Fatal("trunk did not advance with the pin update commit")
 	}
+	if got.Payload.ForkPinCommit != trunkAfter {
+		t.Fatalf("landing fork_pin_commit = %q, want %s", got.Payload.ForkPinCommit, trunkAfter)
+	}
 	if parent := git(t, f.dir, "rev-parse", trunkAfter+"^"); parent != trunkBefore {
 		t.Fatalf("trunk commit parent = %s, want %s", parent, trunkBefore)
 	}
@@ -107,12 +110,16 @@ func TestForkRebaseLandingUpdatesPinTipAndMergeBase(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("rebase land exited %d: %s", code, out)
 	}
+	got := decodeLanding(t, out)
 	if moved := git(t, r.dir, "rev-parse", patchBranch); moved != r.headSHA {
 		t.Fatalf("patch/pi = %s, want %s", moved, r.headSHA)
 	}
 	trunkAfter := r.trunk(t)
 	if trunkAfter == trunkBefore {
 		t.Fatal("trunk did not advance with the rebased pin commit")
+	}
+	if got.Payload.ForkPinCommit != trunkAfter {
+		t.Fatalf("rebase landing fork_pin_commit = %q, want %s", got.Payload.ForkPinCommit, trunkAfter)
 	}
 	wantPin := fmt.Sprintf("%s\n%s\n%s\n", r.headSHA, remote, r.release)
 	if committed := git(t, r.dir, "show", trunkAfter+":"+pinRel) + "\n"; committed != wantPin {

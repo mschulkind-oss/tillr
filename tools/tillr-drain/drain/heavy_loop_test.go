@@ -2,6 +2,7 @@ package drain
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/mschulkind-oss/tillr-drain/alarms"
+	"github.com/mschulkind-oss/tillr-land/land"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -332,4 +334,154 @@ FROM events WHERE kind = ? ORDER BY seq ASC`, alarms.UnrecordedTrunkCommitKind)
 		t.Fatalf("unrecorded-trunk-commit events after hand2 proof = %v, want [%s %s]", got, hand, hand2)
 	}
 	assertNoAlarms()
+}
+
+func TestForkPinCommitNotRecordedAsHandMade(t *testing.T) {
+	ctx := context.Background()
+	root, base := heavyRepo(t)
+	remote := filepath.Join(scratchUnderDurable(t), "remote.git")
+	heavyGit(t, root, "init", "--bare", remote)
+	heavyGit(t, root, "remote", "add", "origin", remote)
+
+	// Seed a tracked fork pin and pack manifest on trunk pointing at base.
+	const forkRemote = "git@github.com:example/tillr"
+	pinRel := "yolo-packs/fork-pins/pi"
+	if err := os.MkdirAll(filepath.Join(root, filepath.Dir(pinRel)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, pinRel), []byte(fmt.Sprintf("%s\n%s\n%s\n", base, forkRemote, base)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	packRel := "yolo-packs/pi-fork/pack.json"
+	if err := os.MkdirAll(filepath.Join(root, filepath.Dir(packRel)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, packRel), []byte(`{"contributes":[{"source":"git+https://github.com/example/pi?ref=main","patch_branch":"git+ssh://git@github.com/example/tillr?ref=patch/pi"}]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte(".forks/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	heavyGit(t, root, "add", ".gitignore", pinRel, packRel)
+	heavyGit(t, root, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "track pi fork pin")
+	trunkBefore := heavyGit(t, root, "rev-parse", "HEAD")
+	heavyGit(t, root, "update-ref", GreenRef, trunkBefore)
+	heavyGit(t, root, "push", "-u", "origin", TrunkRef)
+
+	// Set up patch/pi at base and .forks/pi with upstream/main at base.
+	heavyGit(t, root, "branch", "patch/pi", base)
+	cache := filepath.Join(root, ".forks/pi")
+	heavyGit(t, root, "clone", "--quiet", "--no-checkout", root, cache)
+	heavyGit(t, cache, "checkout", "-B", "main", base)
+	heavyGit(t, cache, "update-ref", "refs/remotes/upstream/main", base)
+
+	// Create a fork candidate commit descending from base.
+	heavyGit(t, root, "checkout", "-q", "-b", "fork-candidate", base)
+	if err := os.WriteFile(filepath.Join(root, "fork-change.txt"), []byte("new fork work\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	heavyGit(t, root, "add", "fork-change.txt")
+	heavyGit(t, root, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "feat: fork change")
+	newTip := heavyGit(t, root, "rev-parse", "HEAD")
+	treeSHA := heavyGit(t, root, "rev-parse", "HEAD^{tree}")
+	heavyGit(t, root, "checkout", "-q", TrunkRef)
+
+	s, err := store.InitFixture(ctx, filepath.Join(scratchUnderDurable(t), "store.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	trunk, err := land.OpenTrunk(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	landed, err := land.Land(ctx, s, trunk, land.LandingRequest{
+		ItemID:        "item-fork-pin",
+		RunID:         "run-fork-pin",
+		BaseRef:       "patch/pi",
+		BaseSHA:       base,
+		HeadSHA:       newTip,
+		ObservedTrunk: trunkBefore,
+		At:            time.Now().UTC(),
+		Verdict: land.Verdict{
+			VerdictID: "verdict-fork-pin",
+			BaseSHA:   base,
+			TreeSHA:   treeSHA,
+			Result:    land.VerdictPass,
+			Checks:    []land.VerdictCheck{{CheckID: "fork-build", Result: land.VerdictPass}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !landed.Landed() {
+		t.Fatalf("fork landing = %s/%s, want landed", landed.Result, landed.Reason)
+	}
+	pinCommit := heavyGit(t, root, "rev-parse", "HEAD")
+	if pinCommit == trunkBefore {
+		t.Fatal("trunk did not advance with fork pin commit")
+	}
+
+	// Commit one hand-made commit on top of the fork pin commit.
+	hand := heavyCommit(t, root, "hand-made-after-pin")
+
+	steps := heavyTestSteps{judge: func(context.Context, string, string) ([]HeavyCheck, error) {
+		return []HeavyCheck{{CheckID: "unit", Result: "pass"}}, nil
+	}}
+	log := &strings.Builder{}
+	l := &Loop{
+		gatePolicy: GatePolicy{LandingStrategy: "after-merge"},
+		cfg:        LoopConfig{Root: root, Store: s.Path(), LaneRoot: scratchUnderDurable(t), Steps: steps, Now: time.Now, Report: log},
+	}
+	l.cfg.PostLanding.Push.What = "green"
+	unrecordedEvents := func() []string {
+		t.Helper()
+		var commits []string
+		if err := s.ReadTx(ctx, func(r *store.Reader) error {
+			rows, err := r.Query(`SELECT coalesce(json_extract(payload, '$.commit'), '')
+FROM events WHERE kind = ? ORDER BY seq ASC`, alarms.UnrecordedTrunkCommitKind)
+			if err != nil {
+				return err
+			}
+			defer rows.Close()
+			for rows.Next() {
+				var commit string
+				if err := rows.Scan(&commit); err != nil {
+					return err
+				}
+				commits = append(commits, commit)
+			}
+			return rows.Err()
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return commits
+	}
+
+	if err := l.startHeavy(ctx, hand); err != nil {
+		t.Fatal(err)
+	}
+	l.heavyWG.Wait()
+	waitAction(t, &l.pushAction)
+
+	if got := heavyGit(t, root, "rev-parse", GreenRef); got != hand {
+		t.Fatalf("green ref = %s, want %s", got, hand)
+	}
+	if got := unrecordedEvents(); len(got) != 1 || got[0] != hand {
+		t.Fatalf("unrecorded-trunk-commit events = %v, want only hand-made [%s] (pin commit %s must not be recorded)", got, hand, pinCommit)
+	}
+	if strings.Contains(log.String(), pinCommit) {
+		t.Fatalf("loop log recorded fork pin commit %s as hand-made:\n%s", pinCommit, log.String())
+	}
+
+	// Tip publication also recognizes the pin commit and does not re-record hand.
+	heavyGit(t, root, "update-ref", GreenRef, trunkBefore)
+	l.cfg.PostLanding.Push.What = "tip"
+	if _, err := l.pushTipOnce(ctx, l.cfg.PostLanding.Push); err != nil {
+		t.Fatalf("pushTipOnce failed: %v", err)
+	}
+	if got := unrecordedEvents(); len(got) != 1 || got[0] != hand {
+		t.Fatalf("unrecorded-trunk-commit events after pushTipOnce = %v, want [%s]", got, hand)
+	}
 }

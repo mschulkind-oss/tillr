@@ -393,6 +393,7 @@ type landingOut struct {
 		LandedTree        string   `json:"landed_tree"`
 		ConflictPaths     []string `json:"conflict_paths"`
 		GateSkippedReason string   `json:"gate_skipped_reason"`
+		ForkPinCommit     string   `json:"fork_pin_commit"`
 	} `json:"payload"`
 }
 

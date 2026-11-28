@@ -115,8 +115,13 @@ type Landing struct {
 	GateSkippedReason string   `json:"gate_skipped_reason"`
 	// ReplayTip is the new trunk tip after replaying the suffix. TrunkAfter
 	// attributes the landing to the gated repair, not to a replayed commit.
-	ReplayTip string       `json:"replay_tip,omitempty"`
-	RedCap    *redcap.Hold `json:"red_cap,omitempty"`
+	ReplayTip string `json:"replay_tip,omitempty"`
+	// ForkPinCommit is the trunk commit that updated yolo-packs/fork-pins/<fork>
+	// alongside a fork delivery, when the trunk tracks a pin for that fork.
+	// TrunkAfter names the fork branch commit; ForkPinCommit records the lander's
+	// companion trunk commit so trunk readers recognize it as lander-made.
+	ForkPinCommit string       `json:"fork_pin_commit,omitempty"`
+	RedCap        *redcap.Hold `json:"red_cap,omitempty"`
 	// Faults name what the landing could not finish cleanly: a recovery ref an earlier
 	// landing left, or bytes the owner saved after the trunk moved, with the ref that
 	// holds them. A landing with no fault leaves no recovery ref.
@@ -951,6 +956,7 @@ func publishLanding(ctx context.Context, s *store.Store, t *Trunk, p preparedLan
 					return Landing{}, err
 				}
 				pub.install = pinInstall
+				landing.ForkPinCommit = p.pin.commit
 				if p.history != nil {
 					p.history.observed = p.pin.commit
 				}

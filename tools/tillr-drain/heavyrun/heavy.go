@@ -1267,6 +1267,15 @@ func (r HeavyRunner) HasLandingRecord(ctx context.Context, sha string) (bool, er
 		}
 		in, args := heavy.InList(shas)
 		err = reader.QueryRow(`SELECT 1 FROM landings WHERE trunk_after IN `+in+` AND result = 'landed' LIMIT 1`, args...).Scan(&one)
+		if err == nil {
+			found = true
+			return nil
+		}
+		if !errors.Is(err, sql.ErrNoRows) && !strings.Contains(err.Error(), "no such table") {
+			return err
+		}
+		pinArgs := append([]any{land.LandingKind, land.ResultLanded}, args...)
+		err = reader.QueryRow(`SELECT 1 FROM events WHERE kind = ? AND json_extract(payload, '$.result') = ? AND json_extract(payload, '$.fork_pin_commit') IN `+in+` LIMIT 1`, pinArgs...).Scan(&one)
 		if errors.Is(err, sql.ErrNoRows) || err != nil && strings.Contains(err.Error(), "no such table") {
 			return nil
 		}
