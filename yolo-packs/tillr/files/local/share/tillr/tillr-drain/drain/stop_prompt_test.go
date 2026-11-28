@@ -769,14 +769,33 @@ exec %q "$@"
 	l.cfg.Stage = stopMidPassStager{
 		t:         t,
 		storePath: f.storePath,
-		beforeStop: func() {
-			<-prepared
-		},
 	}
 
-	res, err := l.Run(context.Background())
-	if err != nil || res.Stop != StopOperatorStop {
-		t.Fatalf("mid-pass stop answered %+v / %v, want operator-stop", res, err)
+	type runOutcome struct {
+		result LoopResult
+		err    error
+	}
+	done := make(chan runOutcome, 1)
+	go func() {
+		res, err := l.Run(context.Background())
+		done <- runOutcome{res, err}
+	}()
+
+	select {
+	case <-prepared:
+	case out := <-done:
+		t.Fatalf("loop ended before update-ref prepared: %+v / %v", out.result, out.err)
+	}
+	requestSessionStop(t, f.storePath, 1)
+	clock.advance(PassInterval)
+	var out runOutcome
+	select {
+	case clock.ticks <- clock.Now():
+		out = <-done
+	case out = <-done:
+	}
+	if out.err != nil || out.result.Stop != StopOperatorStop {
+		t.Fatalf("mid-pass stop answered %+v / %v, want operator-stop", out.result, out.err)
 	}
 	if err := <-driverDone; err != nil {
 		t.Fatalf("update-ref driver: %v", err)
