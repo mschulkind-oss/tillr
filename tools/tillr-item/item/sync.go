@@ -402,6 +402,9 @@ func Sync(ctx context.Context, r *store.Reader, tx *store.Tx, in SyncInput) (Syn
 			report.Unparked = append(report.Unparked, tr.id)
 		}
 	}
+	if err := writeCompanionWaits(tx, plan.designMirror.companion.waits); err != nil {
+		return SyncReport{}, err
+	}
 	for _, tr := range plan.designMirror.resolves {
 		if _, err := SetStateWithReceipt(ctx, tx, tr.id, tr.toState, in.At, tr.receipt); err != nil {
 			return SyncReport{}, err
@@ -681,6 +684,36 @@ func planSync(ctx context.Context, r *store.Reader, in SyncInput) (syncPlan, err
 	}
 	report.IceboxWithoutDoc = designMirror.iceboxNoDoc
 
+	// Companion plans: the tasks of a DECIDED plan become items beside the design's own.
+	if !(in.Partial && len(in.Roadmaps) == 0) {
+		rd := collectRoutedDesigns(in)
+		if len(companionCandidates(rd)) > 0 {
+			var index vantage.VantageIndex
+			if designMirror.index != nil {
+				index = *designMirror.index
+			} else if index, err = readDesignIndex(ctx, in); err != nil {
+				return syncPlan{}, err
+			}
+			declaredIDs := make(map[string]bool, len(byID))
+			for id := range byID {
+				declaredIDs[id] = true
+			}
+			companion, err := planCompanionPlans(r, in, rd, index, held, d, finished, declaredIDs)
+			if err != nil {
+				return syncPlan{}, err
+			}
+			designMirror.companion = companion
+			designMirror.creates = append(designMirror.creates, companion.creates...)
+			designMirror.updates = append(designMirror.updates, companion.updates...)
+			designMirror.unchanged = append(designMirror.unchanged, companion.unchanged...)
+			designMirror.parkedIDs = append(designMirror.parkedIDs, companion.parked...)
+			designMirror.unparkedIDs = append(designMirror.unparkedIDs, companion.unparked...)
+			report.Findings = append(report.Findings, companion.findings...)
+			report.Frozen = append(report.Frozen, companion.frozen...)
+			report.SkippedFiles = append(report.SkippedFiles, companion.skipped...)
+		}
+	}
+
 	// Refuse only new copies of an unfinished stored item. Existing version-suffixed
 	// ids keep their definitions and history; sync does not retroactively rename them.
 	for _, b := range blocks {
@@ -928,6 +961,7 @@ func planSync(ctx context.Context, r *store.Reader, in SyncInput) (syncPlan, err
 	for _, id := range designMirror.spineOrder {
 		placements = append(placements, sourcePlacement{id, ""})
 	}
+	placements = append(placements, designMirror.companion.placements...)
 
 	var allowed, allowedDocs map[string]bool
 	if scoped {
@@ -939,6 +973,9 @@ func planSync(ctx context.Context, r *store.Reader, in SyncInput) (syncPlan, err
 		}
 		for _, e := range designMirror.entries {
 			allowed[e.id] = true
+		}
+		for _, id := range designMirror.companion.ids {
+			allowed[id] = true
 		}
 		for _, tr := range designMirror.resolves {
 			allowed[tr.id] = true
@@ -1023,6 +1060,7 @@ func orderFileWrites(perFile map[string]*fileWrites, order []string) ([]fileWrit
 type storedState struct {
 	state     string
 	designDoc string
+	bodyRef   string
 	updatedAt int64
 	// storeDeclared is an item whose record is its declaration, so it is never unshared:
 	// one carrying its workflow's arguments, which no document block can carry, or a filed
@@ -1046,7 +1084,7 @@ func readStoredStates(r *store.Reader) (map[string]storedState, error) {
 	if hasRequests {
 		argsColumn = "(" + argsColumn + " OR item_id IN (SELECT item_id FROM request_words))"
 	}
-	rows, err := r.Query(`SELECT item_id, state, COALESCE(updated_at, 0), COALESCE(design_doc, ''), ` + argsColumn + ` FROM items`)
+	rows, err := r.Query(`SELECT item_id, state, COALESCE(updated_at, 0), COALESCE(design_doc, ''), COALESCE(body_ref, ''), ` + argsColumn + ` FROM items`)
 	if err != nil {
 		return nil, Internalf("reading the stored items: %v", err)
 	}
@@ -1055,7 +1093,7 @@ func readStoredStates(r *store.Reader) (map[string]storedState, error) {
 	for rows.Next() {
 		var id string
 		var st storedState
-		if err := rows.Scan(&id, &st.state, &st.updatedAt, &st.designDoc, &st.storeDeclared); err != nil {
+		if err := rows.Scan(&id, &st.state, &st.updatedAt, &st.designDoc, &st.bodyRef, &st.storeDeclared); err != nil {
 			return nil, Internalf("reading a stored item: %v", err)
 		}
 		held[id] = st
@@ -1121,8 +1159,12 @@ func unsharedOpenFromDocs(docs []SyncDocument, held map[string]storedState, fini
 	}
 	fed, missing := docshare.SharingWithFinished(docs, states, finished)
 	unshared := make(map[string]bool, len(missing))
+	shared := companionPlanIDs(docs)
 	for _, id := range missing {
-		unshared[id] = true
+		// A companion plan task is declared by its plan, not by a document block.
+		if !shared[id] {
+			unshared[id] = true
+		}
 	}
 	ids := make([]string, 0, len(held))
 	for id := range held {

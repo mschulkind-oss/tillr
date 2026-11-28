@@ -29,6 +29,11 @@ const QuestionWaitRecordKind = "item.question-wait"
 // recorded wait of the item, which is how an item opts out of the whole-document hold.
 const WaitAllKey = "*"
 
+// planWaitSentinel is the ref key of the row sync writes for a plan task that waits on
+// nothing: it makes the item present in the reader's map with no refs, which releases it
+// from the whole-document hold, and it is never an effective wait.
+const planWaitSentinel = ""
+
 // The two tables store only the dependency edge item -> question reference, never
 // whether the question is open (D-QM1). item_question_overrides also carries the three
 // prose-reference columns, so an unmarked prose question added by hand can be stored.
@@ -121,8 +126,11 @@ func ReadQuestionWaits(r *store.Reader) (map[string]QuestionWaits, error) {
 			rows.Close()
 			return nil, err
 		}
-		waits[id] = append(waits[id], q)
 		out[id] = QuestionWaits{}
+		if q.Key == planWaitSentinel {
+			continue
+		}
+		waits[id] = append(waits[id], q)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err

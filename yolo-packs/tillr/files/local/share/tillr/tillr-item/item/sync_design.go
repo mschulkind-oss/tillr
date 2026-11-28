@@ -45,6 +45,8 @@ type designMirrorPlan struct {
 	parkedIDs        []string
 	unparkedIDs      []string
 	mirroredRoadmaps []string
+	index            *vantage.VantageIndex
+	companion        companionResult
 }
 
 func designItemID(docPath string) string {
@@ -191,7 +193,9 @@ func collectRoutedDesigns(in SyncInput) routedDesigns {
 				if isPairedCompanionPlan(target, rd.byPath) {
 					continue
 				}
-				if !strings.HasPrefix(target, "docs/design/") && designStage(targetDoc.Content) == "" {
+				// Unstaged Markdown outside docs/design/ is routed too, so a design needs no
+				// frontmatter vocabulary (D-PSH3); an unstaged reference page is not a design.
+				if designStage(targetDoc.Content) == "" && strings.HasPrefix(target, "docs/reference/") {
 					continue
 				}
 				rd.routed[target] = true
@@ -230,6 +234,25 @@ func collectRoutedDesigns(in SyncInput) routedDesigns {
 	return rd
 }
 
+// isCompanionPiece answers whether a stored item was imported from the companion plan of
+// the design at target.
+func isCompanionPiece(st storedState, target string) bool {
+	ref, _, _ := strings.Cut(st.bodyRef, "#")
+	return ref != "" && ref == companionPlanPath(target)
+}
+
+// companionCandidates lists the companion plans of the routed designs, in path order.
+func companionCandidates(rd routedDesigns) []string {
+	var plans []string
+	for _, target := range rd.routedList {
+		plan := companionPlanPath(target)
+		if _, ok := rd.byPath[plan]; ok {
+			plans = append(plans, plan)
+		}
+	}
+	return plans
+}
+
 func designIndexNeeded(rd routedDesigns, held map[string]storedState, finished func(string) bool) (map[string]bool, []string, bool, error) {
 	// Check slug collisions across all routed eligible designs before any read/write.
 	byID := make(map[string]string, len(rd.routedList))
@@ -255,7 +278,9 @@ func designIndexNeeded(rd routedDesigns, held map[string]storedState, finished f
 		}
 		target, _, _ := strings.Cut(st.designDoc, "#")
 		target = path.Clean(target)
-		if id != designItemID(target) {
+		// A piece of the design's companion plan does not cover it: the design item
+		// stays, and rests on its questions while the pieces build (D-PSH8).
+		if id != designItemID(target) && !isCompanionPiece(st, target) {
 			covered[target] = true
 		}
 	}
@@ -317,7 +342,52 @@ func NeedsDesignIndex(r *store.Reader, in SyncInput) (bool, error) {
 	if err != nil {
 		return false, nil
 	}
-	return len(uncovered) > 0 || hasUnfinishedDesignItem, nil
+	return len(uncovered) > 0 || hasUnfinishedDesignItem || len(companionCandidates(rd)) > 0, nil
+}
+
+// readDesignIndex answers the planning index sync reads, failing closed.
+func readDesignIndex(ctx context.Context, in SyncInput) (vantage.VantageIndex, error) {
+	var index vantage.VantageIndex
+	if in.Index != nil {
+		index = *in.Index
+	} else if in.Root != "" {
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		index = vantage.ReadVantageIndex(ctx, in.Root, in.QuestionsCmd)
+	} else {
+		return index, Externalf("index-unreadable: no repository root or planning index provided")
+	}
+	if _, err := index.StageRole(""); err != nil {
+		return index, Externalf("index-unreadable: %v", err)
+	}
+	return index, nil
+}
+
+// designRole is the stage role sync treats a routed design as holding. A design with no
+// frontmatter stage is finished when its companion plan is BUILT and stamped with the
+// design's current git blob sha; changing the design makes it outstanding again (D-PSH3).
+func designRole(index vantage.VantageIndex, byPath map[string]SyncDocument, target string) (string, error) {
+	role, err := index.StageRole(target)
+	if err != nil || role != "" {
+		return role, err
+	}
+	doc := byPath[target]
+	if designStage(doc.Content) != "" {
+		return role, nil
+	}
+	plan, ok := byPath[companionPlanPath(target)]
+	if !ok {
+		return role, nil
+	}
+	planRole, err := index.StageRole(plan.Path)
+	if err != nil {
+		return "", err
+	}
+	if planRole == vantage.StageRoleBuilt && planStampedAt(plan.Content) == gitBlobSHA(doc.Content) {
+		return vantage.StageRoleBuilt, nil
+	}
+	return role, nil
 }
 
 func planDesignMirror(ctx context.Context, r *store.Reader, in SyncInput, held map[string]storedState, finished func(string) bool) (designMirrorPlan, error) {
@@ -344,21 +414,11 @@ func planDesignMirror(ctx context.Context, r *store.Reader, in SyncInput, held m
 		return out, nil
 	}
 
-	// Obtain Vantage index (fail-closed).
-	var index vantage.VantageIndex
-	if in.Index != nil {
-		index = *in.Index
-	} else if in.Root != "" {
-		if ctx == nil {
-			ctx = context.Background()
-		}
-		index = vantage.ReadVantageIndex(ctx, in.Root, in.QuestionsCmd)
-	} else {
-		return out, Externalf("index-unreadable: no repository root or planning index provided")
+	index, err := readDesignIndex(ctx, in)
+	if err != nil {
+		return out, err
 	}
-	if _, err := index.StageRole(""); err != nil {
-		return out, Externalf("index-unreadable: %v", err)
-	}
+	out.index = &index
 
 	d, err := itemDefinition(r)
 	if err != nil {
@@ -403,7 +463,7 @@ func planDesignMirror(ctx context.Context, r *store.Reader, in SyncInput, held m
 
 	for _, target := range uncovered {
 		id := designItemID(target)
-		role, err := index.StageRole(target)
+		role, err := designRole(index, byPath, target)
 		if err != nil {
 			return out, Externalf("index-unreadable: %v", err)
 		}
