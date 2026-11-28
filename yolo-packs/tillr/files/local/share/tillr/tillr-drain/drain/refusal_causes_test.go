@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -60,18 +61,18 @@ func TestComputeRefusalCauses(t *testing.T) {
 						CheckID: "go-affected",
 						Failing: []FailingCheck{{
 							ID:    "go-affected",
-							Cases: []FailingCase{{Name: "TestCheckDeclarationsCoverSelectionInputs"}},
+							Cases: []FailingCase{{Name: "TestCheckDeclarationsCoverSelectionInputs", Assertion: "input x is undeclared"}},
 						}},
 					},
 				},
 			},
 			want: []RefusalCause{
 				{Cause: "gate:elapsed-time"},
-				{Cause: "gate:go-affected:TestCheckDeclarationsCoverSelectionInputs"},
+				{Cause: "gate:go-affected:TestCheckDeclarationsCoverSelectionInputs:input x is undeclared"},
 			},
 		},
 		{
-			name: "gate failing cases key on check plus case",
+			name: "gate failing cases key on check plus case plus first assertion line",
 			payload: refusalPayload{
 				Step: RefusalGate,
 				Checks: []EndingCheck{
@@ -81,9 +82,9 @@ func TestComputeRefusalCauses(t *testing.T) {
 							{
 								ID: "go-affected",
 								Cases: []FailingCase{
-									{Name: "TestEveryStoreProgramFlushesTheSQLiteTraceOnExit"},
-									{Name: "TestClassificationScanGoSites"},
-									{Name: "TestClassificationScanGoSites"},
+									{Name: "TestEveryStoreProgramFlushesTheSQLiteTraceOnExit", Assertion: "trace not flushed"},
+									{Name: "TestClassificationScanGoSites", Assertion: "  site a unclassified \nsecond line"},
+									{Name: "TestClassificationScanGoSites", Assertion: "site a unclassified"},
 								},
 							},
 						},
@@ -91,9 +92,43 @@ func TestComputeRefusalCauses(t *testing.T) {
 				},
 			},
 			want: []RefusalCause{
-				{Cause: "gate:go-affected:TestClassificationScanGoSites"},
-				{Cause: "gate:go-affected:TestEveryStoreProgramFlushesTheSQLiteTraceOnExit"},
+				{Cause: "gate:go-affected:TestClassificationScanGoSites:site a unclassified"},
+				{Cause: "gate:go-affected:TestEveryStoreProgramFlushesTheSQLiteTraceOnExit:trace not flushed"},
 			},
+		},
+		{
+			name: "gate one test failing two different assertions keys two causes",
+			payload: refusalPayload{
+				Step: RefusalGate,
+				Checks: []EndingCheck{{
+					CheckID: "go-affected",
+					Failing: []FailingCheck{{
+						ID: "go-affected",
+						Cases: []FailingCase{
+							{Name: "TestArchitecture", Assertion: `new domain file "drain/x.go" added to drain/`},
+							{Name: "TestArchitecture", Assertion: "function f is 14 lines (max 10 for bridge wrappers)"},
+						},
+					}},
+				}},
+			},
+			want: []RefusalCause{
+				{Cause: "gate:go-affected:TestArchitecture:function f is 14 lines (max 10 for bridge wrappers)"},
+				{Cause: `gate:go-affected:TestArchitecture:new domain file "drain/x.go" added to drain/`},
+			},
+		},
+		{
+			name: "gate named case without assertion emits no cause and no fallback",
+			payload: refusalPayload{
+				Step: RefusalGate,
+				Checks: []EndingCheck{{
+					CheckID: "go-affected",
+					Failing: []FailingCheck{{
+						ID:    "go-affected",
+						Cases: []FailingCase{{Name: "TestArchitecture"}, {Name: "TestOther", Assertion: "  "}},
+					}},
+				}},
+			},
+			want: []RefusalCause{},
 		},
 		{
 			name: "gate failing check without named cases falls back to check id",
@@ -182,9 +217,25 @@ func TestComputeRefusalCauses(t *testing.T) {
 			want:    []RefusalCause{{Cause: "verify-no-verdict"}},
 		},
 		{
-			name:    "step-level verify-not-done",
+			name:    "verify-not-done without feedback counts nothing",
 			payload: refusalPayload{Step: RefusalVerifyNotDone},
-			want:    []RefusalCause{{Cause: "verify-not-done"}},
+			want:    []RefusalCause{},
+		},
+		{
+			name: "verify-not-done findings without file paths count nothing",
+			payload: refusalPayload{Step: RefusalVerifyNotDone, VerifyFeedback: &verifyFeedback{Findings: []verifyFindingRecord{
+				{Criterion: "c1", Reason: "missing test"},
+				{Criterion: "c2", Reason: "gap", Findings: item.VerdictFindings{{Kind: "gap", Case: "TestX", Paths: []string{"case:TestX"}}}},
+			}}},
+			want: []RefusalCause{},
+		},
+		{
+			name: "verify-not-done keys on normalized finding paths",
+			payload: refusalPayload{Step: RefusalVerifyNotDone, VerifyFeedback: &verifyFeedback{Findings: []verifyFindingRecord{
+				{Criterion: "c1", Findings: item.VerdictFindings{{Kind: "gap", Paths: []string{"file:./tools/a.go:12", "file:docs/b.md"}}}},
+				{Criterion: "c2", Findings: item.VerdictFindings{{Kind: "regression", Paths: []string{"file:tools/a.go:40"}}}},
+			}}},
+			want: []RefusalCause{{Cause: "verify-not-done:docs/b.md"}, {Cause: "verify-not-done:tools/a.go"}},
 		},
 		{
 			name:    "step-level plan-wrong",
@@ -212,9 +263,16 @@ func TestComputeRefusalCauses(t *testing.T) {
 			want:    []RefusalCause{{Cause: "idea-no-outcome"}},
 		},
 		{
-			name:    "step-level eval-failed",
+			name:    "eval-failed without feedback counts nothing",
 			payload: refusalPayload{Step: ReasonEvalFailed},
-			want:    []RefusalCause{{Cause: "eval-failed"}},
+			want:    []RefusalCause{},
+		},
+		{
+			name: "eval-failed keys on finding paths like verify-not-done",
+			payload: refusalPayload{Step: ReasonEvalFailed, VerifyFeedback: &verifyFeedback{Findings: []verifyFindingRecord{
+				{Criterion: "c1", Findings: item.VerdictFindings{{Kind: "gap", Paths: []string{"file:tools/a.go:3"}}}},
+			}}},
+			want: []RefusalCause{{Cause: "verify-not-done:tools/a.go"}},
 		},
 		{
 			name:    "excluded trunk-already-red",
@@ -318,12 +376,16 @@ func TestHoldJudgePreservesWriterRunIDAndRefusalCauses(t *testing.T) {
 	}
 
 	for _, tc := range []struct {
-		judgeID string
-		reason  string
-		want    string
+		judgeID  string
+		reason   string
+		feedback *verifyFeedback
+		want     string
 	}{
-		{judgeID: "run-judge-1", reason: ReasonEvalFailed, want: `"refusal_causes":[{"cause":"eval-failed"}]`},
+		{judgeID: "run-judge-1", reason: ReasonEvalFailed, want: `"refusal_causes":[]`},
 		{judgeID: "run-judge-2", reason: ReasonJudgeBlocked, want: `"refusal_causes":[]`},
+		{judgeID: "run-judge-3", reason: ReasonEvalFailed, feedback: &verifyFeedback{Findings: []verifyFindingRecord{
+			{Criterion: "c1", Findings: item.VerdictFindings{{Kind: "gap", Paths: []string{"file:tools/a.go:7"}}}},
+		}}, want: `"refusal_causes":[{"cause":"verify-not-done:tools/a.go"}]`},
 	} {
 		result := &LoopResult{}
 		c := Candidate{
@@ -334,6 +396,7 @@ func TestHoldJudgePreservesWriterRunIDAndRefusalCauses(t *testing.T) {
 			BaseSHA: "aaaa",
 			HeadSHA: "bbbb",
 		}
+		c.verifyFeedback = tc.feedback
 		if err := l.holdJudge(ctx, c, tc.judgeID, tc.reason, "detail", result); err != nil {
 			t.Fatalf("holdJudge(%s): %v", tc.reason, err)
 		}

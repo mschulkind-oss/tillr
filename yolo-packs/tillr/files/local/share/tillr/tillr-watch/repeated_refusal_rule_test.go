@@ -197,20 +197,39 @@ func TestDrainRepeatedRefusalRule(t *testing.T) {
 		t.Fatalf("refusals with different causes opened notice: %+v", notices)
 	}
 
-	// 3b. Two go-affected refusals naming different failing test cases do not fire;
-	// a second distinct item naming the same failing test case does fire.
+	causeNames := func(causes []drain.RefusalCause) []string {
+		out := make([]string, 0, len(causes))
+		for _, c := range causes {
+			out = append(out, c.Cause)
+		}
+		return out
+	}
+
+	// 3b. Two gate refusals of the same test with different assertion text do not fire
+	// (the 2026-11-28 TestArchitecture false alert, D-TW-RRS5); a second distinct item
+	// failing the same test with the same assertion text does fire.
+	archCauses := func(assertion string) []string {
+		return causeNames(drain.GateRefusalCauses([]drain.EndingCheck{{
+			CheckID: "go-affected",
+			Failing: []drain.FailingCheck{{ID: "go-affected", Cases: []drain.FailingCase{{Name: "TestArchitecture", Assertion: assertion}}}},
+		}}))
+	}
+	const (
+		archDomainFile = `new domain file "drain/new_thing.go" added to drain/`
+		archBridgeLong = "function lookupThing is 14 lines (max 10 for bridge wrappers)"
+	)
 	now = now.Add(2 * time.Minute)
-	appendRefusalTo(s, "run-ga-1", "item-ga-a", drain.RefusalGate, "failing checks: go-affected (TestClassificationScanGoSites)", []string{"gate:go-affected:TestClassificationScanGoSites"}, now)
+	appendRefusalTo(s, "run-ga-1", "item-ga-a", drain.RefusalGate, "failing checks: go-affected (TestArchitecture)", archCauses(archDomainFile), now)
 	now = now.Add(2 * time.Minute)
-	appendRefusalTo(s, "run-ga-2", "item-ga-b", drain.RefusalGate, "failing checks: go-affected (TestEveryStoreProgramFlushesTheSQLiteTraceOnExit)", []string{"gate:go-affected:TestEveryStoreProgramFlushesTheSQLiteTraceOnExit"}, now)
+	appendRefusalTo(s, "run-ga-2", "item-ga-b", drain.RefusalGate, "failing checks: go-affected (TestArchitecture)", archCauses(archBridgeLong), now)
 	if notices := pending(); len(notices) != 0 {
-		t.Fatalf("go-affected refusals with different failing test cases opened notice: %+v", notices)
+		t.Fatalf("gate refusals of one test with different assertion text opened notice: %+v", notices)
 	}
 	now = now.Add(2 * time.Minute)
-	appendRefusalTo(s, "run-ga-3", "item-ga-c", drain.RefusalGate, "failing checks: go-affected (TestClassificationScanGoSites)", []string{"gate:go-affected:TestClassificationScanGoSites"}, now)
+	appendRefusalTo(s, "run-ga-3", "item-ga-c", drain.RefusalGate, "failing checks: go-affected (TestArchitecture)", archCauses(archDomainFile), now)
 	gaNotices := pending()
-	if len(gaNotices) != 1 || gaNotices[0].Bundle.Subject != "gate:go-affected:TestClassificationScanGoSites" {
-		t.Fatalf("expected 1 alert for shared cause gate:go-affected:TestClassificationScanGoSites, got %+v", gaNotices)
+	if len(gaNotices) != 1 || gaNotices[0].Bundle.Subject != "gate:go-affected:TestArchitecture:"+archDomainFile {
+		t.Fatalf("expected 1 alert for shared case and assertion of TestArchitecture, got %+v", gaNotices)
 	}
 
 	// 4. A landed commit between refusals sharing a cause keeps the alert closed.
@@ -293,22 +312,15 @@ func TestDrainRepeatedRefusalRule(t *testing.T) {
 		t.Fatalf("resolved row = (%q, %q, %d), want (resolved, condition-cleared, %d)", state, reason, resolvedSeq, landedSeq)
 	}
 
-	// 8. A fresh pair of distinct refused items sharing a cause after that landing opens episode 2.
+	// 8. A fresh pair of distinct refused items sharing a cause after that landing opens
+	// episode 2: two verifier returns whose findings name the same file (D-TW-RRS5).
 	now = now.Add(2 * time.Minute)
-	appendRefusalTo(s, "run-ep2-a", "item-ep2-a", drain.RefusalVerifyNotDone, "c1: missing test", []string{"verify-not-done"}, now)
+	appendRefusalTo(s, "run-ep2-a", "item-ep2-a", drain.RefusalVerifyNotDone, "c1: missing test", []string{"verify-not-done:tools/shared/broken.go"}, now)
 	now = now.Add(2 * time.Minute)
-	appendRefusalTo(s, "run-ep2-b", "item-ep2-b", drain.RefusalVerifyNotDone, "c2: missing test", []string{"verify-not-done"}, now)
+	appendRefusalTo(s, "run-ep2-b", "item-ep2-b", drain.RefusalVerifyNotDone, "c2: missing test", []string{"verify-not-done:tools/shared/broken.go"}, now)
 	reopened := pending()
-	if len(reopened) != 1 || reopened[0].AlertID == firstAlert.AlertID || reopened[0].Bundle.Subject != "verify-not-done" {
-		t.Fatalf("expected new episode for verify-not-done after prior landing resolution, got %+v", reopened)
-	}
-
-	causeNames := func(causes []drain.RefusalCause) []string {
-		out := make([]string, 0, len(causes))
-		for _, c := range causes {
-			out = append(out, c.Cause)
-		}
-		return out
+	if len(reopened) != 1 || reopened[0].AlertID == firstAlert.AlertID || reopened[0].Bundle.Subject != "verify-not-done:tools/shared/broken.go" {
+		t.Fatalf("expected new episode for verify-not-done:tools/shared/broken.go after prior landing resolution, got %+v", reopened)
 	}
 
 	// 8a. Two gate refusals whose only common failing check is the gate adapter's own entry
@@ -322,39 +334,69 @@ func TestDrainRepeatedRefusalRule(t *testing.T) {
 	causesWrapperA := drain.GateRefusalCauses([]drain.EndingCheck{
 		{CheckID: "gate:python3"},
 		{CheckID: "elapsed-time"},
-		{CheckID: "go-affected", Failing: []drain.FailingCheck{{ID: "go-affected", Cases: []drain.FailingCase{{Name: "TestCheckDeclarationsCoverSelectionInputs"}}}}},
+		{CheckID: "go-affected", Failing: []drain.FailingCheck{{ID: "go-affected", Cases: []drain.FailingCase{{Name: "TestCheckDeclarationsCoverSelectionInputs", Assertion: "input a undeclared"}}}}},
 	})
 	appendRefusalTo(s, "run-wrap-a", "item-wrap-a", drain.RefusalGate, "failing checks: gate:python3, elapsed-time, go-affected", causeNames(causesWrapperA), now)
 	now = now.Add(2 * time.Minute)
 	causesWrapperB := drain.GateRefusalCauses([]drain.EndingCheck{
 		{CheckID: "gate:python3"},
 		{CheckID: "gate-budget"},
-		{CheckID: "change-checks-test", Failing: []drain.FailingCheck{{ID: "change-checks-test", Cases: []drain.FailingCase{{Name: "TestFastBudget"}, {Name: "TestOther"}}}}},
+		{CheckID: "change-checks-test", Failing: []drain.FailingCheck{{ID: "change-checks-test", Cases: []drain.FailingCase{{Name: "TestFastBudget", Assertion: "budget exceeded"}, {Name: "TestOther", Assertion: "other failed"}}}}},
 	})
 	appendRefusalTo(s, "run-wrap-b", "item-wrap-b", drain.RefusalGate, "failing checks: gate:python3, gate-budget, change-checks-test", causeNames(causesWrapperB), now)
 	if notices := pending(); len(notices) != 0 {
 		t.Fatalf("refusals sharing only gate:python3 wrapper opened alert: %+v", notices)
 	}
 
-	// 8b. Two gate refusals that name the same failing test case under the same check
-	// (alongside gate:python3) are still counted as one shared cause.
+	// 8b. Two gate refusals that name the same failing test case and assertion under the
+	// same check (alongside gate:python3) are still counted as one shared cause.
 	now = now.Add(2 * time.Minute)
 	appendLandingTo(s, "item-reset-wrap", land.ResultLanded, now)
 	now = now.Add(2 * time.Minute)
 	causesSameCaseA := drain.GateRefusalCauses([]drain.EndingCheck{
 		{CheckID: "gate:python3"},
-		{CheckID: "go-affected", Failing: []drain.FailingCheck{{ID: "go-affected", Cases: []drain.FailingCase{{Name: "TestCheckDeclarationsCoverSelectionInputs"}}}}},
+		{CheckID: "go-affected", Failing: []drain.FailingCheck{{ID: "go-affected", Cases: []drain.FailingCase{{Name: "TestCheckDeclarationsCoverSelectionInputs", Assertion: "input a undeclared"}}}}},
 	})
 	appendRefusalTo(s, "run-same-case-a", "item-same-case-a", drain.RefusalGate, "failing checks: go-affected", causeNames(causesSameCaseA), now)
 	now = now.Add(2 * time.Minute)
 	causesSameCaseB := drain.GateRefusalCauses([]drain.EndingCheck{
 		{CheckID: "gate:python3"},
-		{CheckID: "go-affected", Failing: []drain.FailingCheck{{ID: "go-affected", Cases: []drain.FailingCase{{Name: "TestCheckDeclarationsCoverSelectionInputs"}}}}},
+		{CheckID: "go-affected", Failing: []drain.FailingCheck{{ID: "go-affected", Cases: []drain.FailingCase{{Name: "TestCheckDeclarationsCoverSelectionInputs", Assertion: "input a undeclared"}}}}},
 	})
 	appendRefusalTo(s, "run-same-case-b", "item-same-case-b", drain.RefusalGate, "failing checks: go-affected", causeNames(causesSameCaseB), now)
 	sameCaseNotices := pending()
-	if len(sameCaseNotices) != 1 || sameCaseNotices[0].Bundle.Subject != "gate:go-affected:TestCheckDeclarationsCoverSelectionInputs" {
-		t.Fatalf("expected 1 alert on gate:go-affected:TestCheckDeclarationsCoverSelectionInputs for shared failing test case, got %+v", sameCaseNotices)
+	if len(sameCaseNotices) != 1 || sameCaseNotices[0].Bundle.Subject != "gate:go-affected:TestCheckDeclarationsCoverSelectionInputs:input a undeclared" {
+		t.Fatalf("expected 1 alert on the shared failing test case and assertion, got %+v", sameCaseNotices)
+	}
+
+	// 8c. Two verifier returns on distinct items with different findings open no alert
+	// (the 2026-11-28 verify-not-done false alerts, D-TW-RRS5): findings naming different
+	// files key different causes, and findings naming no file key none.
+	now = now.Add(2 * time.Minute)
+	appendLandingTo(s, "item-reset-same-case", land.ResultLanded, now)
+	if notices := pending(); len(notices) != 0 {
+		t.Fatalf("landing did not clear the shared-case episode: %+v", notices)
+	}
+	now = now.Add(2 * time.Minute)
+	appendRefusalTo(s, "run-vnd-a", "item-vnd-a", drain.RefusalVerifyNotDone, "c1: gap in tools/a/one.go", []string{"verify-not-done:tools/a/one.go"}, now)
+	now = now.Add(2 * time.Minute)
+	appendRefusalTo(s, "run-vnd-b", "item-vnd-b", drain.RefusalVerifyNotDone, "c3: gap in docs/b/two.md", []string{"verify-not-done:docs/b/two.md"}, now)
+	now = now.Add(2 * time.Minute)
+	appendRefusalTo(s, "run-vnd-c", "item-vnd-c", drain.RefusalVerifyNotDone, "c2: missing test", []string{}, now)
+	now = now.Add(2 * time.Minute)
+	appendRefusalTo(s, "run-eval-d", "item-vnd-d", drain.ReasonEvalFailed, "c2: missing test", []string{}, now)
+	if notices := pending(); len(notices) != 0 {
+		t.Fatalf("verifier returns with different findings opened notice: %+v", notices)
+	}
+
+	// 8d. The same verifier fault on two distinct items (verify-no-verdict) still opens an alert.
+	now = now.Add(2 * time.Minute)
+	appendRefusalTo(s, "run-vnv-a", "item-vnv-a", drain.RefusalVerifyNoVerdict, "verifier wrote no verdict", []string{"verify-no-verdict"}, now)
+	now = now.Add(2 * time.Minute)
+	appendRefusalTo(s, "run-vnv-b", "item-vnv-b", drain.RefusalVerifyNoVerdict, "verifier wrote no verdict", []string{"verify-no-verdict"}, now)
+	vnvNotices := pending()
+	if len(vnvNotices) != 1 || vnvNotices[0].Bundle.Subject != "verify-no-verdict" {
+		t.Fatalf("expected 1 alert on verify-no-verdict, got %+v", vnvNotices)
 	}
 
 	// 9. Events lacking refusal_causes are skipped with no fallback (R-TW-DR2).

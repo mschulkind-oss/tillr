@@ -100,34 +100,45 @@ func RefusalStepsWords(steps map[string]int) string {
 var ConcludingRefusals = []string{RefusalLand, drainmodel.RefusalDeliveryOrder, RefusalGate, RefusalVerifyNotDone, RefusalFence, RefusalNoOp, RefusalNodeOutput, RefusalPlanOutput}
 
 // GateRefusalCauses derives the countable cross-item cause keys for a gate refusal's
-// failing checks (D-TW-RRS1, D-TW-RRS2), keying failing checks with named cases on
-// check plus case and omitting the gate adapter's own wrapper entry (for example,
-// `gate:python3`) when it has no recorded failing checks.
+// failing checks (D-TW-RRS1, D-TW-RRS2, D-TW-RRS5). A named failing case keys on check,
+// case and the first line of its assertion text, so two candidates failing different
+// assertions of one test share no cause; a named case with no assertion text keys nothing,
+// with no fallback to the test or check name. A failing check with no named case keys on
+// the check alone. The gate adapter's own wrapper entry (for example, `gate:python3`) is
+// omitted when it has no recorded failing checks.
 func GateRefusalCauses(checks []EndingCheck) []storelog.RefusalCause {
 	seen := map[string]struct{}{}
+	sawCheck := false
 	for _, check := range checks {
 		found := false
 		for _, failing := range check.Failing {
-			if failing.ID == "" {
+			id := strings.TrimSpace(failing.ID)
+			if id == "" {
 				continue
 			}
-			found = true
+			found, sawCheck = true, true
 			caseFound := false
 			for _, c := range failing.Cases {
-				if c.Name != "" {
-					seen[failing.ID+":"+c.Name] = struct{}{}
-					caseFound = true
+				name := strings.TrimSpace(c.Name)
+				if name == "" {
+					continue
+				}
+				caseFound = true
+				assertion, _, _ := strings.Cut(c.Assertion, "\n")
+				if assertion = strings.TrimSpace(assertion); assertion != "" {
+					seen[id+":"+name+":"+assertion] = struct{}{}
 				}
 			}
 			if !caseFound {
-				seen[failing.ID] = struct{}{}
+				seen[id] = struct{}{}
 			}
 		}
 		if !found && check.CheckID != "" && !strings.HasPrefix(check.CheckID, "gate:") {
+			sawCheck = true
 			seen[check.CheckID] = struct{}{}
 		}
 	}
-	if len(seen) == 0 {
+	if !sawCheck {
 		return []storelog.RefusalCause{{Cause: "gate:no-verdict"}}
 	}
 	ids := make([]string, 0, len(seen))

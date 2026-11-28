@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -169,7 +170,7 @@ type refusalPayload struct {
 }
 
 // computeRefusalCauses derives the countable cross-item cause keys for a `drain.refusal`
-// payload (D-TW-RRS1, D-TW-RRS2). It always returns a non-nil slice so JSON marshaling
+// payload (D-TW-RRS1, D-TW-RRS2, D-TW-RRS5). It always returns a non-nil slice so JSON marshaling
 // writes `"refusal_causes":[]` rather than null when a refusal class is excluded.
 func computeRefusalCauses(p refusalPayload) []RefusalCause {
 	switch p.Step {
@@ -180,18 +181,18 @@ func computeRefusalCauses(p refusalPayload) []RefusalCause {
 			return []RefusalCause{{Cause: "staging:" + reason}}
 		}
 		return []RefusalCause{{Cause: "staging"}}
+	case RefusalVerifyNotDone, ReasonEvalFailed:
+		return verifyReturnCauses(p.VerifyFeedback)
 	case RefusalFence,
 		RefusalLand,
 		RefusalNoOp,
 		RefusalNodeOutput,
 		RefusalVerifyNoVerdict,
-		RefusalVerifyNotDone,
 		RefusalPlanWrong,
 		RefusalDeliveryOrder,
 		RefusalWordsMissing,
 		RefusalWordsAltered,
-		RefusalIdeaNoOutcome,
-		ReasonEvalFailed:
+		RefusalIdeaNoOutcome:
 		return []RefusalCause{{Cause: p.Step}}
 	case RefusalTrunkAlreadyRed,
 		RefusalToolingDefect,
@@ -207,6 +208,36 @@ func computeRefusalCauses(p refusalPayload) []RefusalCause {
 	default:
 		return []RefusalCause{}
 	}
+}
+
+// verifyReturnCauses keys a not-done verifier return (D-TW-RRS5) on the repo-relative
+// files its findings name, line numbers dropped, so two unrelated items' findings share
+// no cause. A return whose findings name no file counts nothing: verifier faults are
+// their own refusal steps (`verify-no-verdict`, `judge-unreadable`), never a finding.
+func verifyReturnCauses(feedback *verifyFeedback) []RefusalCause {
+	out := []RefusalCause{}
+	if feedback == nil {
+		return out
+	}
+	seen := map[string]bool{}
+	for _, rec := range feedback.Findings {
+		for _, finding := range rec.Findings {
+			for _, locator := range finding.Paths {
+				if path := normalizeFindingPath(locator); path != "" {
+					seen[path] = true
+				}
+			}
+		}
+	}
+	paths := make([]string, 0, len(seen))
+	for path := range seen {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	for _, path := range paths {
+		out = append(out, RefusalCause{Cause: "verify-not-done:" + path})
+	}
+	return out
 }
 
 // recordRefusal appends one `drain.refusal`, idempotently by the run it names: a step
