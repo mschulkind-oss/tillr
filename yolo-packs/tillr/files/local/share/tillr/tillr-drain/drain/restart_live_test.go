@@ -277,33 +277,11 @@ func cleanupStoreRuns(t *testing.T, storePath string) {
 		return
 	}
 	if len(seen) > 0 {
-		if _, err := drain.EndRuns(ctx, storePath); err != nil {
+		if skipped, err := drain.EndRuns(ctx, storePath); err != nil || len(skipped) > 0 {
 			forceEndStoreRuns(storePath, here, seen)
 		} else {
 			waitForStoreRunsExit(t, ctx, storePath, here, seen)
 		}
-	}
-	if err := stopStoreNotifyRelays(ctx, storePath, here); err != nil {
-		t.Errorf("stopping notify relays: %v", err)
-	}
-}
-
-func waitAndCleanupStoreRuns(t *testing.T, storePath string) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), hangGuard)
-	defer cancel()
-	here, err := presence.CurrentOwner()
-	if err != nil {
-		t.Errorf("reading current owner to wait for store runs: %v", err)
-		return
-	}
-	seen, err := storeRunOwners(storePath, here)
-	if err != nil {
-		t.Errorf("listing live run processes for cleanup: %v", err)
-		return
-	}
-	if len(seen) > 0 {
-		waitForStoreRunsExit(t, ctx, storePath, here, seen)
 	}
 	if err := stopStoreNotifyRelays(ctx, storePath, here); err != nil {
 		t.Errorf("stopping notify relays: %v", err)

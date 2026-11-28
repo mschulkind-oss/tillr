@@ -155,14 +155,16 @@ printf '{"record_version":1,"kind":"land.record","id":"land-1","producer":{"syst
 	}()
 	t.Cleanup(func() {
 		_ = s.cmd.Process.Signal(syscall.SIGCONT)
-		_ = exec.Command(s.exe, "stop", "--end-runs", "--store", f.store, "--root", f.root).Run()
+		if err := exec.Command(s.exe, "stop", "--end-runs", "--store", f.store, "--root", f.root).Run(); err != nil {
+			_ = s.cmd.Process.Signal(syscall.SIGTERM)
+		}
 		select {
 		case <-waitDone:
 		case <-time.After(hangGuard):
 			_ = s.cmd.Process.Kill()
 			<-waitDone
 		}
-		waitAndCleanupStoreRuns(t, f.store)
+		cleanupStoreRuns(t, f.store)
 	})
 	if blockedSchema {
 		if err := waitForStoreRollAlarm(func() string { return s.output(t) }, exited); err != nil {
@@ -563,5 +565,52 @@ func TestNewLoopFixtureHasNoWallLimit(t *testing.T) {
 	f := newLoopFixture(t, "/bin/true")
 	if got := f.policy.Backends["fixture"].TimeoutSeconds; got != 0 {
 		t.Fatalf("newLoopFixture fixture backend TimeoutSeconds = %d, want 0 (unbounded)", got)
+	}
+}
+
+func TestCleanupStoreRunsEndsUnsignaledRunProcess(t *testing.T) {
+	dir := scratch(t, "cleanup-unsignaled-run")
+	storePath := filepath.Join(dir, "state.db")
+	writeFile(t, storePath, "not-a-sqlite-store")
+	identity, err := presence.StoreIdentity(storePath)
+	if err != nil {
+		t.Fatalf("StoreIdentity: %v", err)
+	}
+	here, err := presence.CurrentOwner()
+	if err != nil {
+		t.Fatalf("CurrentOwner: %v", err)
+	}
+	fifo := filepath.Join(dir, "hold")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatalf("Mkfifo: %v", err)
+	}
+	cmd := exec.Command("/bin/sh", "-c", `exec 3<>"$1"; read -r _ <&3`, "sh", fifo)
+	cmd.Env = append(os.Environ(), "TILLR_RUN_ID=run-unsignaled-1", "TILLR_LOOP_STORE="+identity)
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("starting blocked worker: %v", err)
+	}
+	exited := make(chan error, 1)
+	go func() { exited <- cmd.Wait() }()
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		<-exited
+	})
+	start, err := presence.ProcessStart(cmd.Process.Pid)
+	if err != nil || start == "" {
+		t.Fatalf("ProcessStart(%d) = %q, %v", cmd.Process.Pid, start, err)
+	}
+	owner := presence.Owner{PID: cmd.Process.Pid, Start: start, Domain: here.Domain, UID: here.UID}
+
+	// Simulate a failed `stop --end-runs` where a blocked worker survives teardown
+	// and EndRuns cannot open the store: cleanupStoreRuns must fall back to
+	// forceEndStoreRuns instead of waiting out hangGuard.
+	cleanupStoreRuns(t, storePath)
+
+	dead, err := presence.OwnerDead(&owner, here)
+	if err != nil {
+		t.Fatalf("OwnerDead(%d): %v", owner.PID, err)
+	}
+	if !dead {
+		t.Fatalf("blocked worker %d survived cleanupStoreRuns", owner.PID)
 	}
 }
