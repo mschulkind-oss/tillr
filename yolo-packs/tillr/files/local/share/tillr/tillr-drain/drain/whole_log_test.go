@@ -90,11 +90,10 @@ func TestAPlanApplicationReadsNoWholeLogUnderTheWriteLock(t *testing.T) {
 // A fold that reads only some kinds names them in its selection, and the selection must not
 // drift from the fold: a kind the fold reads that the selection leaves out is silently never
 // seen. For every function in these packages that selects events by kind, the kinds it
-// compares an event's Kind against (switch cases and ==/!= on e.Kind) are exactly the kinds it
-// selects.
+// compares an event's Kind against (switch cases and ==/!= on e.Kind, including in same-package
+// fold helpers passed the selected events slice) are exactly the kinds it selects.
 func TestEveryFoldReadsTheKindsItSelects(t *testing.T) {
 	fset := token.NewFileSet()
-	var files []*ast.File
 	dirs := []string{".", "../faults", "../preserved", "../workflow", "../remotesync", "../fixer", "../heavyrun", "../../tillr-run/run"}
 	if entries, err := os.ReadDir("../internal"); err == nil {
 		for _, entry := range entries {
@@ -103,41 +102,147 @@ func TestEveryFoldReadsTheKindsItSelects(t *testing.T) {
 			}
 		}
 	}
+	checked := 0
 	for _, dir := range dirs {
 		pkgs, err := parser.ParseDir(fset, dir, func(info fs.FileInfo) bool { return !strings.HasSuffix(info.Name(), "_test.go") }, 0)
 		if err != nil {
 			t.Fatal(err)
 		}
 		for _, pkg := range pkgs {
+			var pkgFiles []*ast.File
 			for _, file := range pkg.Files {
-				files = append(files, file)
+				pkgFiles = append(pkgFiles, file)
+			}
+			n, mismatches := checkFoldKindSelections(fset, pkgFiles)
+			checked += n
+			for _, msg := range mismatches {
+				t.Error(msg)
 			}
 		}
 	}
+	if checked < 10 {
+		t.Fatalf("checked %d selecting folds; the parse missed the ones this guards", checked)
+	}
+}
+
+func checkFoldKindSelections(fset *token.FileSet, files []*ast.File) (int, []string) {
 	source := func(e ast.Expr) string {
 		var b strings.Builder
 		_ = printer.Fprint(&b, fset, e)
 		return b.String()
 	}
 	lists := map[string][]ast.Expr{} // package-level []string vars
+	funcs := map[string]*ast.FuncDecl{}
 	for _, file := range files {
 		for _, decl := range file.Decls {
-			gen, ok := decl.(*ast.GenDecl)
-			if !ok {
-				continue
-			}
-			for _, spec := range gen.Specs {
-				value, ok := spec.(*ast.ValueSpec)
-				if !ok || len(value.Values) != 1 {
-					continue
+			switch decl := decl.(type) {
+			case *ast.GenDecl:
+				for _, spec := range decl.Specs {
+					value, ok := spec.(*ast.ValueSpec)
+					if !ok || len(value.Values) != 1 {
+						continue
+					}
+					if lit, ok := value.Values[0].(*ast.CompositeLit); ok && len(value.Names) == 1 {
+						lists[value.Names[0].Name] = lit.Elts
+					}
 				}
-				if lit, ok := value.Values[0].(*ast.CompositeLit); ok && len(value.Names) == 1 {
-					lists[value.Names[0].Name] = lit.Elts
+			case *ast.FuncDecl:
+				if decl.Recv == nil && decl.Body != nil {
+					funcs[decl.Name.Name] = decl
 				}
 			}
 		}
 	}
+	isEventSelectCall := func(expr ast.Expr) (*ast.CallExpr, bool) {
+		call, ok := expr.(*ast.CallExpr)
+		if !ok || len(call.Args) < 2 {
+			return nil, false
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || (sel.Sel.Name != "EventsOfKind" && sel.Sel.Name != "EventsSelected") {
+			return nil, false
+		}
+		return call, true
+	}
+	paramNameAt := func(params *ast.FieldList, idx int) string {
+		if params == nil || idx < 0 {
+			return ""
+		}
+		pos := 0
+		for _, field := range params.List {
+			if len(field.Names) == 0 {
+				if pos == idx {
+					return ""
+				}
+				pos++
+				continue
+			}
+			for _, name := range field.Names {
+				if pos == idx {
+					return name.Name
+				}
+				pos++
+			}
+		}
+		return ""
+	}
+	collectReadKinds := func(body *ast.BlockStmt, read map[string]bool) {
+		ast.Inspect(body, func(n ast.Node) bool {
+			switch n := n.(type) {
+			case *ast.SwitchStmt:
+				if isEventKind(n.Tag) {
+					for _, stmt := range n.Body.List {
+						for _, kind := range stmt.(*ast.CaseClause).List {
+							read[source(kind)] = true
+						}
+					}
+				}
+			case *ast.BinaryExpr:
+				if n.Op == token.EQL || n.Op == token.NEQ {
+					if isEventKind(n.X) {
+						read[source(n.Y)] = true
+					} else if isEventKind(n.Y) {
+						read[source(n.X)] = true
+					}
+				}
+			}
+			return true
+		})
+	}
+	var followHelper func(fn *ast.FuncDecl, eventsParam string, read map[string]bool, visited map[string]bool)
+	followHelper = func(fn *ast.FuncDecl, eventsParam string, read map[string]bool, visited map[string]bool) {
+		if fn == nil || fn.Body == nil || visited[fn.Name.Name] {
+			return
+		}
+		visited[fn.Name.Name] = true
+		collectReadKinds(fn.Body, read)
+		if eventsParam == "" {
+			return
+		}
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			id, ok := call.Fun.(*ast.Ident)
+			if !ok {
+				return true
+			}
+			callee := funcs[id.Name]
+			if callee == nil {
+				return true
+			}
+			for i, arg := range call.Args {
+				if argID, ok := arg.(*ast.Ident); ok && argID.Name == eventsParam {
+					followHelper(callee, paramNameAt(callee.Type.Params, i), read, visited)
+				}
+			}
+			return true
+		})
+	}
+
 	checked := 0
+	var mismatches []string
 	for _, file := range files {
 		for _, decl := range file.Decls {
 			fn, ok := decl.(*ast.FuncDecl)
@@ -145,48 +250,45 @@ func TestEveryFoldReadsTheKindsItSelects(t *testing.T) {
 				continue
 			}
 			selected, read := map[string]bool{}, map[string]bool{}
+			eventVars := map[string]bool{}
 			selects := false
 			ast.Inspect(fn.Body, func(n ast.Node) bool {
 				switch n := n.(type) {
-				case *ast.CallExpr:
-					sel, ok := n.Fun.(*ast.SelectorExpr)
-					if !ok || (sel.Sel.Name != "EventsOfKind" && sel.Sel.Name != "EventsSelected") || len(n.Args) < 2 {
-						return true
-					}
-					selects = true
-					for _, arg := range n.Args[1:] {
-						if lit, ok := arg.(*ast.CompositeLit); ok {
-							for _, elt := range lit.Elts {
-								if kv, ok := elt.(*ast.KeyValueExpr); ok && source(kv.Key) == "Kinds" {
-									for _, kind := range kv.Value.(*ast.CompositeLit).Elts {
-										selected[source(kind)] = true
-									}
+				case *ast.AssignStmt:
+					for i, rhs := range n.Rhs {
+						if _, ok := isEventSelectCall(rhs); ok {
+							lhsIdx := i
+							if len(n.Rhs) == 1 {
+								lhsIdx = 0
+							}
+							if lhsIdx < len(n.Lhs) {
+								if id, ok := n.Lhs[lhsIdx].(*ast.Ident); ok && id.Name != "_" {
+									eventVars[id.Name] = true
 								}
 							}
-							continue
-						}
-						if id, ok := arg.(*ast.Ident); ok && n.Ellipsis.IsValid() {
-							for _, kind := range lists[id.Name] {
-								selected[source(kind)] = true
-							}
-							continue
-						}
-						selected[source(arg)] = true
-					}
-				case *ast.SwitchStmt:
-					if isEventKind(n.Tag) {
-						for _, stmt := range n.Body.List {
-							for _, kind := range stmt.(*ast.CaseClause).List {
-								read[source(kind)] = true
-							}
 						}
 					}
-				case *ast.BinaryExpr:
-					if n.Op == token.EQL || n.Op == token.NEQ {
-						if isEventKind(n.X) {
-							read[source(n.Y)] = true
-						} else if isEventKind(n.Y) {
-							read[source(n.X)] = true
+				case *ast.CallExpr:
+					if _, ok := isEventSelectCall(n); ok {
+						selects = true
+						for _, arg := range n.Args[1:] {
+							if lit, ok := arg.(*ast.CompositeLit); ok {
+								for _, elt := range lit.Elts {
+									if kv, ok := elt.(*ast.KeyValueExpr); ok && source(kv.Key) == "Kinds" {
+										for _, kind := range kv.Value.(*ast.CompositeLit).Elts {
+											selected[source(kind)] = true
+										}
+									}
+								}
+								continue
+							}
+							if id, ok := arg.(*ast.Ident); ok && n.Ellipsis.IsValid() {
+								for _, kind := range lists[id.Name] {
+									selected[source(kind)] = true
+								}
+								continue
+							}
+							selected[source(arg)] = true
 						}
 					}
 				}
@@ -196,21 +298,118 @@ func TestEveryFoldReadsTheKindsItSelects(t *testing.T) {
 				continue
 			}
 			checked++
+			collectReadKinds(fn.Body, read)
+			visited := map[string]bool{fn.Name.Name: true}
+			ast.Inspect(fn.Body, func(n ast.Node) bool {
+				call, ok := n.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				id, ok := call.Fun.(*ast.Ident)
+				if !ok {
+					return true
+				}
+				callee := funcs[id.Name]
+				if callee == nil {
+					return true
+				}
+				for i, arg := range call.Args {
+					if argID, ok := arg.(*ast.Ident); ok && eventVars[argID.Name] {
+						followHelper(callee, paramNameAt(callee.Type.Params, i), read, visited)
+					} else if _, ok := isEventSelectCall(arg); ok {
+						followHelper(callee, paramNameAt(callee.Type.Params, i), read, visited)
+					}
+				}
+				return true
+			})
 			for kind := range read {
 				if !selected[kind] {
-					t.Errorf("%s reads %s but does not select it", fn.Name.Name, kind)
+					mismatches = append(mismatches, fmt.Sprintf("%s reads %s but does not select it", fn.Name.Name, kind))
 				}
 			}
 			for kind := range selected {
 				if !read[kind] {
-					t.Errorf("%s selects %s but never reads it", fn.Name.Name, kind)
+					mismatches = append(mismatches, fmt.Sprintf("%s selects %s but never reads it", fn.Name.Name, kind))
 				}
 			}
 		}
 	}
-	if checked < 10 {
-		t.Fatalf("checked %d selecting folds; the parse missed the ones this guards", checked)
+	return checked, mismatches
+}
+
+func TestEveryFoldReadsTheKindsItSelectsFollowsFoldHelpers(t *testing.T) {
+	checkSrc := func(src string) (int, []string) {
+		t.Helper()
+		fset := token.NewFileSet()
+		file, err := parser.ParseFile(fset, "sample.go", src, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return checkFoldKindSelections(fset, []*ast.File{file})
 	}
+
+	t.Run("matching helper passes and unrelated helper is ignored", func(t *testing.T) {
+		checked, mismatches := checkSrc(`package sample
+func readA(r reader) {
+	events, _ := r.EventsOfKind(0, KindA, KindB)
+	foldA(r, events)
+	unrelated(r)
+}
+func foldA(r reader, events []event) {
+	for _, e := range events {
+		switch e.Kind {
+		case KindA, KindB:
+		}
+	}
+}
+func unrelated(r reader) {
+	for _, e := range other {
+		if e.Kind == KindC {
+		}
+	}
+}
+`)
+		if checked != 1 || len(mismatches) != 0 {
+			t.Fatalf("got checked=%d mismatches=%v, want 1 and none", checked, mismatches)
+		}
+	})
+
+	t.Run("helper missing a selected kind fails", func(t *testing.T) {
+		_, mismatches := checkSrc(`package sample
+func readA(r reader) {
+	events, _ := r.EventsOfKind(0, KindA, KindB)
+	foldA(events)
+}
+func foldA(events []event) {
+	for _, e := range events {
+		if e.Kind == KindA {
+		}
+	}
+}
+`)
+		if len(mismatches) != 1 || mismatches[0] != "readA selects KindB but never reads it" {
+			t.Fatalf("got mismatches=%v, want unread KindB", mismatches)
+		}
+	})
+
+	t.Run("helper reading an unselected kind fails", func(t *testing.T) {
+		_, mismatches := checkSrc(`package sample
+func readA(r reader) {
+	events, _ := r.EventsOfKind(0, KindA)
+	foldA(events)
+}
+func foldA(events []event) {
+	for _, e := range events {
+		switch e.Kind {
+		case KindA, KindB:
+		}
+	}
+}
+`)
+		if len(mismatches) != 1 || mismatches[0] != "readA reads KindB but does not select it" {
+			t.Fatalf("got mismatches=%v, want unselected KindB", mismatches)
+		}
+	})
 }
 
 // isEventKind answers whether x is e.Kind, the kind of the event a fold's loop is reading.
