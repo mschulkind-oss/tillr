@@ -271,6 +271,9 @@ func (p Policy) Check() error {
 			return err
 		}
 	}
+	if err := CheckQuotaGroups(&p); err != nil {
+		return err
+	}
 	for itemID, name := range p.Overrides {
 		if _, ok := p.Backends[name]; !ok {
 			return drainmodel.Usagef("the policy overrides item %q to backend %q, which is not one of its backends: want one of %v",

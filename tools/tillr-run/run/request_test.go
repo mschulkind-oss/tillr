@@ -269,3 +269,21 @@ func TestRouteReadsTheModelTheAdapterWasHanded(t *testing.T) {
 		}
 	}
 }
+
+func TestQuotaGroupValidation(t *testing.T) {
+	base := run.Backend{Adapter: "/adapter/first", Model: "model-x"}
+	for _, valid := range []string{"", "sub-a", "pool_1", "a", "0pool-2_z"} {
+		b := base
+		b.QuotaGroup = valid
+		if got := b.Missing(); got != "" {
+			t.Fatalf("quota_group %q rejected: %s", valid, got)
+		}
+	}
+	for _, invalid := range []string{"Sub-A", "-leading", "_leading", "has space", "a.b", "a/b"} {
+		b := base
+		b.QuotaGroup = invalid
+		if got := b.Missing(); !strings.Contains(got, "quota_group") {
+			t.Fatalf("quota_group %q accepted or wrong error: %q", invalid, got)
+		}
+	}
+}

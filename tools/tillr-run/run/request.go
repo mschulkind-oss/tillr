@@ -45,8 +45,11 @@ import (
 // know, so a row naming them for such an adapter fails at the adapter's preflight.
 type Backend struct {
 	// Quota is an optional argv that reads quota without starting a model session.
+	// QuotaGroup is an optional pool name ([a-z0-9][a-z0-9_-]*) grouping backends that
+	// share one subscription account across adapters or commands.
 	// Reserve is the fraction of every reported window left for the owner (default 0).
 	Quota          []string `json:"quota,omitempty"`
+	QuotaGroup     string   `json:"quota_group,omitempty"`
 	Reserve        float64  `json:"reserve,omitempty"`
 	Adapter        string   `json:"adapter"`
 	Model          string   `json:"model,omitempty"`
@@ -99,6 +102,9 @@ func (b Backend) Missing() string {
 	if math.IsNaN(b.Reserve) || math.IsInf(b.Reserve, 0) || b.Reserve < 0 || b.Reserve > 1 {
 		return "names reserve outside [0,1]: reserve is a fraction of each quota window"
 	}
+	if b.QuotaGroup != "" && !ValidQuotaGroupName(b.QuotaGroup) {
+		return "names invalid quota_group " + strconv.Quote(b.QuotaGroup) + ": quota_group must match [a-z0-9][a-z0-9_-]*"
+	}
 	for _, arg := range b.Quota {
 		if arg == "" {
 			return "names an empty quota argument: quota is a nonempty command argv"
@@ -119,6 +125,28 @@ func (b Backend) Missing() string {
 		}
 	}
 	return ""
+}
+
+// ValidQuotaGroupName reports whether name matches [a-z0-9][a-z0-9_-]*.
+func ValidQuotaGroupName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		isLower := c >= 'a' && c <= 'z'
+		isDigit := c >= '0' && c <= '9'
+		if i == 0 {
+			if !isLower && !isDigit {
+				return false
+			}
+			continue
+		}
+		if !isLower && !isDigit && c != '_' && c != '-' {
+			return false
+		}
+	}
+	return true
 }
 
 // command is the adapter's argv as staging hands it over: the adapter program, the backend

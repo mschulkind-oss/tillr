@@ -56,7 +56,7 @@ func RefusedWindow(rec run.Record) (kind string, fraction float64, reset time.Ti
 	return kind, fraction, time.Unix(seconds, 0).UTC(), true
 }
 
-func RecordBackendWindow(ctx context.Context, storePath string, now func() time.Time, rec run.Record, pausePeers func(*store.Tx, string, string) error) error {
+func RecordBackendWindow(ctx context.Context, storePath string, now func() time.Time, rec run.Record, policies []*Policy, pausePeers func(*store.Tx, string, string) error) error {
 	if rec.Backend == "command" {
 		return nil
 	}
@@ -64,6 +64,7 @@ func RecordBackendWindow(ctx context.Context, storePath string, now func() time.
 	if !ok || !reset.After(now()) {
 		return nil
 	}
+	peers := QuotaPoolPeers(rec.Backend, policies...)
 	s, err := store.Open(ctx, storePath, true)
 	if err != nil {
 		return err
@@ -79,15 +80,18 @@ func RecordBackendWindow(ctx context.Context, storePath string, now func() time.
 			))`, rec.Backend, BackendQuotaReopenedKind, rec.RunID, run.FinishKind).Scan(&reopened); err != nil || reopened {
 			return err
 		}
-		_, err := tx.Exec(`INSERT INTO backend_windows (backend,kind,fraction,status,reset_at,run_id)
+		for _, peer := range peers {
+			if _, err := tx.Exec(`INSERT INTO backend_windows (backend,kind,fraction,status,reset_at,run_id)
    VALUES (?,?,?,'rejected',?,?) ON CONFLICT(backend) DO UPDATE SET
    kind=excluded.kind,fraction=excluded.fraction,status=excluded.status,reset_at=excluded.reset_at,run_id=excluded.run_id
-   WHERE excluded.reset_at >= backend_windows.reset_at`, rec.Backend, kind, fraction, reset.UnixMilli(), rec.RunID)
-		if err != nil {
-			return err
-		}
-		if pausePeers != nil {
-			return pausePeers(tx, rec.Backend, rec.RunID)
+   WHERE excluded.reset_at >= backend_windows.reset_at`, peer, kind, fraction, reset.UnixMilli(), rec.RunID); err != nil {
+				return err
+			}
+			if pausePeers != nil {
+				if err := pausePeers(tx, peer, rec.RunID); err != nil {
+					return err
+				}
+			}
 		}
 		return nil
 	})

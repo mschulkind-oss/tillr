@@ -472,6 +472,8 @@ type LoopConfig struct {
 	PolicyProfile     string
 	PolicyProfiles    []string
 	PolicyProfileRefs []string
+	// ProfilePolicies optionally supplies preloaded policies for the ordered profile list.
+	ProfilePolicies []*Policy
 	// LanesSource describes where the initial ordinary lane count came from when not from CLI or saved target.
 	LanesSource string
 	// StartOptions records every resolved loop start option and its source for PolicyState.
@@ -711,11 +713,12 @@ type Loop struct {
 	//
 	// It is written by staging and read by passPlans on the pass goroutine, so it
 	// needs no lock.
-	held           map[string]heldItem
-	quotaMu        sync.Mutex
-	policyMu       sync.RWMutex
-	policyState    PolicyState
-	policyRecorded bool
+	held            map[string]heldItem
+	quotaMu         sync.Mutex
+	policyMu        sync.RWMutex
+	policyState     PolicyState
+	policyRecorded  bool
+	profilePolicies []*Policy
 	// active owns only completion triggers, never terminal outcomes. Outcomes are
 	// reconstructed from the store by the next pass or a replacement Loop.
 	examinations  sync.WaitGroup
@@ -1000,16 +1003,23 @@ func NewLoop(cfg LoopConfig) (*Loop, error) {
 		if err != nil {
 			return nil, err
 		}
+		loaded := []*Policy{p}
 		for i := 1; i < len(cfg.PolicyProfileRefs); i++ {
-			if _, _, _, err := readPolicyContent(cfg.PolicyProfileRefs[i]); err != nil {
+			other, _, _, err := readPolicyContent(cfg.PolicyProfileRefs[i])
+			if err != nil {
 				name := cfg.PolicyProfileRefs[i]
 				if i < len(cfg.PolicyProfiles) {
 					name = cfg.PolicyProfiles[i]
 				}
 				return nil, Usagef("profile %q (index %d of %d): %v", name, i, len(cfg.PolicyProfileRefs), err)
 			}
+			loaded = append(loaded, other)
+		}
+		if err := CheckQuotaGroups(loaded...); err != nil {
+			return nil, err
 		}
 		l.cfg.Policy = p
+		l.profilePolicies = loaded
 		activeProfile := cfg.PolicyProfile
 		if activeProfile == "" && len(cfg.PolicyProfiles) > 0 {
 			activeProfile = cfg.PolicyProfiles[0]
@@ -1025,11 +1035,28 @@ func NewLoop(cfg LoopConfig) (*Loop, error) {
 			Content:      string(raw),
 			StartOptions: append([]StartOption(nil), cfg.StartOptions...),
 		}
+	} else if len(cfg.ProfilePolicies) > 0 {
+		if err := CheckQuotaGroups(cfg.ProfilePolicies...); err != nil {
+			return nil, err
+		}
+		l.profilePolicies = append([]*Policy(nil), cfg.ProfilePolicies...)
+		if l.cfg.Policy == nil {
+			l.cfg.Policy = l.profilePolicies[0]
+		}
 	}
 	if l.cfg.Policy != nil && l.cfg.Policy.Root == "" && cfg.Root != "" {
 		policyCopy := *l.cfg.Policy
 		policyCopy.Root = cfg.Root
 		l.cfg.Policy = &policyCopy
+	}
+	if cfg.Root != "" {
+		for i, p := range l.profilePolicies {
+			if p != nil && p.Root == "" {
+				policyCopy := *p
+				policyCopy.Root = cfg.Root
+				l.profilePolicies[i] = &policyCopy
+			}
+		}
 	}
 	for _, diagnostic := range WorkflowDefaultDiagnostics(cfg.Root, cfg.WorkflowDefaults, l.cfg.Policy) {
 		l.reportf("workflow-invalid: %s\n", diagnostic)

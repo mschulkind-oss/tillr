@@ -220,3 +220,24 @@ func (p Policy) Description() string {
 	}
 	return out.String()
 }
+
+// AllPolicies returns the ordered list of profile policies with active
+// overriding the entry at activeIdx, or a single-element slice holding active
+// when no profile list is configured.
+func AllPolicies(active *Policy, profiles []*Policy, activeIdx int) ([]*Policy, int) {
+	if len(profiles) == 0 {
+		if active == nil {
+			return nil, 0
+		}
+		return []*Policy{active}, 0
+	}
+	out := make([]*Policy, len(profiles))
+	copy(out, profiles)
+	if activeIdx < 0 || activeIdx >= len(out) {
+		activeIdx = 0
+	}
+	if active != nil {
+		out[activeIdx] = active
+	}
+	return out, activeIdx
+}

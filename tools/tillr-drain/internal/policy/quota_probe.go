@@ -8,6 +8,8 @@ import (
 	"io"
 	"math"
 	"os/exec"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -100,13 +102,34 @@ func init() {
 }
 
 // RefreshQuotas performs I/O outside transactions, then records every success or
-// error. Failed readings close only that backend, never silently admit work.
+// error. Failed readings close only that pool's backends, never silently admit
+// work. It retains and probes quota rows across every profile in policies,
+// running each unique quota pool's command once and fanning the reading out to
+// every backend in that pool with each backend's own reserve.
 // The mutex serializes pass and examination/failover probes in this process.
-func RefreshQuotas(ctx context.Context, root, storePath string, mu *sync.Mutex, p *Policy, now func() time.Time, reportf func(string, ...any)) error {
+func RefreshQuotas(ctx context.Context, root, storePath string, mu *sync.Mutex, policies []*Policy, activeIndex int, now func() time.Time, reportf func(string, ...any)) error {
 	mu.Lock()
 	defer mu.Unlock()
-	if p == nil {
+	ordered := make([]*Policy, 0, len(policies))
+	if activeIndex >= 0 && activeIndex < len(policies) && policies[activeIndex] != nil {
+		ordered = append(ordered, policies[activeIndex])
+	}
+	for i, p := range policies {
+		if i == activeIndex || p == nil {
+			continue
+		}
+		ordered = append(ordered, p)
+	}
+	if len(ordered) == 0 {
 		return nil
+	}
+	backends := map[string]Backend{}
+	for _, p := range ordered {
+		for _, name := range BackendNames(p.Backends) {
+			if _, exists := backends[name]; !exists {
+				backends[name] = p.Backends[name]
+			}
+		}
 	}
 	reader, err := store.OpenRead(ctx, storePath)
 	if err != nil {
@@ -122,25 +145,58 @@ func RefreshQuotas(ctx context.Context, root, storePath string, mu *sync.Mutex, 
 	remove := []string{}
 	for _, q := range previous {
 		byName[q.Backend] = q
-		if b, ok := p.Backends[q.Backend]; !ok || len(b.Quota) == 0 {
+		if b, ok := backends[q.Backend]; !ok || len(b.Quota) == 0 {
 			remove = append(remove, q.Backend)
 		}
 	}
-	pending := []string{}
-	reserves := map[string]float64{}
-	for _, name := range BackendNames(p.Backends) {
-		b := p.Backends[name]
+	type quotaPool struct {
+		key     string
+		command string
+		quota   []string
+		members []string
+	}
+	poolsByKey := map[string]*quotaPool{}
+	poolKeys := []string{}
+	for _, name := range BackendNames(backends) {
+		b := backends[name]
 		if len(b.Quota) == 0 {
 			continue
 		}
-		encoded, _ := json.Marshal(b.Quota)
-		if old, ok := byName[name]; ok && QuotaFresh(old, string(encoded), now().UTC()) {
-			if old.Reserve != b.Reserve {
-				reserves[name] = b.Reserve
+		key := QuotaPoolKey(name, b)
+		pool, ok := poolsByKey[key]
+		if !ok {
+			pool = &quotaPool{
+				key:     key,
+				command: QuotaCommandKey(b.Quota),
+				quota:   b.Quota,
 			}
-		} else {
-			pending = append(pending, name)
+			poolsByKey[key] = pool
+			poolKeys = append(poolKeys, key)
 		}
+		pool.members = append(pool.members, name)
+	}
+	sort.Strings(poolKeys)
+	pending := []*quotaPool{}
+	reserves := map[string]float64{}
+	at := now().UTC()
+	for _, key := range poolKeys {
+		pool := poolsByKey[key]
+		allFresh := true
+		for _, name := range pool.members {
+			if old, ok := byName[name]; !ok || !QuotaFresh(old, pool.command, at) {
+				allFresh = false
+				break
+			}
+		}
+		if allFresh {
+			for _, name := range pool.members {
+				if old := byName[name]; old.Reserve != backends[name].Reserve {
+					reserves[name] = backends[name].Reserve
+				}
+			}
+			continue
+		}
+		pending = append(pending, pool)
 	}
 	// Cached and unconfigured backends never acquire the store's writer lock.
 	if len(remove)+len(reserves)+len(pending) == 0 {
@@ -175,12 +231,9 @@ func RefreshQuotas(ctx context.Context, root, storePath string, mu *sync.Mutex, 
 			return err
 		}
 	}
-	for _, name := range pending {
-		b := p.Backends[name]
-		encoded, _ := json.Marshal(b.Quota)
-		command := string(encoded)
+	for _, pool := range pending {
 		probeCtx, cancel := context.WithTimeout(ctx, quotaCommandTimeout)
-		cmd := exec.CommandContext(probeCtx, b.Quota[0], b.Quota[1:]...)
+		cmd := exec.CommandContext(probeCtx, pool.quota[0], pool.quota[1:]...)
 		cmd.Dir = root
 		var output quotaBuffer
 		cmd.Stdout = &output
@@ -191,25 +244,33 @@ func RefreshQuotas(ctx context.Context, root, storePath string, mu *sync.Mutex, 
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		q := QuotaStatus{Backend: name, Command: command, ObservedAt: now().UTC(), Reserve: b.Reserve, Windows: []QuotaWindow{}}
+		observedAt := now().UTC()
+		windows := []QuotaWindow{}
+		errMsg := ""
 		if err == nil {
-			q.Windows, err = DecodeQuota(output.Bytes(), q.ObservedAt)
+			windows, err = DecodeQuota(output.Bytes(), observedAt)
 		}
 		if err != nil {
-			q.Error = fmt.Sprintf("quota command failed: %v", err)
-			q.Windows = []QuotaWindow{}
-			reportf("loop: backend %s: %s\n", name, q.Error)
+			errMsg = fmt.Sprintf("quota command failed: %v", err)
+			windows = []QuotaWindow{}
+			reportf("loop: backend %s: %s\n", strings.Join(pool.members, ","), errMsg)
 		}
-		raw, _ := json.Marshal(q.Windows)
+		raw, _ := json.Marshal(windows)
 		if err := s.WriteTx(ctx, func(tx *store.Tx) error {
-			args := []any{name, command, q.ObservedAt.UnixMilli(), b.Reserve, string(raw), q.Error}
-			if _, err := tx.Exec(`INSERT INTO backend_quota_readings(backend,command,observed_at,reserve,windows,error) VALUES(?,?,?,?,?,?)`, args...); err != nil {
-				return err
+			for _, name := range pool.members {
+				reserve := backends[name].Reserve
+				args := []any{name, pool.command, observedAt.UnixMilli(), reserve, string(raw), errMsg}
+				if _, err := tx.Exec(`INSERT INTO backend_quota_readings(backend,command,observed_at,reserve,windows,error) VALUES(?,?,?,?,?,?)`, args...); err != nil {
+					return err
+				}
+				if _, err := tx.Exec(`INSERT INTO backend_quota(backend,command,observed_at,reserve,windows,error) VALUES(?,?,?,?,?,?) ON CONFLICT(backend) DO UPDATE SET command=excluded.command,observed_at=excluded.observed_at,reserve=excluded.reserve,windows=excluded.windows,error=excluded.error WHERE excluded.observed_at>=backend_quota.observed_at`, args...); err != nil {
+					return err
+				}
+				if err := runhistory.AppendEffectOn(tx, QuotaUpdatedKind, "backend", name, struct{}{}, observedAt); err != nil {
+					return err
+				}
 			}
-			if _, err := tx.Exec(`INSERT INTO backend_quota(backend,command,observed_at,reserve,windows,error) VALUES(?,?,?,?,?,?) ON CONFLICT(backend) DO UPDATE SET command=excluded.command,observed_at=excluded.observed_at,reserve=excluded.reserve,windows=excluded.windows,error=excluded.error WHERE excluded.observed_at>=backend_quota.observed_at`, args...); err != nil {
-				return err
-			}
-			return runhistory.AppendEffectOn(tx, QuotaUpdatedKind, "backend", name, struct{}{}, q.ObservedAt)
+			return nil
 		}); err != nil {
 			return err
 		}

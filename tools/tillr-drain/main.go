@@ -1319,6 +1319,7 @@ func loopFace(args []string) int {
 			}
 			return err
 		}
+		loadedPolicies := make([]*drain.Policy, 0, len(resolvedProfileRefs))
 		for i, ref := range resolvedProfileRefs {
 			p, err := readPolicy(ref)
 			if err != nil {
@@ -1334,9 +1335,13 @@ func loopFace(args []string) int {
 			if fromInstall {
 				adaptersFromInstall = true
 			}
+			loadedPolicies = append(loadedPolicies, p)
 			if i == 0 {
 				policy = p
 			}
+		}
+		if err := drain.CheckQuotaGroups(loadedPolicies...); err != nil {
+			return failStartup(err)
 		}
 	} else if *policyPath != "" {
 		var err error

@@ -85,6 +85,16 @@ func (l *Loop) currentPolicy() *Policy {
 	return l.cfg.Policy
 }
 
+func (l *Loop) allPolicies() ([]*Policy, int) {
+	l.policyMu.RLock()
+	defer l.policyMu.RUnlock()
+	return policy.AllPolicies(l.cfg.Policy, l.profilePolicies, l.policyState.ProfileIndex)
+}
+
+func CheckQuotaGroups(policies ...*Policy) error {
+	return policy.CheckQuotaGroups(policies...)
+}
+
 func (l *Loop) refreshPolicy() error {
 	return policy.RefreshPolicy(l.cfg.Root, l.cfg.PolicyRef, l.cfg.Now, &l.policyMu, &l.cfg.Policy, &l.policyState, &l.policyRecorded, l.reportf)
 }
@@ -108,7 +118,8 @@ func refusedWindow(rec run.Record) (string, float64, time.Time, bool) {
 	return policy.RefusedWindow(rec)
 }
 func (l *Loop) recordBackendWindow(ctx context.Context, rec run.Record) error {
-	return policy.RecordBackendWindow(ctx, l.cfg.Store, l.cfg.Now, rec, l.pauseQuotaPeers)
+	policies, _ := l.allPolicies()
+	return policy.RecordBackendWindow(ctx, l.cfg.Store, l.cfg.Now, rec, policies, l.pauseQuotaPeers)
 }
 func reopenBackendWindow(tx *store.Tx, backend string, probeSeq int64, at time.Time) error {
 	return policy.ReopenBackendWindow(tx, backend, probeSeq, at)
@@ -164,7 +175,8 @@ func quotaFresh(q QuotaStatus, command string, at time.Time) bool {
 	return policy.QuotaFresh(q, command, at)
 }
 func (l *Loop) refreshQuotas(ctx context.Context) error {
-	return policy.RefreshQuotas(ctx, l.cfg.Root, l.cfg.Store, &l.quotaMu, l.currentPolicy(), l.cfg.Now, l.reportf)
+	policies, activeIdx := l.allPolicies()
+	return policy.RefreshQuotas(ctx, l.cfg.Root, l.cfg.Store, &l.quotaMu, policies, activeIdx, l.cfg.Now, l.reportf)
 }
 func readQuotaOnlyShut(r *store.Reader, at time.Time, p *Policy) (map[string]bool, error) {
 	return policy.ReadQuotaOnlyShut(r, at, p)
