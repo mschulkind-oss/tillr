@@ -256,3 +256,36 @@ func AllPolicies(active *Policy, profiles []*Policy, activeIdx int) ([]*Policy, 
 	}
 	return out, activeIdx
 }
+
+// WritePolicyState records a policy state the loop has put in force, with one
+// history line, the same way RefreshPolicy does for a reload. A profile switch
+// uses it: the state names the new profile's file and content.
+func WritePolicyState(root string, state PolicyState, change PolicyChange) error {
+	if err := os.MkdirAll(drainmodel.LoopDir(root), 0o755); err != nil {
+		return drainmodel.Externalf("recording policy: %v", err)
+	}
+	history, err := os.OpenFile(filepath.Join(drainmodel.LoopDir(root), "backend-policy-changes.jsonl"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return drainmodel.Externalf("recording policy change: %v", err)
+	}
+	encodeErr := json.NewEncoder(history).Encode(change)
+	closeErr := history.Close()
+	if encodeErr != nil {
+		return drainmodel.Externalf("recording policy change: %v", encodeErr)
+	}
+	if closeErr != nil {
+		return drainmodel.Externalf("recording policy change: %v", closeErr)
+	}
+	body, err := json.Marshal(state)
+	if err != nil {
+		return drainmodel.Internalf("encoding policy in force: %v", err)
+	}
+	path := PolicyStateFile(root)
+	if err := os.WriteFile(path+".new", body, 0o644); err != nil {
+		return drainmodel.Externalf("recording policy in force: %v", err)
+	}
+	if err := os.Rename(path+".new", path); err != nil {
+		return drainmodel.Externalf("recording policy in force: %v", err)
+	}
+	return nil
+}

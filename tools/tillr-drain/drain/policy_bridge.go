@@ -97,7 +97,7 @@ func CheckQuotaGroups(policies ...*Policy) error {
 }
 
 func (l *Loop) refreshPolicy() error {
-	return policy.RefreshPolicy(l.cfg.Root, l.cfg.PolicyRef, l.cfg.Now, &l.policyMu, &l.cfg.Policy, &l.policyState, &l.policyRecorded, l.reportf)
+	return policy.RefreshPolicy(l.cfg.Root, policy.ActivePolicyRef(&l.policyMu, &l.policyState, l.cfg.PolicyRef), l.cfg.Now, &l.policyMu, &l.cfg.Policy, &l.policyState, &l.policyRecorded, l.reportf)
 }
 
 // Forwarding wrappers for seat_escalation.go.
@@ -120,7 +120,10 @@ func refusedWindow(rec run.Record) (string, float64, time.Time, bool) {
 }
 func (l *Loop) recordBackendWindow(ctx context.Context, rec run.Record) error {
 	policies, _ := l.allPolicies()
-	return policy.RecordBackendWindow(ctx, l.cfg.Store, l.cfg.Now, rec, policies, l.pauseQuotaPeers)
+	if err := policy.RecordBackendWindow(ctx, l.cfg.Store, l.cfg.Now, rec, policies, l.pauseQuotaPeers); err != nil {
+		return err
+	}
+	return l.selectProfile(ctx)
 }
 func reopenBackendWindow(tx *store.Tx, backend string, probeSeq int64, at time.Time) error {
 	return policy.ReopenBackendWindow(tx, backend, probeSeq, at)
@@ -177,7 +180,10 @@ func quotaFresh(q QuotaStatus, command string, at time.Time) bool {
 }
 func (l *Loop) refreshQuotas(ctx context.Context) error {
 	policies, activeIdx := l.allPolicies()
-	return policy.RefreshQuotas(ctx, l.cfg.Root, l.cfg.Store, &l.quotaMu, policies, activeIdx, l.cfg.Now, l.reportf)
+	if err := policy.RefreshQuotas(ctx, l.cfg.Root, l.cfg.Store, &l.quotaMu, policies, activeIdx, l.cfg.Now, l.reportf); err != nil {
+		return err
+	}
+	return l.selectProfile(ctx)
 }
 func readQuotaOnlyShut(r *store.Reader, at time.Time, p *Policy) (map[string]bool, error) {
 	return policy.ReadQuotaOnlyShut(r, at, p)
@@ -259,4 +265,9 @@ func seatAllowsBackend(p *Policy, itemID, seat, backend string) bool {
 }
 func resolveStepBackend(p *Policy, itemID, seat, prevBackend string, shut map[string]bool) (string, *BackendMove, bool) {
 	return policy.ResolveStepBackend(p, itemID, seat, prevBackend, shut)
+}
+
+// Forwarding wrapper for profile_select.go: switch the profile in force on a quota fact.
+func (l *Loop) selectProfile(ctx context.Context) error {
+	return policy.ProfileSwitcher{Root: l.cfg.Root, Store: l.cfg.Store, PolicyRef: l.cfg.PolicyRef, Refs: l.cfg.PolicyProfileRefs, Now: l.cfg.Now, Mu: &l.policyMu, Active: &l.cfg.Policy, Profiles: l.profilePolicies, State: &l.policyState, Recorded: &l.policyRecorded, Reportf: l.reportf}.Select(ctx)
 }
