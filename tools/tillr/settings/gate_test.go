@@ -94,3 +94,46 @@ func TestGateChecksDirRefusesInvalidConfig(t *testing.T) {
 		})
 	}
 }
+
+func TestGateDisabledTestsDefaultsAndReads(t *testing.T) {
+	dir := root(t)
+	got, err := settings.Read(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.DisabledTestsPath() != settings.DefaultDisabledTests || settings.DefaultDisabledTests != "tillr-disabled-tests.json" {
+		t.Fatalf("DisabledTestsPath() = %q, want the root default", got.DisabledTestsPath())
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".tillr.toml"), []byte("[gate]\ndisabled_tests = \"tools/gate/disabled-tests.json\"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	got, err = settings.Read(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.DisabledTestsPath() != "tools/gate/disabled-tests.json" || got.ChecksDir() != settings.DefaultChecksDir {
+		t.Fatalf("got path %q checks dir %q", got.DisabledTestsPath(), got.ChecksDir())
+	}
+}
+
+func TestGateDisabledTestsRefusesInvalidPath(t *testing.T) {
+	for name, toml := range map[string]string{
+		"wrong type": "[gate]\ndisabled_tests = 3\n",
+		"empty":      "[gate]\ndisabled_tests = \"\"\n",
+		"absolute":   "[gate]\ndisabled_tests = \"/abs.json\"\n",
+		"escape":     "[gate]\ndisabled_tests = \"../x.json\"\n",
+		"dotgit":     "[gate]\ndisabled_tests = \".git/x.json\"\n",
+		"directory":  "[gate]\ndisabled_tests = \"a/\"\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := root(t)
+			if err := os.WriteFile(filepath.Join(dir, ".tillr.toml"), []byte(toml), 0644); err != nil {
+				t.Fatal(err)
+			}
+			_, err := settings.Read(dir)
+			if err == nil || !strings.Contains(err.Error(), "gate.disabled_tests") {
+				t.Fatalf("error %v should name gate.disabled_tests", err)
+			}
+		})
+	}
+}

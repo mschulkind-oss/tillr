@@ -66,7 +66,9 @@ func (w Worktrees) EffectiveMaxCount(runningAgentLimit int) int {
 // Gate names the repository's check-declarations directory.
 type Gate struct {
 	ChecksDir string
-	Set       bool
+	// DisabledTests is the repository-relative path of the tracked disabled-test list.
+	DisabledTests string
+	Set           bool
 }
 
 // Trunk names the branch where landings go.
@@ -169,6 +171,17 @@ func (s Settings) ChecksDir() string {
 		return DefaultChecksDir
 	}
 	return s.Gate.ChecksDir
+}
+
+// DefaultDisabledTests is the disabled-test list path when [gate] disabled_tests is unset.
+const DefaultDisabledTests = "tillr-disabled-tests.json"
+
+// DisabledTestsPath returns the configured disabled-test list path, or DefaultDisabledTests when unset.
+func (s Settings) DisabledTestsPath() string {
+	if s.Gate.DisabledTests == "" {
+		return DefaultDisabledTests
+	}
+	return s.Gate.DisabledTests
 }
 
 // TrunkBranch returns the configured landing branch, or DefaultTrunkBranch when unset.
@@ -380,6 +393,13 @@ func read(root, nonLandingDefinition string) (Settings, error) {
 					return Settings{}, refuse(full, "a clean repository-relative subdirectory path outside .git")
 				}
 				s.Gate.ChecksDir = clean
+				s.Gate.Set = true
+			case "gate.disabled_tests":
+				str, ok := value.(string)
+				if !ok || !validRepoFilePath(str) {
+					return Settings{}, refuse(full, "a clean repository-relative file path outside .git")
+				}
+				s.Gate.DisabledTests = str
 				s.Gate.Set = true
 			case "roll.command", "push.remote", "push.ref", "comments.vantage_url", "comments.repo", "intake.dir":
 				str, ok := value.(string)
@@ -680,7 +700,7 @@ func read(root, nonLandingDefinition string) (Settings, error) {
 					expected = "a known brief key (template)"
 				}
 				if table == "gate" {
-					expected = "a known gate key (checks_dir)"
+					expected = "a known gate key (checks_dir or disabled_tests)"
 				}
 				if table == "drain" {
 					expected = "a known drain key (exit_when_drained, store, max_agents, lanes, worktree_count, worktree_disk_budget, max_concurrent_triage, lane_root, backoff_base, fallback_poll, no_notify, policy, profile, profiles, run_bin, item_bin, brief_template, gate, land, verdict, replay, heavy_gate, rolling, fixer_gate, questions_cmd or questions_index)"
