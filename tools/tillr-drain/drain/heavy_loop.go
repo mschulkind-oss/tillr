@@ -918,14 +918,15 @@ func (l *Loop) startTrunkProofActor(ctx context.Context, result *LoopResult) fun
 			if stopped, err := l.stopRequested(actorCtx); stopped || err != nil {
 				return
 			}
-			beforeSeq, _ := l.readEventHeadSeq(actorCtx)
+			beforeSeq, beforeErr := l.readEventHeadSeq(actorCtx)
 			if err := l.runTrunkProofStep(actorCtx, result, false); err != nil {
 				l.reportActorError(actorCtx, "trunk-proof", err)
 				return
 			}
-			afterSeq, _ := l.readEventHeadSeq(actorCtx)
-			if afterSeq != beforeSeq {
-				l.signalPassWake()
+			if beforeErr == nil {
+				if changed, err := l.hasNonTelemetryEventAfter(actorCtx, beforeSeq); err == nil && changed {
+					l.signalPassWake()
+				}
 			}
 		})
 	}()

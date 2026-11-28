@@ -324,7 +324,7 @@ func (l *Loop) startSyncActor(ctx context.Context, result *LoopResult) func() {
 			if stopped, err := l.stopRequested(actorCtx); stopped || err != nil {
 				return
 			}
-			beforeSeq, _ := l.readEventHeadSeq(actorCtx)
+			beforeSeq, beforeErr := l.readEventHeadSeq(actorCtx)
 			if err := l.runSyncStep(actorCtx, result, false); err != nil {
 				l.reportActorError(actorCtx, "sync", err)
 				return
@@ -332,10 +332,11 @@ func (l *Loop) startSyncActor(ctx context.Context, result *LoopResult) func() {
 			if watcher != nil {
 				l.updateDocsWatcherDirs(actorCtx, watcher)
 			}
-			afterSeq, _ := l.readEventHeadSeq(actorCtx)
-			if afterSeq != beforeSeq {
-				l.actors.DocsGen.Add(1)
-				l.signalPassWake()
+			if beforeErr == nil {
+				if changed, err := l.hasNonTelemetryEventAfter(actorCtx, beforeSeq); err == nil && changed {
+					l.actors.DocsGen.Add(1)
+					l.signalPassWake()
+				}
 			}
 		})
 	}()

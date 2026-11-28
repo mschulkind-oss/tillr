@@ -491,3 +491,93 @@ func TestIdleUnchangedIgnoresTelemetryAndWakesOnTrunkOrDocsChange(t *testing.T) 
 		t.Fatal("idleUnchanged returned true when cached trunk tip changed")
 	}
 }
+
+func TestSyncActorIgnoresConcurrentIdleTelemetryEvents(t *testing.T) {
+	runCase := func(t *testing.T, ev event.Event, wantBump bool) {
+		t.Helper()
+		f, l := passFixture(t, "held-a")
+		l.cfg.ExitWhenDrained = false
+		l.cfg.NoNotify = true
+		l.cfg.StorePollInterval = time.Hour
+		fixtureWrite(t, f, func(tx *store.Tx) error {
+			_, err := tx.Exec(`UPDATE items SET state = ?`, StateBlocked)
+			return err
+		})
+		ctx := context.Background()
+		var result LoopResult
+		if _, err := l.refreshDocuments(ctx, &result); err != nil {
+			t.Fatal(err)
+		}
+		if err := l.seedActorCaches(ctx, &result); err != nil {
+			t.Fatal(err)
+		}
+		l.actors.Active.Store(true)
+		t.Cleanup(func() { l.actors.Active.Store(false) })
+
+		now := l.cfg.Now().UTC()
+		l.idleState = l.captureIdleState(ctx, nil, now)
+		if l.idleState == nil {
+			t.Fatal("expected non-nil idleState")
+		}
+		beforeDocsGen := l.actors.DocsGen.Load()
+
+		var injected atomic.Bool
+		ev.At = now
+		l.cfg.Now = func() time.Time {
+			if injected.CompareAndSwap(false, true) {
+				fixtureWrite(t, f, func(tx *store.Tx) error {
+					_, err := tx.Append(ev)
+					return err
+				})
+			}
+			return now
+		}
+
+		scanDone := make(chan struct{})
+		var scanOnce sync.Once
+		l.actors.Sync.Timer = func(time.Duration) (<-chan time.Time, func()) {
+			scanOnce.Do(func() { close(scanDone) })
+			return make(chan time.Time), func() {}
+		}
+
+		stopSync := l.startSyncActor(ctx, &result)
+		select {
+		case <-scanDone:
+		case <-time.After(hangGuard):
+			stopSync()
+			t.Fatal("timed out waiting for sync actor scan to finish")
+		}
+		stopSync()
+
+		if !injected.Load() {
+			t.Fatal("sync actor did not invoke runSyncStep")
+		}
+		gotBump := l.actors.DocsGen.Load() > beforeDocsGen
+		if gotBump != wantBump {
+			t.Fatalf("DocsGen bumped = %v (before=%d after=%d), want %v", gotBump, beforeDocsGen, l.actors.DocsGen.Load(), wantBump)
+		}
+		if gotUnchanged := l.idleUnchanged(ctx, now); gotUnchanged == wantBump {
+			t.Fatalf("idleUnchanged = %v, want %v", gotUnchanged, !wantBump)
+		}
+	}
+
+	t.Run("telemetry event does not bump DocsGen", func(t *testing.T) {
+		sid := "session-1"
+		runCase(t, event.Event{
+			Kind:       LoopPassKind,
+			ObjectType: "session",
+			ObjectID:   &sid,
+			Payload:    []byte(`{}`),
+		}, false)
+	})
+
+	t.Run("non-telemetry event bumps DocsGen", func(t *testing.T) {
+		id := "held-a"
+		runCase(t, event.Event{
+			Kind:       "item.update",
+			ObjectType: "item",
+			ObjectID:   &id,
+			Payload:    []byte(`{}`),
+		}, true)
+	})
+}

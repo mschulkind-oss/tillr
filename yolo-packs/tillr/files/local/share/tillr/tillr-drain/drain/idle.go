@@ -49,6 +49,41 @@ func isIdleTelemetryEvent(kind, objectType string) bool {
 	}
 }
 
+// hasNonTelemetryEventAfter reports whether any non-telemetry event was
+// appended after afterSeq. Background actors use it instead of comparing raw
+// head sequence numbers so concurrent idle telemetry (such as loop.pass or
+// process.cpu) does not bump DocsGen/GCGen or spuriously wake an idle loop.
+func (l *Loop) hasNonTelemetryEventAfter(ctx context.Context, afterSeq int64) (bool, error) {
+	if l.cfg.Store == "" {
+		return false, nil
+	}
+	s, err := store.OpenRead(ctx, l.cfg.Store)
+	if err != nil {
+		return false, err
+	}
+	defer s.Close()
+	var found bool
+	err = s.ReadTx(ctx, func(r *store.Reader) error {
+		rows, qErr := r.Query(`SELECT kind, object_type FROM events WHERE seq > ?`, afterSeq)
+		if qErr != nil {
+			return qErr
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var kind, objType string
+			if scanErr := rows.Scan(&kind, &objType); scanErr != nil {
+				return scanErr
+			}
+			if !isIdleTelemetryEvent(kind, objType) {
+				found = true
+				return nil
+			}
+		}
+		return rows.Err()
+	})
+	return found, err
+}
+
 func (l *Loop) hasStageFaults() bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()

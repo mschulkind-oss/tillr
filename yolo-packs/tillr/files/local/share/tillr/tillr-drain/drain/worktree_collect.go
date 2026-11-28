@@ -944,15 +944,16 @@ func (l *Loop) startGCActor(ctx context.Context, result *LoopResult) func() {
 			if stopped, err := l.stopRequested(actorCtx); stopped || err != nil {
 				return
 			}
-			beforeSeq, _ := l.readEventHeadSeq(actorCtx)
+			beforeSeq, beforeErr := l.readEventHeadSeq(actorCtx)
 			if err := l.runGCStep(actorCtx, result); err != nil {
 				l.reportActorError(actorCtx, "gc", err)
 				return
 			}
-			afterSeq, _ := l.readEventHeadSeq(actorCtx)
-			if afterSeq != beforeSeq {
-				l.actors.GCGen.Add(1)
-				l.signalPassWake()
+			if beforeErr == nil {
+				if changed, err := l.hasNonTelemetryEventAfter(actorCtx, beforeSeq); err == nil && changed {
+					l.actors.GCGen.Add(1)
+					l.signalPassWake()
+				}
 			}
 		})
 	}()
