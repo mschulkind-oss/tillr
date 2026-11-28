@@ -466,9 +466,12 @@ type LoopConfig struct {
 	Policy *Policy
 	// PolicyRef enables content-checked reloads at the start of each pass.
 	PolicyRef string
-	// PolicySource and PolicyProfile record how PolicyRef was selected for PolicyState.
-	PolicySource  string
-	PolicyProfile string
+	// PolicySource, PolicyProfile, PolicyProfiles, and PolicyProfileRefs record how
+	// PolicyRef (and any ordered profile list) were selected for PolicyState and startup validation.
+	PolicySource      string
+	PolicyProfile     string
+	PolicyProfiles    []string
+	PolicyProfileRefs []string
 	// LanesSource describes where the initial ordinary lane count came from when not from CLI or saved target.
 	LanesSource string
 	// StartOptions records every resolved loop start option and its source for PolicyState.
@@ -997,11 +1000,26 @@ func NewLoop(cfg LoopConfig) (*Loop, error) {
 		if err != nil {
 			return nil, err
 		}
+		for i := 1; i < len(cfg.PolicyProfileRefs); i++ {
+			if _, _, _, err := readPolicyContent(cfg.PolicyProfileRefs[i]); err != nil {
+				name := cfg.PolicyProfileRefs[i]
+				if i < len(cfg.PolicyProfiles) {
+					name = cfg.PolicyProfiles[i]
+				}
+				return nil, Usagef("profile %q (index %d of %d): %v", name, i, len(cfg.PolicyProfileRefs), err)
+			}
+		}
 		l.cfg.Policy = p
+		activeProfile := cfg.PolicyProfile
+		if activeProfile == "" && len(cfg.PolicyProfiles) > 0 {
+			activeProfile = cfg.PolicyProfiles[0]
+		}
 		l.policyState = PolicyState{
 			Ref:          cfg.PolicyRef,
 			Source:       cfg.PolicySource,
-			Profile:      cfg.PolicyProfile,
+			Profile:      activeProfile,
+			Profiles:     append([]string(nil), cfg.PolicyProfiles...),
+			ProfileIndex: 0,
 			Hash:         hash,
 			DiskHash:     hash,
 			Content:      string(raw),

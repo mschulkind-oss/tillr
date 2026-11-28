@@ -935,6 +935,7 @@ func loopFace(args []string) int {
 	noNotify := fs.Bool("no-notify", false, "disable local notification relay subscription and rely on fallback polling only (D-SN7)")
 	policyPath := fs.String("policy", "", "the backend policy (default <root>/config/tillr/backend-policy.json)")
 	profileName := fs.String("profile", "", "the named seat profile from the user's tillr configuration directory (backend-policy.<name>.json); --policy wins when both are given")
+	profileList := fs.String("profiles", "", "comma-separated ordered list of named seat profiles from the user's tillr configuration directory (highest preference first); mutually exclusive with --profile; --policy wins when both are given")
 	runBin := fs.String("run-bin", "tillr-run", "the tillr-run binary the run step executes")
 	itemBin := fs.String("item-bin", "tillr-item", "the tillr-item binary the item-state step executes: a landed candidate's item is `landed`, and a run that reports `blocked` leaves its item `blocked`")
 	briefTemplate := fs.String("brief-template", "", "the brief template staging renders each run's brief from (default: [brief] template in .tillr.toml, or the installed tillr-run template)")
@@ -1105,11 +1106,15 @@ func loopFace(args []string) int {
 	}
 	*noNotify = noNotifyVal
 
-	resolvedPolicyRef, resolvedProfileName, policySrc, policyDetail, err := resolvePolicyAndProfileOptions(*root, explicitSteps, *policyPath, *profileName, repositorySettings)
+	resolvedPolicyRef, resolvedProfileNames, resolvedProfileRefs, policySrc, policyDetail, err := resolvePolicyAndProfileOptions(*root, explicitSteps, *policyPath, *profileName, *profileList, repositorySettings)
 	if err != nil {
 		return failStartup(err)
 	}
 	*policyPath = resolvedPolicyRef
+	resolvedProfileName := ""
+	if len(resolvedProfileNames) > 0 {
+		resolvedProfileName = resolvedProfileNames[0]
+	}
 
 	runBinVal, runBinSrc, runBinDetail, err := resolveStringOption(
 		"run-bin", explicitSteps, *runBin,
@@ -1296,11 +1301,44 @@ func loopFace(args []string) int {
 	}
 	var policy *drain.Policy
 	adaptersFromInstall := false
-	if *policyPath != "" {
-		settingsPolicyVal := *policyPath
-		if resolvedProfileName != "" {
-			settingsPolicyVal = resolvedProfileName
+	if len(resolvedProfileRefs) > 0 {
+		wrapProfileErr := func(i int, ref string, err error) error {
+			msg := err.Error()
+			if len(resolvedProfileNames) > 1 {
+				msg = fmt.Sprintf("profile %q (index %d of %d): %s", resolvedProfileNames[i], i, len(resolvedProfileNames), msg)
+			}
+			val := strings.Join(resolvedProfileNames, ",")
+			if policySrc == sourceEnv {
+				return drain.Usagef("environment variable %s=%q: %s", policyDetail, val, msg)
+			}
+			if policySrc == sourceSettings {
+				return drain.Usagef(".tillr.toml %s=%q: %s", policyDetail, val, msg)
+			}
+			if len(resolvedProfileNames) > 1 {
+				return drain.Usagef("%s", msg)
+			}
+			return err
 		}
+		for i, ref := range resolvedProfileRefs {
+			p, err := readPolicy(ref)
+			if err != nil {
+				return failStartup(wrapProfileErr(i, ref, err))
+			}
+			if p == nil {
+				return failStartup(wrapProfileErr(i, ref, drain.Usagef("loop needs a policy: %s names none", ref)))
+			}
+			fromInstall, err := p.CheckAdaptersWithOrigin(*root)
+			if err != nil {
+				return failStartup(wrapProfileErr(i, ref, formatInstallSupportError(err)))
+			}
+			if fromInstall {
+				adaptersFromInstall = true
+			}
+			if i == 0 {
+				policy = p
+			}
+		}
+	} else if *policyPath != "" {
 		var err error
 		policy, err = readPolicy(*policyPath)
 		if err != nil {
@@ -1308,7 +1346,7 @@ func loopFace(args []string) int {
 				return failStartup(drain.Usagef("environment variable %s=%q: %v", policyDetail, *policyPath, err))
 			}
 			if policySrc == sourceSettings {
-				return failStartup(drain.Usagef(".tillr.toml %s=%q: %v", policyDetail, settingsPolicyVal, err))
+				return failStartup(drain.Usagef(".tillr.toml %s=%q: %v", policyDetail, *policyPath, err))
 			}
 			return failStartup(err)
 		}
@@ -1317,7 +1355,7 @@ func loopFace(args []string) int {
 				return failStartup(drain.Usagef("environment variable %s=%q: loop needs a policy: %s names none", policyDetail, *policyPath, *policyPath))
 			}
 			if policySrc == sourceSettings {
-				return failStartup(drain.Usagef(".tillr.toml %s=%q: loop needs a policy: %s names none", policyDetail, settingsPolicyVal, *policyPath))
+				return failStartup(drain.Usagef(".tillr.toml %s=%q: loop needs a policy: %s names none", policyDetail, *policyPath, *policyPath))
 			}
 			return failStartup(drain.Usagef("loop needs a policy: %s names none", *policyPath))
 		}
@@ -1327,7 +1365,7 @@ func loopFace(args []string) int {
 				return failStartup(drain.Usagef("environment variable %s=%q: %v", policyDetail, *policyPath, formatInstallSupportError(err)))
 			}
 			if policySrc == sourceSettings {
-				return failStartup(drain.Usagef(".tillr.toml %s=%q: %v", policyDetail, settingsPolicyVal, formatInstallSupportError(err)))
+				return failStartup(drain.Usagef(".tillr.toml %s=%q: %v", policyDetail, *policyPath, formatInstallSupportError(err)))
 			}
 			return failStartup(formatInstallSupportError(err))
 		}
@@ -1343,7 +1381,9 @@ func loopFace(args []string) int {
 	recordOpt("backoff-base", backoffBase.String(), backoffSrc, backoffDetail)
 	recordOpt("fallback-poll", fallbackPoll.String(), fallbackSrc, fallbackDetail)
 	recordOpt("no-notify", strconv.FormatBool(*noNotify), noNotifySrc, noNotifyDetail)
-	if resolvedProfileName != "" {
+	if len(resolvedProfileNames) > 1 || policyDetail == "--profiles" || policyDetail == "drain.profiles" || policyDetail == "TILLR_DRAIN_PROFILES" {
+		recordOpt("profiles", strings.Join(resolvedProfileNames, ","), policySrc, policyDetail)
+	} else if resolvedProfileName != "" {
 		recordOpt("profile", resolvedProfileName, policySrc, policyDetail)
 	}
 	recordOpt("policy", *policyPath, policySrc, policyDetail)
@@ -1389,7 +1429,7 @@ func loopFace(args []string) int {
 	loop, err := drain.NewLoop(drain.LoopConfig{
 		Root: *root, Store: *path, LaneRoot: *laneRoot, MigrateOwnerQuestions: *migrateOwner,
 		Lanes: laneIDs(agentLimit), ItemWorktrees: true, WorktreeCountOverride: *worktreeCount, WorktreeDiskBudgetOverride: *worktreeDiskBudget, LiveScale: true, ExplicitLanes: explicitLanes, LanesSource: lanesSourceLabel, BackoffBase: *backoffBase, MaxConcurrentTriage: *maxConcurrentTriage, StorePollInterval: *fallbackPoll, NoNotify: *noNotify, ExitWhenDrained: *exitWhenDrained,
-		Policy: policy, PolicyRef: *policyPath, PolicySource: policySrc, PolicyProfile: resolvedProfileName, StartOptions: startOpts, QuestionsCmd: commandFields(*questionsCmd), QuestionsIndex: *questionsIndex,
+		Policy: policy, PolicyRef: *policyPath, PolicySource: policySrc, PolicyProfile: resolvedProfileName, PolicyProfiles: resolvedProfileNames, PolicyProfileRefs: resolvedProfileRefs, StartOptions: startOpts, QuestionsCmd: commandFields(*questionsCmd), QuestionsIndex: *questionsIndex,
 		Steps: steps, Stage: stager, Now: at, Report: os.Stderr,
 		Comments: repositorySettings.Comments, WorkflowDefaults: repositorySettings.WorkflowDefaults,
 		CandidateSizeLimits: &repositorySettings.CandidateSize,

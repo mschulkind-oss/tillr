@@ -90,3 +90,57 @@ func ResolveProfilePath(name string) (string, error) {
 	}
 	return candidate, nil
 }
+
+// ParseProfileList parses a comma-separated, whitespace-trimmed list of distinct
+// valid profile names. Empty input, empty entries, invalid names, and duplicates
+// are refused with exit 2.
+func ParseProfileList(raw string) ([]string, error) {
+	if strings.TrimSpace(raw) == "" {
+		return nil, Usagef("profile list must not be empty")
+	}
+	parts := strings.Split(raw, ",")
+	names := make([]string, 0, len(parts))
+	seen := make(map[string]bool, len(parts))
+	for i, part := range parts {
+		name := strings.TrimSpace(part)
+		if name == "" {
+			return nil, Usagef("profile list %q has an empty entry at index %d", raw, i)
+		}
+		if !settings.ValidProfileName(name) {
+			return nil, Usagef("profile list %q entry %d (%q): invalid profile name (must match [a-z0-9][a-z0-9_-]*)", raw, i, name)
+		}
+		if seen[name] {
+			return nil, Usagef("profile list %q contains duplicate profile %q at index %d", raw, name, i)
+		}
+		seen[name] = true
+		names = append(names, name)
+	}
+	return names, nil
+}
+
+// ResolveProfilePaths resolves every profile name in an ordered list to
+// <config-dir>/backend-policy.<name>.json. If any entry is missing or invalid,
+// it refuses with exit 2 naming the offending profile, its index, <config-dir>,
+// and the available profiles.
+func ResolveProfilePaths(names []string) ([]string, error) {
+	if len(names) == 0 {
+		return nil, Usagef("profile list must not be empty")
+	}
+	seen := make(map[string]bool, len(names))
+	paths := make([]string, len(names))
+	for i, name := range names {
+		if seen[name] {
+			return nil, Usagef("profile %q (index %d of %d): duplicate profile name", name, i, len(names))
+		}
+		seen[name] = true
+		p, err := ResolveProfilePath(name)
+		if err != nil {
+			if len(names) > 1 {
+				return nil, Usagef("profile %q (index %d of %d): %v", name, i, len(names), err)
+			}
+			return nil, err
+		}
+		paths[i] = p
+	}
+	return paths, nil
+}

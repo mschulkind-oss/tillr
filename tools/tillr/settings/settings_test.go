@@ -366,3 +366,69 @@ questions_index = ".tillr/q.json"
 		})
 	}
 }
+
+func TestDrainProfiles(t *testing.T) {
+	t.Run("ordered list and startup line", func(t *testing.T) {
+		d := root(t)
+		body := "[drain]\nprofiles = [\"claude-sub\", \"copilot-gemini\"]\n"
+		if err := os.WriteFile(filepath.Join(d, ".tillr.toml"), []byte(body), 0644); err != nil {
+			t.Fatal(err)
+		}
+		got, err := settings.Read(d)
+		if err != nil {
+			t.Fatalf("settings.Read: %v", err)
+		}
+		if !got.Drain.ProfilesSet || len(got.Drain.Profiles) != 2 || got.Drain.Profiles[0] != "claude-sub" || got.Drain.Profiles[1] != "copilot-gemini" {
+			t.Fatalf("unexpected Drain.Profiles: set=%v profiles=%v", got.Drain.ProfilesSet, got.Drain.Profiles)
+		}
+		line := got.StartupLine()
+		if !strings.Contains(line, `drain.profiles=["claude-sub","copilot-gemini"]`) {
+			t.Errorf("StartupLine missing drain.profiles: %s", line)
+		}
+		if strings.Contains(line, `drain.profile=`) {
+			t.Errorf("StartupLine should not print singular drain.profile when profiles is set: %s", line)
+		}
+	})
+
+	t.Run("singular profile preserved in startup line", func(t *testing.T) {
+		d := root(t)
+		body := "[drain]\nprofile = \"claude-sub\"\n"
+		if err := os.WriteFile(filepath.Join(d, ".tillr.toml"), []byte(body), 0644); err != nil {
+			t.Fatal(err)
+		}
+		got, err := settings.Read(d)
+		if err != nil {
+			t.Fatalf("settings.Read: %v", err)
+		}
+		line := got.StartupLine()
+		if !strings.Contains(line, `drain.profile="claude-sub"`) {
+			t.Errorf("StartupLine missing drain.profile: %s", line)
+		}
+		if strings.Contains(line, `drain.profiles=`) {
+			t.Errorf("StartupLine should not print drain.profiles when only profile is set: %s", line)
+		}
+	})
+
+	for _, tc := range []struct {
+		name string
+		toml string
+		want string
+	}{
+		{"both profile and profiles", "[drain]\nprofile = 'a'\nprofiles = ['a', 'b']\n", "drain.profile"},
+		{"empty profiles", "[drain]\nprofiles = []\n", "drain.profiles"},
+		{"non-array profiles", "[drain]\nprofiles = 'a'\n", "drain.profiles"},
+		{"invalid name in profiles", "[drain]\nprofiles = ['a', 'BadName']\n", "drain.profiles"},
+		{"duplicate name in profiles", "[drain]\nprofiles = ['a', 'b', 'a']\n", "duplicate"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := root(t)
+			if err := os.WriteFile(filepath.Join(d, ".tillr.toml"), []byte(tc.toml), 0644); err != nil {
+				t.Fatal(err)
+			}
+			_, err := settings.Read(d)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("settings.Read = %v, want error naming %q", err, tc.want)
+			}
+		})
+	}
+}

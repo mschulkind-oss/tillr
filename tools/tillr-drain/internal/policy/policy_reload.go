@@ -28,6 +28,8 @@ type PolicyState struct {
 	Ref          string        `json:"ref"`
 	Source       string        `json:"source,omitempty"`
 	Profile      string        `json:"profile,omitempty"`
+	Profiles     []string      `json:"profiles,omitempty"`
+	ProfileIndex int           `json:"profile_index"`
 	Hash         string        `json:"hash"`
 	DiskHash     string        `json:"disk_hash"`
 	Content      string        `json:"content"`

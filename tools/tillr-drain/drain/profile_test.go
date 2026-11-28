@@ -228,3 +228,48 @@ func TestLoopProfileSelectionAndPrecedence(t *testing.T) {
 		}
 	})
 }
+
+func TestParseProfileListAndResolveProfilePaths(t *testing.T) {
+	got, err := drain.ParseProfileList(" alpha , beta-2 , gamma_3 ")
+	if err != nil {
+		t.Fatalf("ParseProfileList valid: %v", err)
+	}
+	want := []string{"alpha", "beta-2", "gamma_3"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
+		t.Fatalf("ParseProfileList = %v, want %v", got, want)
+	}
+
+	for _, bad := range []string{"", "   ", "alpha,", ",beta", "alpha,,beta", "alpha,Bad", "alpha,beta,alpha"} {
+		if _, err := drain.ParseProfileList(bad); err == nil {
+			t.Errorf("ParseProfileList(%q) succeeded, want error", bad)
+		} else if drain.ExitCode(err) != 2 {
+			t.Errorf("ParseProfileList(%q) exit code = %d, want 2 (%v)", bad, drain.ExitCode(err), err)
+		}
+	}
+
+	cfgDir := scratch(t, "cfg-list")
+	t.Setenv("TILLR_CONFIG_DIR", cfgDir)
+	writeFile(t, filepath.Join(cfgDir, "backend-policy.alpha.json"), "{}\n")
+	writeFile(t, filepath.Join(cfgDir, "backend-policy.beta.json"), "{}\n")
+
+	paths, err := drain.ResolveProfilePaths([]string{"alpha", "beta"})
+	if err != nil {
+		t.Fatalf("ResolveProfilePaths valid: %v", err)
+	}
+	if len(paths) != 2 || paths[0] != filepath.Join(cfgDir, "backend-policy.alpha.json") || paths[1] != filepath.Join(cfgDir, "backend-policy.beta.json") {
+		t.Fatalf("ResolveProfilePaths = %v", paths)
+	}
+
+	_, err = drain.ResolveProfilePaths([]string{"alpha", "missing"})
+	if err == nil {
+		t.Fatal("ResolveProfilePaths with missing second entry succeeded, want error")
+	}
+	if drain.ExitCode(err) != 2 {
+		t.Fatalf("ResolveProfilePaths exit code = %d, want 2 (%v)", drain.ExitCode(err), err)
+	}
+	for _, sub := range []string{"missing", "index 1 of 2", cfgDir, "alpha, beta"} {
+		if !strings.Contains(err.Error(), sub) {
+			t.Errorf("error %q missing %q", err.Error(), sub)
+		}
+	}
+}

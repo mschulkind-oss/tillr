@@ -306,8 +306,8 @@ passing them on every start or restart command.
 
 ### Order of precedence (highest first)
 
-1. **Command-line option** (`option`) on a fresh start (`--policy`, `--profile`, `--lanes`,
-   `--max-agents`, and the rest). On a fresh start, `--lanes` / `--max-agents` also updates
+1. **Command-line option** (`option`) on a fresh start (`--policy`, `--profile`, `--profiles`,
+   `--lanes`, `--max-agents`, and the rest). On a fresh start, `--lanes` / `--max-agents` also updates
    the saved scale target in `drain_runtime_config`.
 2. **Saved scale target** (`saved scale target`) in `.tillr/state.db` (`drain_runtime_config`,
    set by `tillr drain scale`). On an in-place `exec` restart (`TILLR_RESTART_REQUEST` set),
@@ -317,12 +317,15 @@ passing them on every start or restart command.
 4. **Environment variable** (`environment variable`), under `TILLR_DRAIN_<UPPER_SNAKE>`.
 5. **Built-in default** (`built-in default`).
 
-Within any single rung that offers both a policy file path and a profile name (`--policy` /
-`--profile`, `[drain] policy` / `[drain] profile`, `TILLR_DRAIN_POLICY` /
-`TILLR_DRAIN_PROFILE`), `policy` wins over `profile`. When a higher rung sets an option,
-lower rungs for that option are not consulted. An active `TILLR_DRAIN_<OPTION>` variable or
-`.tillr.toml` key with a value the option would refuse stops the start with exit 2 and names
-the source and the value; it is never skipped.
+Within any single rung that offers both a policy file path and a profile selection (`--policy` /
+`--profile` / `--profiles`, `[drain] policy` / `[drain] profile` / `[drain] profiles`,
+`TILLR_DRAIN_POLICY` / `TILLR_DRAIN_PROFILE` / `TILLR_DRAIN_PROFILES`), `policy` wins over
+`profile` and `profiles`. Setting both the single profile and the profile list in the same rung
+is refused with exit 2 (in the environment, when they disagree). Every profile named in a list is
+loaded and validated at startup and `--check`; any missing or invalid entry stops startup with
+exit 2. When a higher rung sets an option, lower rungs for that option are not consulted. An active
+`TILLR_DRAIN_<OPTION>` variable or `.tillr.toml` key with a value the option would refuse stops
+the start with exit 2 and names the source and the value; it is never skipped.
 
 `tillr-drain keep` and `tillr-drain keep --restart` pass `TILLR_DRAIN_*` through unchanged
 and supply default `--gate`, `--land`, `--verdict`, and `--brief-template` flags only when not
@@ -333,14 +336,15 @@ already set in `extra`, `.tillr.toml`, or `TILLR_DRAIN_*`.
 Every included `--<option>` maps mechanically to `TILLR_DRAIN_<UPPER_SNAKE>` (replacing `-`
 with `_` and uppercasing) and `[drain] <snake_case>` (replacing `-` with `_`):
 
-- **Included (25 options):** `--exit-when-drained` (`TILLR_DRAIN_EXIT_WHEN_DRAINED`),
+- **Included (26 options):** `--exit-when-drained` (`TILLR_DRAIN_EXIT_WHEN_DRAINED`),
   `--store` (`TILLR_DRAIN_STORE`), `--max-agents` (`TILLR_DRAIN_MAX_AGENTS`), `--lanes`
   (`TILLR_DRAIN_LANES`), `--worktree-count` (`TILLR_DRAIN_WORKTREE_COUNT`),
   `--worktree-disk-budget` (`TILLR_DRAIN_WORKTREE_DISK_BUDGET`), `--max-concurrent-triage`
   (`TILLR_DRAIN_MAX_CONCURRENT_TRIAGE`), `--lane-root` (`TILLR_DRAIN_LANE_ROOT`),
   `--backoff-base` (`TILLR_DRAIN_BACKOFF_BASE`), `--fallback-poll`
   (`TILLR_DRAIN_FALLBACK_POLL`), `--no-notify` (`TILLR_DRAIN_NO_NOTIFY`), `--policy`
-  (`TILLR_DRAIN_POLICY`), `--profile` (`TILLR_DRAIN_PROFILE`), `--run-bin`
+  (`TILLR_DRAIN_POLICY`), `--profile` (`TILLR_DRAIN_PROFILE`), `--profiles`
+  (`TILLR_DRAIN_PROFILES`), `--run-bin`
   (`TILLR_DRAIN_RUN_BIN`), `--item-bin` (`TILLR_DRAIN_ITEM_BIN`), `--brief-template`
   (`TILLR_DRAIN_BRIEF_TEMPLATE`), `--gate` (`TILLR_DRAIN_GATE`), `--land`
   (`TILLR_DRAIN_LAND`), `--verdict` (`TILLR_DRAIN_VERDICT`), `--replay`

@@ -466,3 +466,290 @@ func TestLoopInvalidEnvOrSettingsRefusesStartup(t *testing.T) {
 		})
 	}
 }
+
+func TestProfileListPrecedenceRefusalsAndValidation(t *testing.T) {
+	t.Run("precedence_env_then_toml_then_option_and_policy_override", func(t *testing.T) {
+		// 1. Environment variable TILLR_DRAIN_PROFILES.
+		root, storePath, tmpl, runBin, itemBin, passStub, configDir, _ := setupLoopOptionTestRepo(t)
+		t.Setenv("TILLR_DRAIN_PROFILES", "envprof,tomlprof")
+		code, out := invoke(t,
+			"loop",
+			"--root", root,
+			"--store", storePath,
+			"--run-bin", runBin,
+			"--item-bin", itemBin,
+			"--brief-template", tmpl,
+			"--gate", passStub,
+			"--land", passStub,
+			"--verdict", passStub,
+			"--replay", "",
+			"--rolling", "",
+			"--fixer-gate", "",
+			"--no-notify",
+			"--fallback-poll", "50ms",
+			"--exit-when-drained",
+		)
+		if code != 0 {
+			t.Fatalf("env profiles loop exited %d:\n%s", code, out)
+		}
+		pCode, pJSON := invoke(t, "policy", "--root", root, "--json")
+		if pCode != 0 {
+			t.Fatalf("policy --json exited %d:\n%s", pCode, pJSON)
+		}
+		var state drain.PolicyState
+		if err := json.Unmarshal(pJSON, &state); err != nil {
+			t.Fatalf("unmarshal policy --json: %v\n%s", err, pJSON)
+		}
+		wantEnvRef := filepath.Join(configDir, "backend-policy.envprof.json")
+		if state.Ref != wantEnvRef || state.Profile != "envprof" || state.ProfileIndex != 0 || state.Source != "environment variable" ||
+			len(state.Profiles) != 2 || state.Profiles[0] != "envprof" || state.Profiles[1] != "tomlprof" {
+			t.Fatalf("env PolicyState = %+v", state)
+		}
+		pCode, pText := invoke(t, "policy", "--root", root)
+		if pCode != 0 {
+			t.Fatalf("policy text exited %d:\n%s", pCode, pText)
+		}
+		if !strings.Contains(string(pText), "profiles=envprof,tomlprof (1/2)") {
+			t.Fatalf("policy text missing profile list summary:\n%s", pText)
+		}
+
+		// 2. .tillr.toml [drain] profiles overrides TILLR_DRAIN_PROFILES.
+		if err := os.WriteFile(filepath.Join(root, ".tillr.toml"), []byte("[drain]\nprofiles = [\"tomlprof\", \"envprof\"]\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		code, out = invoke(t,
+			"loop",
+			"--root", root,
+			"--store", storePath,
+			"--run-bin", runBin,
+			"--item-bin", itemBin,
+			"--brief-template", tmpl,
+			"--gate", passStub,
+			"--land", passStub,
+			"--verdict", passStub,
+			"--replay", "",
+			"--rolling", "",
+			"--fixer-gate", "",
+			"--no-notify",
+			"--fallback-poll", "50ms",
+			"--exit-when-drained",
+		)
+		if code != 0 {
+			t.Fatalf("toml profiles loop exited %d:\n%s", code, out)
+		}
+		pCode, pJSON = invoke(t, "policy", "--root", root, "--json")
+		if pCode != 0 {
+			t.Fatalf("policy --json exited %d:\n%s", pCode, pJSON)
+		}
+		state = drain.PolicyState{}
+		if err := json.Unmarshal(pJSON, &state); err != nil {
+			t.Fatalf("unmarshal policy --json: %v\n%s", err, pJSON)
+		}
+		wantTomlRef := filepath.Join(configDir, "backend-policy.tomlprof.json")
+		if state.Ref != wantTomlRef || state.Profile != "tomlprof" || state.ProfileIndex != 0 || state.Source != ".tillr.toml" ||
+			len(state.Profiles) != 2 || state.Profiles[0] != "tomlprof" || state.Profiles[1] != "envprof" {
+			t.Fatalf("toml PolicyState = %+v", state)
+		}
+
+		// 3. CLI --profiles overrides .tillr.toml and environment.
+		code, out = invoke(t,
+			"loop",
+			"--root", root,
+			"--store", storePath,
+			"--run-bin", runBin,
+			"--item-bin", itemBin,
+			"--brief-template", tmpl,
+			"--gate", passStub,
+			"--land", passStub,
+			"--verdict", passStub,
+			"--replay", "",
+			"--rolling", "",
+			"--fixer-gate", "",
+			"--no-notify",
+			"--fallback-poll", "50ms",
+			"--exit-when-drained",
+			"--profiles", "cliprof, tomlprof",
+		)
+		if code != 0 {
+			t.Fatalf("cli profiles loop exited %d:\n%s", code, out)
+		}
+		pCode, pJSON = invoke(t, "policy", "--root", root, "--json")
+		if pCode != 0 {
+			t.Fatalf("policy --json exited %d:\n%s", pCode, pJSON)
+		}
+		state = drain.PolicyState{}
+		if err := json.Unmarshal(pJSON, &state); err != nil {
+			t.Fatalf("unmarshal policy --json: %v\n%s", err, pJSON)
+		}
+		wantCLIRef := filepath.Join(configDir, "backend-policy.cliprof.json")
+		if state.Ref != wantCLIRef || state.Profile != "cliprof" || state.ProfileIndex != 0 || state.Source != "option" ||
+			len(state.Profiles) != 2 || state.Profiles[0] != "cliprof" || state.Profiles[1] != "tomlprof" {
+			t.Fatalf("cli PolicyState = %+v", state)
+		}
+
+		// 4. --policy wins over --profiles without resolving missing profile names.
+		explicitPolicy := filepath.Join(root, "config", "tillr", "alt-policy.json")
+		code, out = invoke(t,
+			"loop",
+			"--root", root,
+			"--store", storePath,
+			"--run-bin", runBin,
+			"--item-bin", itemBin,
+			"--brief-template", tmpl,
+			"--gate", passStub,
+			"--land", passStub,
+			"--verdict", passStub,
+			"--policy", explicitPolicy,
+			"--profiles", "missing1,missing2",
+			"--check",
+		)
+		if code != 0 {
+			t.Fatalf("--policy overriding --profiles exited %d:\n%s", code, out)
+		}
+	})
+
+	t.Run("refuse_single_profile_and_list_together", func(t *testing.T) {
+		for _, tc := range []struct {
+			name    string
+			args    []string
+			toml    string
+			env     map[string]string
+			wantSub []string
+		}{
+			{
+				name:    "cli_profile_and_profiles",
+				args:    []string{"--profile", "cliprof", "--profiles", "cliprof,tomlprof"},
+				wantSub: []string{"--profile", "--profiles"},
+			},
+			{
+				name:    "toml_profile_and_profiles",
+				toml:    "[drain]\nprofile = \"tomlprof\"\nprofiles = [\"tomlprof\", \"envprof\"]\n",
+				wantSub: []string{"drain.profile", "drain.profiles"},
+			},
+			{
+				name: "env_profile_and_profiles",
+				env: map[string]string{
+					"TILLR_DRAIN_PROFILE":  "envprof",
+					"TILLR_DRAIN_PROFILES": "envprof,tomlprof",
+				},
+				wantSub: []string{"TILLR_DRAIN_PROFILE", "TILLR_DRAIN_PROFILES"},
+			},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				root, storePath, tmpl, runBin, itemBin, passStub, _, _ := setupLoopOptionTestRepo(t)
+				for k, v := range tc.env {
+					t.Setenv(k, v)
+				}
+				if tc.toml != "" {
+					if err := os.WriteFile(filepath.Join(root, ".tillr.toml"), []byte(tc.toml), 0o644); err != nil {
+						t.Fatal(err)
+					}
+				}
+				baseArgs := []string{
+					"loop",
+					"--root", root,
+					"--store", storePath,
+					"--run-bin", runBin,
+					"--item-bin", itemBin,
+					"--brief-template", tmpl,
+					"--gate", passStub,
+					"--land", passStub,
+					"--verdict", passStub,
+					"--check",
+				}
+				code, out := invoke(t, append(baseArgs, tc.args...)...)
+				if code != 2 {
+					t.Fatalf("expected exit 2, got %d:\n%s", code, out)
+				}
+				for _, sub := range tc.wantSub {
+					if !strings.Contains(string(out), sub) {
+						t.Fatalf("output missing %q:\n%s", sub, out)
+					}
+				}
+			})
+		}
+	})
+
+	t.Run("second_profile_missing_or_invalid_stops_start_and_check_with_exit_2", func(t *testing.T) {
+		for _, tc := range []struct {
+			name        string
+			secondName  string
+			secondBody  string
+			writeSecond bool
+			wantSub     []string
+		}{
+			{
+				name:        "missing_second_profile",
+				secondName:  "no-such-prof",
+				writeSecond: false,
+				wantSub:     []string{"no-such-prof", "index 1 of 2"},
+			},
+			{
+				name:        "malformed_json_second_profile",
+				secondName:  "badjson",
+				secondBody:  "{not-json",
+				writeSecond: true,
+				wantSub:     []string{"badjson", "index 1 of 2"},
+			},
+			{
+				name:        "invalid_policy_second_profile",
+				secondName:  "empty-policy",
+				secondBody:  "{}\n",
+				writeSecond: true,
+				wantSub:     []string{"empty-policy", "index 1 of 2"},
+			},
+			{
+				name:        "missing_adapter_second_profile",
+				secondName:  "bad-adapter",
+				secondBody:  `{"default_backend":"b","backends":{"b":{"adapter":"/no/such/adapter","model":"m","timeout":"1m"}}}` + "\n",
+				writeSecond: true,
+				wantSub:     []string{"bad-adapter", "index 1 of 2"},
+			},
+		} {
+			for _, checkMode := range []bool{true, false} {
+				modeName := "start"
+				if checkMode {
+					modeName = "check"
+				}
+				t.Run(tc.name+"_"+modeName, func(t *testing.T) {
+					root, storePath, tmpl, runBin, itemBin, passStub, configDir, _ := setupLoopOptionTestRepo(t)
+					if tc.writeSecond {
+						if err := os.WriteFile(filepath.Join(configDir, "backend-policy."+tc.secondName+".json"), []byte(tc.secondBody), 0o644); err != nil {
+							t.Fatal(err)
+						}
+					}
+					args := []string{
+						"loop",
+						"--root", root,
+						"--store", storePath,
+						"--run-bin", runBin,
+						"--item-bin", itemBin,
+						"--brief-template", tmpl,
+						"--gate", passStub,
+						"--land", passStub,
+						"--verdict", passStub,
+						"--replay", "",
+						"--rolling", "",
+						"--fixer-gate", "",
+						"--no-notify",
+						"--fallback-poll", "50ms",
+						"--exit-when-drained",
+						"--profiles", "cliprof," + tc.secondName,
+					}
+					if checkMode {
+						args = append(args, "--check")
+					}
+					code, out := invoke(t, args...)
+					if code != 2 {
+						t.Fatalf("expected exit 2, got %d:\n%s", code, out)
+					}
+					for _, sub := range tc.wantSub {
+						if !strings.Contains(string(out), sub) {
+							t.Fatalf("output missing %q:\n%s", sub, out)
+						}
+					}
+				})
+			}
+		}
+	})
+}

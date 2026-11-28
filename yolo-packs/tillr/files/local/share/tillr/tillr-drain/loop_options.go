@@ -184,56 +184,103 @@ func resolveLaneLimitOptions(explicit map[string]bool, cliMaxAgents, cliLanes in
 	return 2, false, sourceBuiltinDefault, "", nil
 }
 
-func resolvePolicyAndProfileOptions(root string, explicit map[string]bool, cliPolicy, cliProfile string, s settings.Settings) (policyRef, profileName, source, detail string, err error) {
-	// 1. Command-line option (--policy wins over --profile).
+func resolvePolicyAndProfileOptions(root string, explicit map[string]bool, cliPolicy, cliProfile, cliProfiles string, s settings.Settings) (policyRef string, profileNames, profileRefs []string, source, detail string, err error) {
+	// 1. Command-line option (--policy wins over --profile / --profiles; --profile and --profiles together are refused).
+	if explicit["profile"] && explicit["profiles"] {
+		return "", nil, nil, "", "", drain.Usagef("--profile and --profiles cannot both be set; set one")
+	}
 	if explicit["policy"] {
 		if strings.TrimSpace(cliPolicy) == "" {
-			return "", "", "", "", drain.Usagef("loop needs nonempty --policy")
+			return "", nil, nil, "", "", drain.Usagef("loop needs nonempty --policy")
 		}
-		return cliPolicy, "", sourceOption, "--policy", nil
+		return cliPolicy, nil, nil, sourceOption, "--policy", nil
+	}
+	if explicit["profiles"] {
+		names, err := drain.ParseProfileList(cliProfiles)
+		if err != nil {
+			return "", nil, nil, "", "", drain.Usagef("--profiles %q: %v", cliProfiles, err)
+		}
+		refs, err := drain.ResolveProfilePaths(names)
+		if err != nil {
+			return "", nil, nil, "", "", drain.Usagef("--profiles %q: %v", cliProfiles, err)
+		}
+		return refs[0], names, refs, sourceOption, "--profiles", nil
 	}
 	if explicit["profile"] {
 		if !settings.ValidProfileName(cliProfile) {
-			return "", "", "", "", drain.Usagef("--profile %q: expected a valid profile name matching [a-z0-9][a-z0-9_-]*", cliProfile)
+			return "", nil, nil, "", "", drain.Usagef("--profile %q: expected a valid profile name matching [a-z0-9][a-z0-9_-]*", cliProfile)
 		}
 		resolved, err := drain.ResolveProfilePath(cliProfile)
 		if err != nil {
-			return "", "", "", "", err
+			return "", nil, nil, "", "", err
 		}
-		return resolved, cliProfile, sourceOption, "--profile", nil
+		return resolved, []string{cliProfile}, []string{resolved}, sourceOption, "--profile", nil
 	}
-	// 2. Workspace .tillr.toml ([drain] policy wins over [drain] profile).
+	// 2. Workspace .tillr.toml ([drain] policy wins over [drain] profile / [drain] profiles).
 	if s.Drain.PolicySet {
-		return filepath.Join(root, filepath.FromSlash(s.Drain.Policy)), "", sourceSettings, "drain.policy", nil
+		return filepath.Join(root, filepath.FromSlash(s.Drain.Policy)), nil, nil, sourceSettings, "drain.policy", nil
+	}
+	if s.Drain.ProfilesSet {
+		refs, err := drain.ResolveProfilePaths(s.Drain.Profiles)
+		if err != nil {
+			return "", nil, nil, "", "", drain.Usagef(".tillr.toml drain.profiles=%v: %v", s.Drain.Profiles, err)
+		}
+		return refs[0], append([]string(nil), s.Drain.Profiles...), refs, sourceSettings, "drain.profiles", nil
 	}
 	if s.Drain.Profile != "" {
 		resolved, err := drain.ResolveProfilePath(s.Drain.Profile)
 		if err != nil {
-			return "", "", "", "", drain.Usagef(".tillr.toml drain.profile=%q: %v", s.Drain.Profile, err)
+			return "", nil, nil, "", "", drain.Usagef(".tillr.toml drain.profile=%q: %v", s.Drain.Profile, err)
 		}
-		return resolved, s.Drain.Profile, sourceSettings, "drain.profile", nil
+		return resolved, []string{s.Drain.Profile}, []string{resolved}, sourceSettings, "drain.profile", nil
 	}
-	// 3. Environment variable (TILLR_DRAIN_POLICY wins over TILLR_DRAIN_PROFILE).
+	// 3. Environment variable (TILLR_DRAIN_POLICY wins over TILLR_DRAIN_PROFILE / TILLR_DRAIN_PROFILES).
 	if rawPolicy, ok := os.LookupEnv("TILLR_DRAIN_POLICY"); ok {
 		if strings.TrimSpace(rawPolicy) == "" {
-			return "", "", "", "", drain.Usagef("environment variable TILLR_DRAIN_POLICY=%q: must not be empty", rawPolicy)
+			return "", nil, nil, "", "", drain.Usagef("environment variable TILLR_DRAIN_POLICY=%q: must not be empty", rawPolicy)
 		}
-		return rawPolicy, "", sourceEnv, "TILLR_DRAIN_POLICY", nil
+		return rawPolicy, nil, nil, sourceEnv, "TILLR_DRAIN_POLICY", nil
 	}
-	if rawProfile, ok := os.LookupEnv("TILLR_DRAIN_PROFILE"); ok {
-		if !settings.ValidProfileName(rawProfile) {
-			return "", "", "", "", drain.Usagef("environment variable TILLR_DRAIN_PROFILE=%q: expected a valid profile name matching [a-z0-9][a-z0-9_-]*", rawProfile)
+	rawProfile, hasProfile := os.LookupEnv("TILLR_DRAIN_PROFILE")
+	rawProfiles, hasProfiles := os.LookupEnv("TILLR_DRAIN_PROFILES")
+	if hasProfile || hasProfiles {
+		var singleName string
+		if hasProfile {
+			if !settings.ValidProfileName(rawProfile) {
+				return "", nil, nil, "", "", drain.Usagef("environment variable TILLR_DRAIN_PROFILE=%q: expected a valid profile name matching [a-z0-9][a-z0-9_-]*", rawProfile)
+			}
+			singleName = rawProfile
 		}
-		resolved, err := drain.ResolveProfilePath(rawProfile)
+		var listNames []string
+		if hasProfiles {
+			parsed, err := drain.ParseProfileList(rawProfiles)
+			if err != nil {
+				return "", nil, nil, "", "", drain.Usagef("environment variable TILLR_DRAIN_PROFILES=%q: %v", rawProfiles, err)
+			}
+			listNames = parsed
+		}
+		if hasProfile && hasProfiles {
+			if len(listNames) != 1 || listNames[0] != singleName {
+				return "", nil, nil, "", "", drain.Usagef("environment variables TILLR_DRAIN_PROFILE=%q and TILLR_DRAIN_PROFILES=%q disagree; set one", rawProfile, rawProfiles)
+			}
+		}
+		if hasProfiles {
+			refs, err := drain.ResolveProfilePaths(listNames)
+			if err != nil {
+				return "", nil, nil, "", "", drain.Usagef("environment variable TILLR_DRAIN_PROFILES=%q: %v", rawProfiles, err)
+			}
+			return refs[0], listNames, refs, sourceEnv, "TILLR_DRAIN_PROFILES", nil
+		}
+		resolved, err := drain.ResolveProfilePath(singleName)
 		if err != nil {
-			return "", "", "", "", drain.Usagef("environment variable TILLR_DRAIN_PROFILE=%q: %v", rawProfile, err)
+			return "", nil, nil, "", "", drain.Usagef("environment variable TILLR_DRAIN_PROFILE=%q: %v", rawProfile, err)
 		}
-		return resolved, rawProfile, sourceEnv, "TILLR_DRAIN_PROFILE", nil
+		return resolved, []string{singleName}, []string{resolved}, sourceEnv, "TILLR_DRAIN_PROFILE", nil
 	}
 	// 4. Built-in default: <root>/config/tillr/backend-policy.json.
 	defaultPolicy := filepath.Join(root, "config", "tillr", "backend-policy.json")
 	if _, statErr := os.Stat(defaultPolicy); !os.IsNotExist(statErr) || !drain.CommandOnlyWorkflows(root) {
-		return defaultPolicy, "", sourceBuiltinDefault, "", nil
+		return defaultPolicy, nil, nil, sourceBuiltinDefault, "", nil
 	}
-	return "", "", sourceBuiltinDefault, "", nil
+	return "", nil, nil, sourceBuiltinDefault, "", nil
 }

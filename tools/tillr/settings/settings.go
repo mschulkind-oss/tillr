@@ -114,6 +114,8 @@ type Drain struct {
 	PolicySet              bool
 	Profile                string
 	ProfileSet             bool
+	Profiles               []string
+	ProfilesSet            bool
 	RunBin                 string
 	RunBinSet              bool
 	ItemBin                string
@@ -552,6 +554,26 @@ func read(root, nonLandingDefinition string) (Settings, error) {
 				}
 				s.Drain.Profile = str
 				s.Drain.ProfileSet = true
+			case "drain.profiles":
+				list, ok := value.([]any)
+				if !ok || len(list) == 0 {
+					return Settings{}, refuseValue(full, value, "a nonempty array of distinct valid profile names matching [a-z0-9][a-z0-9_-]*")
+				}
+				profiles := make([]string, len(list))
+				seen := make(map[string]bool, len(list))
+				for i, item := range list {
+					str, ok := item.(string)
+					if !ok || !ValidProfileName(str) {
+						return Settings{}, refuseValue(full, value, "a nonempty array of distinct valid profile names matching [a-z0-9][a-z0-9_-]*")
+					}
+					if seen[str] {
+						return Settings{}, fmt.Errorf("%s: %s: duplicate profile name %q", path, full, str)
+					}
+					seen[str] = true
+					profiles[i] = str
+				}
+				s.Drain.Profiles = profiles
+				s.Drain.ProfilesSet = true
 			case "drain.run_bin":
 				str, ok := value.(string)
 				if !ok || strings.TrimSpace(str) == "" {
@@ -661,7 +683,7 @@ func read(root, nonLandingDefinition string) (Settings, error) {
 					expected = "a known gate key (checks_dir)"
 				}
 				if table == "drain" {
-					expected = "a known drain key (exit_when_drained, store, max_agents, lanes, worktree_count, worktree_disk_budget, max_concurrent_triage, lane_root, backoff_base, fallback_poll, no_notify, policy, profile, run_bin, item_bin, brief_template, gate, land, verdict, replay, heavy_gate, rolling, fixer_gate, questions_cmd or questions_index)"
+					expected = "a known drain key (exit_when_drained, store, max_agents, lanes, worktree_count, worktree_disk_budget, max_concurrent_triage, lane_root, backoff_base, fallback_poll, no_notify, policy, profile, profiles, run_bin, item_bin, brief_template, gate, land, verdict, replay, heavy_gate, rolling, fixer_gate, questions_cmd or questions_index)"
 				}
 				if table == "candidate_size" {
 					expected = "a known candidate_size key (file_limit or added_line_limit)"
@@ -729,6 +751,9 @@ func read(root, nonLandingDefinition string) (Settings, error) {
 	}
 	if s.Drain.MaxAgentsSet && s.Drain.LanesSet && s.Drain.MaxAgents != s.Drain.Lanes {
 		return Settings{}, fmt.Errorf("%s: drain.max_agents (%d) and drain.lanes (%d) disagree; set one", path, s.Drain.MaxAgents, s.Drain.Lanes)
+	}
+	if s.Drain.ProfileSet && s.Drain.ProfilesSet {
+		return Settings{}, fmt.Errorf("%s: drain.profile and drain.profiles cannot both be set; set one", path)
 	}
 	if s.Worktrees.MaxCountSet && s.Drain.WorktreeCountSet && s.Worktrees.MaxCount != s.Drain.WorktreeCount {
 		return Settings{}, fmt.Errorf("%s: worktrees.max_count (%d) and drain.worktree_count (%d) disagree; set one", path, s.Worktrees.MaxCount, s.Drain.WorktreeCount)
@@ -911,6 +936,10 @@ func (s Settings) StartupLine() string {
 	}
 	if s.Drain.Profile != "" {
 		line += fmt.Sprintf(" drain.profile=%s", strconv.Quote(s.Drain.Profile))
+	}
+	if s.Drain.ProfilesSet {
+		encodedProfiles, _ := json.Marshal(s.Drain.Profiles)
+		line += " drain.profiles=" + string(encodedProfiles)
 	}
 	if s.Drain.RunBinSet {
 		line += fmt.Sprintf(" drain.run_bin=%s", strconv.Quote(s.Drain.RunBin))

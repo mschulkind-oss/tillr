@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/mschulkind-oss/tillr-drain/drain"
 	"github.com/mschulkind-oss/tillr/record"
@@ -31,10 +32,13 @@ func policyFace(args []string) int {
 			return fail(err)
 		}
 		fmt.Printf("policy in force: %s (%s)\n", state.Hash, state.Ref)
-		if state.Source != "" || state.Profile != "" {
+		if state.Source != "" || state.Profile != "" || len(state.Profiles) > 0 {
 			fmt.Printf("policy selection: source=%s", state.Source)
 			if state.Profile != "" {
 				fmt.Printf(" profile=%s", state.Profile)
+			}
+			if len(state.Profiles) > 1 {
+				fmt.Printf(" profiles=%s (%d/%d)", strings.Join(state.Profiles, ","), state.ProfileIndex+1, len(state.Profiles))
 			}
 			fmt.Println()
 		}
