@@ -643,6 +643,7 @@ type Loop struct {
 	lastLandedTip               string
 	baseReplayMu                sync.Mutex
 	activeBaseReplays           int
+	splitClosing                splitClosingState
 	fixerWaitMu                 sync.Mutex
 	forkRebaseMu                sync.Mutex
 	revertMu                    sync.Mutex
@@ -5607,7 +5608,7 @@ func (l *Loop) settleActorsBeforeDrained(ctx context.Context, result *LoopResult
 	if err != nil {
 		return false, err
 	}
-	if afterSeq != beforeSeq || l.rollingRuns(result) != beforeRolling || l.heavyInFlight() || l.activeTriageCount() > 0 {
+	if afterSeq != beforeSeq || l.rollingRuns(result) != beforeRolling || l.heavyInFlight() || l.activeTriageCount() > 0 || l.hasSplitClosingWork() {
 		return true, nil
 	}
 	return false, nil

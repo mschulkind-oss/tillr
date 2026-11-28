@@ -25,14 +25,37 @@ import (
 )
 
 const (
+	StartedKind = "drain.split-closing-started"
 	FindingKind = "drain.split-closing-finding"
 	RefusedKind = "drain.split-closing-refused"
 	HeldKind    = "drain.split-closing-held"
+
+	RunKindCheck           = "check"
+	RunKindExtend          = "extend"
+	RunKindDefectiveExtend = "defective-extend"
 
 	briefFile            = "brief.md"
 	braceLiteralsFile    = "brace-literals"
 	endingCapabilityFile = "ending-capability"
 )
+
+type StartedPayload struct {
+	ItemID         string                       `json:"item_id"`
+	RunID          string                       `json:"run_id"`
+	Kind           string                       `json:"kind"`
+	StatementHash  string                       `json:"statement_hash"`
+	TrunkSHA       string                       `json:"trunk_sha,omitempty"`
+	TrunkTree      string                       `json:"trunk_tree,omitempty"`
+	LaneID         string                       `json:"lane_id"`
+	OutputPath     string                       `json:"output_path"`
+	Route          string                       `json:"route"`
+	Seat           string                       `json:"seat"`
+	Workflow       string                       `json:"workflow"`
+	NodeID         string                       `json:"node_id"`
+	Backend        string                       `json:"backend"`
+	Landings       []item.SplitPartLanding      `json:"landings,omitempty"`
+	DefectiveParts []item.DefectivePartFindings `json:"defective_parts,omitempty"`
+}
 
 type FindingPayload struct {
 	ItemID        string         `json:"item_id"`
@@ -66,9 +89,27 @@ type HeldPayload struct {
 
 type State struct {
 	StatementHash string
+	Started       *StartedPayload
 	Held          *HeldPayload
 	Finding       *FindingPayload
 	Refused       *RefusedPayload
+}
+
+type RunState int
+
+const (
+	RunStateRunning RunState = iota
+	RunStateFinished
+)
+
+type RunResult struct {
+	Record run.Record
+	Err    error
+}
+
+type AdvanceResult struct {
+	Worked  bool
+	Pending bool
 }
 
 type Criterion struct {
@@ -104,9 +145,11 @@ type Env struct {
 	LaneDir            func(laneID string) string
 	RevParse           func(ctx context.Context, dir, rev string) (string, error)
 	SelectSeats        func(seat string) (SeatSelection, bool)
-	RunRestartable     func(ctx context.Context, req run.Request) (run.Record, string, error)
+	CanStart           func(ctx context.Context) bool
+	StartRun           func(ctx context.Context, req run.Request) error
+	CheckRun           func(ctx context.Context, runID string) (RunResult, RunState, error)
+	ConsumeRun         func(runID string)
 	CountSpend         func(rec run.Record)
-	IsRestartPending   func(err error) bool
 	SetItemState       func(ctx context.Context, id, runID, state string) error
 	RequestWordsSuffix func(words []byte) string
 	BraceLiteralCount  func(brief string) int
@@ -124,13 +167,15 @@ func ReadState(r *store.Reader, parent string) (State, error) {
 	stmtHash := item.CriterionHash(string(rawStmt))
 	st := State{StatementHash: stmtHash}
 	rows, err := r.Query(
-		`SELECT kind, payload FROM events WHERE object_type='item' AND object_id=? AND kind IN (?,?,?) ORDER BY seq ASC`,
-		parent, FindingKind, RefusedKind, HeldKind,
+		`SELECT kind, payload FROM events WHERE object_type='item' AND object_id=? AND kind IN (?,?,?,?) ORDER BY seq ASC`,
+		parent, StartedKind, FindingKind, RefusedKind, HeldKind,
 	)
 	if err != nil {
 		return State{}, err
 	}
 	defer rows.Close()
+	var latestStarted *StartedPayload
+	settledRuns := map[string]bool{}
 	for rows.Next() {
 		var kind string
 		var raw []byte
@@ -138,28 +183,46 @@ func ReadState(r *store.Reader, parent string) (State, error) {
 			return State{}, err
 		}
 		switch kind {
+		case StartedKind:
+			var p StartedPayload
+			if err := json.Unmarshal(raw, &p); err == nil && p.StatementHash == stmtHash {
+				cp := p
+				latestStarted = &cp
+			}
 		case FindingKind:
 			var p FindingPayload
 			if err := json.Unmarshal(raw, &p); err == nil && p.StatementHash == stmtHash {
 				cp := p
 				st.Finding = &cp
+				if p.RunID != "" {
+					settledRuns[p.RunID] = true
+				}
 			}
 		case RefusedKind:
 			var p RefusedPayload
 			if err := json.Unmarshal(raw, &p); err == nil && p.StatementHash == stmtHash {
 				cp := p
 				st.Refused = &cp
+				if p.RunID != "" {
+					settledRuns[p.RunID] = true
+				}
 			}
 		case HeldKind:
 			var p HeldPayload
 			if err := json.Unmarshal(raw, &p); err == nil && p.StatementHash == stmtHash {
 				cp := p
 				st.Held = &cp
+				if p.RunID != "" {
+					settledRuns[p.RunID] = true
+				}
 			}
 		}
 	}
 	if err := rows.Err(); err != nil {
 		return State{}, err
+	}
+	if latestStarted != nil && !settledRuns[latestStarted.RunID] {
+		st.Started = latestStarted
 	}
 	return st, nil
 }
@@ -230,7 +293,7 @@ func nextRunID(ctx context.Context, s *store.Store, root, prefix, parent string)
 		if err := r.QueryRow(`SELECT count(*) FROM runs WHERE item_id=? AND run_id LIKE ?`, parent, base+"%").Scan(&runCount); err != nil {
 			return err
 		}
-		if err := r.QueryRow(`SELECT count(*) FROM events WHERE object_type='item' AND object_id=? AND kind IN (?,?,?)`, parent, FindingKind, RefusedKind, HeldKind).Scan(&evCount); err != nil {
+		if err := r.QueryRow(`SELECT count(*) FROM events WHERE object_type='item' AND object_id=? AND kind IN (?,?,?,?)`, parent, StartedKind, FindingKind, RefusedKind, HeldKind).Scan(&evCount); err != nil {
 			return err
 		}
 		if runCount > evCount {
@@ -650,13 +713,13 @@ func WriteAtomicJSON(path string, v any) error {
 	return nil
 }
 
-func Advance(ctx context.Context, env Env, mainSHA string) (bool, error) {
+func Advance(ctx context.Context, env Env, mainSHA string) (AdvanceResult, error) {
 	if env.NonLanding {
-		return false, nil
+		return AdvanceResult{}, nil
 	}
 	s, err := store.Open(ctx, env.Store, false)
 	if err != nil {
-		return false, err
+		return AdvanceResult{}, err
 	}
 	defer s.Close()
 
@@ -679,13 +742,13 @@ func Advance(ctx context.Context, env Env, mainSHA string) (bool, error) {
 		}
 		return rows.Err()
 	}); err != nil {
-		return false, err
+		return AdvanceResult{}, err
 	}
 	if len(parents) == 0 {
-		return false, nil
+		return AdvanceResult{}, nil
 	}
 
-	worked := false
+	var out AdvanceResult
 	for _, parent := range parents {
 		var ready bool
 		var defectiveParts []item.DefectivePartFindings
@@ -733,43 +796,86 @@ func Advance(ctx context.Context, env Env, mainSHA string) (bool, error) {
 			}
 			return nil
 		}); err != nil {
-			return worked, err
+			return out, err
 		}
 		if !ready {
 			continue
 		}
-		if len(defectiveParts) > 0 {
-			w, err := runExtendWithDefective(ctx, env, s, parent, st, defectiveParts)
-			if w {
-				worked = true
+		if st.Started != nil {
+			res, state, err := env.CheckRun(ctx, st.Started.RunID)
+			if err != nil {
+				return out, err
+			}
+			if state == RunStateRunning {
+				out.Pending = true
+				continue
+			}
+			var settled bool
+			if st.Started.Kind == RunKindCheck {
+				settled, err = settleCheck(ctx, env, s, parent, *st.Started, res)
+			} else {
+				settled, err = settleExtend(ctx, env, s, parent, st, *st.Started, res)
 			}
 			if err != nil {
-				return worked, err
+				return out, err
+			}
+			if env.ConsumeRun != nil {
+				env.ConsumeRun(st.Started.RunID)
+			}
+			if settled {
+				out.Worked = true
+			}
+			continue
+		}
+		if env.CanStart != nil && !env.CanStart(ctx) {
+			continue
+		}
+		if len(defectiveParts) > 0 {
+			w, err := startExtendWithDefective(ctx, env, s, parent, st, defectiveParts)
+			if w {
+				out.Worked = true
+				out.Pending = true
+			}
+			if err != nil {
+				return out, err
 			}
 			continue
 		}
 		if st.Finding == nil {
-			w, err := runCheck(ctx, env, s, parent, mainSHA, st.StatementHash)
+			w, err := startCheck(ctx, env, s, parent, mainSHA, st.StatementHash)
 			if w {
-				worked = true
+				out.Worked = true
+				out.Pending = true
 			}
 			if err != nil {
-				return worked, err
+				return out, err
 			}
 		} else {
-			w, err := runExtend(ctx, env, s, parent, st)
+			w, err := startExtendWithDefective(ctx, env, s, parent, st, nil)
 			if w {
-				worked = true
+				out.Worked = true
+				out.Pending = true
 			}
 			if err != nil {
-				return worked, err
+				return out, err
 			}
 		}
 	}
-	return worked, nil
+	return out, nil
 }
 
-func runCheck(ctx context.Context, env Env, s *store.Store, parent, mainSHA, stmtHash string) (bool, error) {
+func appendStarted(ctx context.Context, storePath, parent string, payload StartedPayload, at time.Time) error {
+	ws, err := store.Open(ctx, storePath, true)
+	if err != nil {
+		return err
+	}
+	defer ws.Close()
+	return ws.WriteTx(ctx, func(tx *store.Tx) error {
+		return runhistory.AppendEffectOn(tx, StartedKind, "item", parent, payload, at)
+	})
+}
+
+func startCheck(ctx context.Context, env Env, s *store.Store, parent, mainSHA, stmtHash string) (bool, error) {
 	sel, ok := env.SelectSeats("review")
 	if !ok || len(sel.Backends) == 0 {
 		return false, nil
@@ -815,13 +921,40 @@ func runCheck(ctx context.Context, env Env, s *store.Store, parent, mainSHA, stm
 	req.NodeID = item.SplitClosingNode
 	req.Node = item.SplitClosingNode
 
-	rec, _, runErr := env.RunRestartable(ctx, req)
-	if env.IsRestartPending(runErr) {
-		return false, runErr
+	if err := appendStarted(ctx, env.Store, parent, StartedPayload{
+		ItemID:        parent,
+		RunID:         runID,
+		Kind:          RunKindCheck,
+		StatementHash: stmtHash,
+		TrunkSHA:      mainSHA,
+		TrunkTree:     trunkTree,
+		LaneID:        laneID,
+		OutputPath:    evalOut,
+		Route:         req.Route(),
+		Seat:          req.Seat,
+		Workflow:      req.Workflow,
+		NodeID:        req.NodeID,
+		Backend:       req.Backend,
+		Landings:      landings,
+	}, env.Now().UTC()); err != nil {
+		return false, err
 	}
-	if ctx.Err() != nil && runErr != nil {
-		return false, ctx.Err()
+	if err := env.StartRun(ctx, req); err != nil {
+		return false, err
 	}
+	return true, nil
+}
+
+func settleCheck(ctx context.Context, env Env, s *store.Store, parent string, started StartedPayload, res RunResult) (bool, error) {
+	runID := started.RunID
+	stmtHash := started.StatementHash
+	mainSHA := started.TrunkSHA
+	trunkTree := started.TrunkTree
+	evalOut := started.OutputPath
+	landings := started.Landings
+	rec := res.Record
+	runErr := res.Err
+
 	env.CountSpend(rec)
 
 	hold := func(reason, mover string) (bool, error) {
@@ -864,7 +997,7 @@ func runCheck(ctx context.Context, env Env, s *store.Store, parent, mainSHA, stm
 			ItemID:           parent,
 			Head:             mainSHA,
 			Tree:             trunkTree,
-			Actor:            "run=" + runID + ";route=" + req.Route(),
+			Actor:            "run=" + runID + ";route=" + started.Route,
 			JudgedActor:      "split-parts:" + parent,
 			At:               env.Now().UTC(),
 		}
@@ -976,20 +1109,18 @@ func runCheck(ctx context.Context, env Env, s *store.Store, parent, mainSHA, stm
 	}
 }
 
-func runExtend(ctx context.Context, env Env, s *store.Store, parent string, st State) (bool, error) {
-	return runExtendWithDefective(ctx, env, s, parent, st, nil)
-}
-
-func runExtendWithDefective(ctx context.Context, env Env, s *store.Store, parent string, st State, defectiveParts []item.DefectivePartFindings) (bool, error) {
+func startExtendWithDefective(ctx context.Context, env Env, s *store.Store, parent string, st State, defectiveParts []item.DefectivePartFindings) (bool, error) {
 	sel, ok := env.SelectSeats("design")
 	if !ok || len(sel.Backends) == 0 {
 		return false, nil
 	}
 	prefix := "closing-extend"
 	nodeID := "split-closing-extend"
+	kind := RunKindExtend
 	if len(defectiveParts) > 0 {
 		prefix = "defective-extend"
 		nodeID = "split-defective-repair"
+		kind = RunKindDefectiveExtend
 	}
 	runID, err := nextRunID(ctx, s, env.Root, prefix, parent)
 	if err != nil {
@@ -1026,13 +1157,35 @@ func runExtendWithDefective(ctx context.Context, env Env, s *store.Store, parent
 	req.NodeID = nodeID
 	req.Node = nodeID
 
-	rec, _, runErr := env.RunRestartable(ctx, req)
-	if env.IsRestartPending(runErr) {
-		return false, runErr
+	if err := appendStarted(ctx, env.Store, parent, StartedPayload{
+		ItemID:         parent,
+		RunID:          runID,
+		Kind:           kind,
+		StatementHash:  st.StatementHash,
+		LaneID:         laneID,
+		OutputPath:     extOut,
+		Route:          req.Route(),
+		Seat:           req.Seat,
+		Workflow:       req.Workflow,
+		NodeID:         req.NodeID,
+		Backend:        req.Backend,
+		DefectiveParts: defectiveParts,
+	}, env.Now().UTC()); err != nil {
+		return false, err
 	}
-	if ctx.Err() != nil && runErr != nil {
-		return false, ctx.Err()
+	if err := env.StartRun(ctx, req); err != nil {
+		return false, err
 	}
+	return true, nil
+}
+
+func settleExtend(ctx context.Context, env Env, s *store.Store, parent string, st State, started StartedPayload, res RunResult) (bool, error) {
+	runID := started.RunID
+	extOut := started.OutputPath
+	defectiveParts := started.DefectiveParts
+	rec := res.Record
+	runErr := res.Err
+
 	env.CountSpend(rec)
 
 	hold := func(reason, mover string) (bool, error) {

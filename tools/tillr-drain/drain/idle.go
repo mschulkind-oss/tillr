@@ -314,7 +314,7 @@ func (l *Loop) idleUnchanged(ctx context.Context, at time.Time) bool {
 		return false
 	}
 	if l.cfg.ExitWhenDrained || l.commentsSettings() != nil ||
-		l.activeCount() > 0 || l.activeTriageCount() > 0 || l.heavyInFlight() || l.infrastructureStreak() > 0 ||
+		l.activeCount() > 0 || l.activeTriageCount() > 0 || l.hasSplitClosingWork() || l.heavyInFlight() || l.infrastructureStreak() > 0 ||
 		l.hasStageFaults() || len(l.completions) > 0 {
 		return false
 	}

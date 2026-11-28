@@ -19,13 +19,14 @@ import (
 )
 
 const (
+	splitClosingStartedKind = splitclosing.StartedKind
 	splitClosingFindingKind = splitclosing.FindingKind
 	splitClosingRefusedKind = splitclosing.RefusedKind
 	splitClosingHeldKind    = splitclosing.HeldKind
 )
 
 func init() {
-	for _, kind := range []string{judgeRequestKind, judgeLandedKind, verifyTriageResetKind, "drain.graph-completed", RevertKind, callOffered, callAnswered, callLanded, callDelivered, callClosed, endingCapabilitiesKind, piFeaturesKind, splitClosingFindingKind, splitClosingRefusedKind, splitClosingHeldKind} {
+	for _, kind := range []string{judgeRequestKind, judgeLandedKind, verifyTriageResetKind, "drain.graph-completed", RevertKind, callOffered, callAnswered, callLanded, callDelivered, callClosed, endingCapabilitiesKind, piFeaturesKind, splitClosingStartedKind, splitClosingFindingKind, splitClosingRefusedKind, splitClosingHeldKind} {
 		if err := event.Register(kind, Utility); err != nil {
 			panic(err)
 		}

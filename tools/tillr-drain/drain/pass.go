@@ -3496,7 +3496,11 @@ plans:
 	l.mu.Lock()
 	stageLaunchBusy := len(l.stageLaunch.Stage.Runs) > 0 || len(l.stageLaunch.Launch.Runs) > 0
 	l.mu.Unlock()
-	if l.activeCount() > 0 || l.activeTriageCount() > 0 || coordinatorPending || stageLaunchBusy {
+	if !purePass && l.hasSplitClosingResults() {
+		l.waitingDetail = ""
+		return "", nil
+	}
+	if l.activeCount() > 0 || l.activeTriageCount() > 0 || l.hasSplitClosingWork() || coordinatorPending || stageLaunchBusy {
 		l.waitingDetail = ""
 		return l.waitForTrigger(ctx, leases, at, result)
 	}

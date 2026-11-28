@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -24,14 +25,16 @@ import (
 
 type splitClosingSteps struct {
 	*recordingSteps
-	t        *testing.T
-	f        refusalLoopFixture
-	l        *Loop
-	mu       sync.Mutex
-	runs     []run.Request
-	briefs   map[string]string
-	onReview func(req run.Request, brief, evalOut string) error
-	onDesign func(req run.Request, brief, extOut string) error
+	t            *testing.T
+	f            refusalLoopFixture
+	l            *Loop
+	mu           sync.Mutex
+	runs         []run.Request
+	briefs       map[string]string
+	onReview     func(req run.Request, brief, evalOut string) error
+	onDesign     func(req run.Request, brief, extOut string) error
+	onClosingCtx func(ctx context.Context, req run.Request, brief, evalOut string) (run.Record, string, error)
+	onWorker     func(ctx context.Context, req run.Request) (run.Record, string, error)
 }
 
 func newSplitClosingSteps(t *testing.T, f refusalLoopFixture, l *Loop) *splitClosingSteps {
@@ -43,6 +46,42 @@ func newSplitClosingSteps(t *testing.T, f refusalLoopFixture, l *Loop) *splitClo
 		l:              l,
 		briefs:         map[string]string{},
 	}
+}
+
+func (s *splitClosingSteps) Land(ctx context.Context, c Candidate) (LandOutcome, error) {
+	before := runGit(s.t, s.f.root, "rev-parse", TrunkRef)
+	runGit(s.t, s.f.root, "cherry-pick", c.HeadSHA)
+	after := runGit(s.t, s.f.root, "rev-parse", TrunkRef)
+	st, err := store.Open(ctx, s.f.storePath, true)
+	if err != nil {
+		return LandOutcome{}, err
+	}
+	defer st.Close()
+	if err := st.WriteTx(ctx, func(tx *store.Tx) error {
+		_, err := tx.Exec(
+			`INSERT INTO landings(landing_id,item_id,run_id,verdict_id,result,base_sha,head_sha,trunk_before,trunk_after,event_seq) VALUES(?,?,?,'verdict','landed',?,?,?,?,999)`,
+			"land-"+c.ItemID, c.ItemID, c.RunID, c.BaseSHA, c.HeadSHA, before, after,
+		)
+		return err
+	}); err != nil {
+		return LandOutcome{}, err
+	}
+	return LandOutcome{Result: LandLanded, TrunkAfter: after}, nil
+}
+
+func (s *splitClosingSteps) Verdict(ctx context.Context, c Candidate, outcome string) error {
+	if outcome != "pass" {
+		return nil
+	}
+	st, err := store.Open(ctx, s.f.storePath, true)
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	return st.WriteTx(ctx, func(tx *store.Tx) error {
+		_, err := tx.Exec(`UPDATE item_criteria SET state = 'done' WHERE item_id = ?`, c.ItemID)
+		return err
+	})
 }
 
 func (s *splitClosingSteps) ItemState(ctx context.Context, id, _ string, state string, waiting ...item.WaitingOn) error {
@@ -57,7 +96,16 @@ func (s *splitClosingSteps) ItemState(ctx context.Context, id, _ string, state s
 	})
 }
 
-func (s *splitClosingSteps) Run(_ context.Context, req run.Request) (run.Record, string, error) {
+func (s *splitClosingSteps) Run(ctx context.Context, req run.Request) (run.Record, string, error) {
+	if req.Workflow != item.SplitClosingWorkflow {
+		s.mu.Lock()
+		s.runs = append(s.runs, req)
+		s.mu.Unlock()
+		if s.onWorker != nil {
+			return s.onWorker(ctx, req)
+		}
+		return s.recordingSteps.Run(ctx, req)
+	}
 	_, _, durableDir := splitclosing.Dirs(s.l.cfg.Root, s.l.cfg.LaneRoot, s.l.laneDirPath, req.RunID)
 	rawBrief, err := os.ReadFile(filepath.Join(durableDir, BriefFile))
 	if err != nil {
@@ -69,6 +117,10 @@ func (s *splitClosingSteps) Run(_ context.Context, req run.Request) (run.Record,
 	s.runs = append(s.runs, req)
 	s.briefs[req.RunID] = brief
 	s.mu.Unlock()
+
+	if s.onClosingCtx != nil {
+		return s.onClosingCtx(ctx, req, brief, filepath.Join(durableDir, "eval.output"))
+	}
 
 	switch req.Seat {
 	case "review":
@@ -100,6 +152,28 @@ func (s *splitClosingSteps) Run(_ context.Context, req run.Request) (run.Record,
 		FinishedAt:   now,
 		ArtifactRefs: []run.ArtifactRef{},
 	}, "RESULT: done\n", nil
+}
+
+func advanceSplitClosingAndSettle(t *testing.T, ctx context.Context, l *Loop, mainSHA string, result *LoopResult) (bool, error) {
+	t.Helper()
+	worked, err := l.advanceSplitClosingChecks(ctx, mainSHA, result)
+	if err != nil || !worked {
+		return worked, err
+	}
+	deadline := time.Now().Add(hangGuard)
+	for {
+		l.mu.Lock()
+		active := len(l.splitClosing.active)
+		l.mu.Unlock()
+		if active == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for async split closing run to finish")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	return l.advanceSplitClosingChecks(ctx, mainSHA, result)
 }
 
 func splitClosingFixture(t *testing.T) (refusalLoopFixture, *Loop, *splitClosingSteps, string, map[string]string) {
@@ -244,7 +318,7 @@ func TestSplitClosingCheckPassesWhenLastRequiredPartLands(t *testing.T) {
 		return nil
 	}
 
-	worked, err := l.advanceSplitClosingChecks(ctx, "", &LoopResult{})
+	worked, err := advanceSplitClosingAndSettle(t, ctx, l, "", &LoopResult{})
 	if err != nil || !worked {
 		t.Fatalf("advanceSplitClosingChecks: worked=%v err=%v", worked, err)
 	}
@@ -442,7 +516,7 @@ func TestSplitClosingCheckFindingExtendsSplitAndPasses(t *testing.T) {
 	}
 
 	// Step 1: First closing check finds missing seam.
-	if worked, err := l.advanceSplitClosingChecks(ctx, "", &LoopResult{}); err != nil || !worked {
+	if worked, err := advanceSplitClosingAndSettle(t, ctx, l, "", &LoopResult{}); err != nil || !worked {
 		t.Fatalf("step 1 advanceSplitClosingChecks: worked=%v err=%v", worked, err)
 	}
 	whyFinding := parentWhyRow(t, ctx, l, f.storePath, parent)
@@ -451,7 +525,7 @@ func TestSplitClosingCheckFindingExtendsSplitAndPasses(t *testing.T) {
 	}
 
 	// Step 2: Design seat extends the split.
-	if worked, err := l.advanceSplitClosingChecks(ctx, "", &LoopResult{}); err != nil || !worked {
+	if worked, err := advanceSplitClosingAndSettle(t, ctx, l, "", &LoopResult{}); err != nil || !worked {
 		t.Fatalf("step 2 advanceSplitClosingChecks: worked=%v err=%v", worked, err)
 	}
 	if !strings.Contains(designBrief, "c6: missing seam between A and B") {
@@ -508,7 +582,7 @@ func TestSplitClosingCheckFindingExtendsSplitAndPasses(t *testing.T) {
 	commitThird := landPartOnTrunk(t, f, thirdID, "run-third", "third.txt", "A and B wired\n", 103)
 
 	// Step 4: Second closing check passes and finishes parent.
-	if worked, err := l.advanceSplitClosingChecks(ctx, "", &LoopResult{}); err != nil || !worked {
+	if worked, err := advanceSplitClosingAndSettle(t, ctx, l, "", &LoopResult{}); err != nil || !worked {
 		t.Fatalf("step 4 advanceSplitClosingChecks: worked=%v err=%v", worked, err)
 	}
 	if reviewCall != 2 {
@@ -587,7 +661,7 @@ func TestSplitClosingExtensionRefusalAndMissingOutput(t *testing.T) {
 		}
 
 		// Closing check produces finding.
-		if worked, err := l.advanceSplitClosingChecks(ctx, "", &LoopResult{}); err != nil || !worked {
+		if worked, err := advanceSplitClosingAndSettle(t, ctx, l, "", &LoopResult{}); err != nil || !worked {
 			t.Fatalf("finding pass: worked=%v err=%v", worked, err)
 		}
 
@@ -617,7 +691,7 @@ func TestSplitClosingExtensionRefusalAndMissingOutput(t *testing.T) {
 		beforeItems, beforeEdges, beforeSplits, beforeStmt := snapshotCounts()
 
 		// First design run: malformed extension is refused atomically.
-		if worked, err := l.advanceSplitClosingChecks(ctx, "", &LoopResult{}); err != nil || !worked {
+		if worked, err := advanceSplitClosingAndSettle(t, ctx, l, "", &LoopResult{}); err != nil || !worked {
 			t.Fatalf("first design pass: worked=%v err=%v", worked, err)
 		}
 		afterItems, afterEdges, afterSplits, afterStmt := snapshotCounts()
@@ -631,7 +705,7 @@ func TestSplitClosingExtensionRefusalAndMissingOutput(t *testing.T) {
 		}
 
 		// Second design run: receives prior refusal reason; repeating same invalid output holds on design.
-		if worked, err := l.advanceSplitClosingChecks(ctx, "", &LoopResult{}); err != nil || !worked {
+		if worked, err := advanceSplitClosingAndSettle(t, ctx, l, "", &LoopResult{}); err != nil || !worked {
 			t.Fatalf("second design pass: worked=%v err=%v", worked, err)
 		}
 		if len(designBriefs) != 2 || !strings.Contains(designBriefs[1], "## Prior Extension Refusal") || !strings.Contains(designBriefs[1], "unknown field") {
@@ -679,10 +753,10 @@ func TestSplitClosingExtensionRefusalAndMissingOutput(t *testing.T) {
 			return nil
 		}
 
-		if worked, err := l.advanceSplitClosingChecks(ctx, "", &LoopResult{}); err != nil || !worked {
+		if worked, err := advanceSplitClosingAndSettle(t, ctx, l, "", &LoopResult{}); err != nil || !worked {
 			t.Fatalf("finding pass: worked=%v err=%v", worked, err)
 		}
-		if worked, err := l.advanceSplitClosingChecks(ctx, "", &LoopResult{}); err != nil || !worked {
+		if worked, err := advanceSplitClosingAndSettle(t, ctx, l, "", &LoopResult{}); err != nil || !worked {
 			t.Fatalf("missing output pass: worked=%v err=%v", worked, err)
 		}
 		if designCalls != 1 {
@@ -915,7 +989,7 @@ func TestSplitClosingDefectiveRequiredPartReplacedByDesign(t *testing.T) {
 		return os.WriteFile(extOut, []byte(body), 0o644)
 	}
 
-	worked, err := l.advanceSplitClosingChecks(ctx, "", &LoopResult{})
+	worked, err := advanceSplitClosingAndSettle(t, ctx, l, "", &LoopResult{})
 	if err != nil || !worked {
 		t.Fatalf("advanceSplitClosingChecks: worked=%v err=%v", worked, err)
 	}
@@ -981,7 +1055,7 @@ func TestSplitClosingDefectiveRequiredPartOwnerDecision(t *testing.T) {
 		return os.WriteFile(extOut, []byte(body), 0o644)
 	}
 
-	worked, err := l.advanceSplitClosingChecks(ctx, "", &LoopResult{})
+	worked, err := advanceSplitClosingAndSettle(t, ctx, l, "", &LoopResult{})
 	if err != nil || !worked {
 		t.Fatalf("advanceSplitClosingChecks: worked=%v err=%v", worked, err)
 	}
@@ -994,4 +1068,460 @@ func TestSplitClosingDefectiveRequiredPartOwnerDecision(t *testing.T) {
 	if sWhy.Class != "needs you" || sWhy.Mover != "owner; Should A or B win?" {
 		t.Fatalf("sibling why after owner_decision = %+v", sWhy)
 	}
+}
+
+func TestSplitClosingCheckNonBlockingLetsSecondItemLand(t *testing.T) {
+	f, l, steps, parent, parts := splitClosingFixture(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	// Land both required parts so parent is ready for its closing check.
+	// Resolve optional extra and queue-after so the only active work is
+	// parent's closing check and the independent second item "queue-before".
+	landPartOnTrunk(t, f, parts["first"], "run-first", "first.txt", "A works\n", 101)
+	landPartOnTrunk(t, f, parts["second"], "run-second", "second.txt", "B works\n", 102)
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		for _, id := range []string{parts["extra"], "queue-after"} {
+			if _, err := item.SetStateWithReceipt(ctx, tx, id, StateResolvedElsewhere, l.cfg.Now(), item.MoveReceipt{
+				By: "operator", Reason: "out of scope for test", ResolvesVia: "item:" + parts["first"],
+			}); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+
+	trunkAtStart := runGit(t, f.root, "rev-parse", TrunkRef)
+	treeAtStart := runGit(t, f.root, "rev-parse", trunkAtStart+"^{tree}")
+
+	closingStarted := make(chan string, 1)
+	releaseClosing := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(releaseClosing) }) }
+	defer release()
+	var closingRuns int
+	var closingMu sync.Mutex
+
+	steps.onClosingCtx = func(runCtx context.Context, req run.Request, _ string, evalOut string) (run.Record, string, error) {
+		if req.TimeoutMS != 0 {
+			t.Errorf("closing check should not add a time limit, got TimeoutMS=%d", req.TimeoutMS)
+		}
+		closingMu.Lock()
+		closingRuns++
+		closingMu.Unlock()
+		select {
+		case closingStarted <- req.RunID:
+		default:
+		}
+		select {
+		case <-releaseClosing:
+		case <-runCtx.Done():
+			return run.Record{}, "", runCtx.Err()
+		}
+		writeClosingEvalOutput(t, f, parent, evalOut, trunkAtStart, treeAtStart, "pass", nil)
+		now := l.cfg.Now().UTC().Format(time.RFC3339)
+		code := 0
+		return run.Record{
+			RunID:        req.RunID,
+			ItemID:       req.ItemID,
+			LaneID:       req.LaneID,
+			Backend:      req.Backend,
+			Seat:         req.Seat,
+			Workflow:     req.Workflow,
+			State:        run.StateExited,
+			ExitCode:     &code,
+			StartedAt:    now,
+			FinishedAt:   now,
+			ArtifactRefs: []run.ArtifactRef{},
+		}, "RESULT: done\n", nil
+	}
+
+	steps.onWorker = func(runCtx context.Context, req run.Request) (run.Record, string, error) {
+		wt := l.lanePath(req.LaneID)
+		if err := os.WriteFile(filepath.Join(wt, "second-item.txt"), []byte("second item work\n"), 0o644); err != nil {
+			return run.Record{}, "", err
+		}
+		runGit(t, wt, "add", "second-item.txt")
+		runGit(t, wt, "commit", "-m", "second item commit")
+		now := l.cfg.Now().UTC().Format(time.RFC3339)
+		code := 0
+		rec := run.Record{
+			RunID:        req.RunID,
+			ItemID:       req.ItemID,
+			LaneID:       req.LaneID,
+			Backend:      req.Backend,
+			Seat:         req.Seat,
+			Workflow:     req.Workflow,
+			State:        run.StateExited,
+			ExitCode:     &code,
+			StartedAt:    now,
+			FinishedAt:   now,
+			ArtifactRefs: []run.ArtifactRef{},
+		}
+		fixtureWrite(t, f, func(tx *store.Tx) error {
+			return applyTerminal(tx, rec)
+		})
+		return rec, "RESULT: done\n", nil
+	}
+
+	l.cfg.ExitWhenDrained = true
+	l.cfg.StorePollInterval = 100 * time.Millisecond
+
+	loopDone := make(chan LoopResult, 1)
+	loopErr := make(chan error, 1)
+	go func() {
+		res, err := l.Run(ctx)
+		if err != nil {
+			loopErr <- err
+			return
+		}
+		loopDone <- res
+	}()
+
+	var closingRunID string
+	select {
+	case closingRunID = <-closingStarted:
+	case err := <-loopErr:
+		t.Fatalf("loop failed before closing check started: %v", err)
+	case res := <-loopDone:
+		t.Fatalf("loop exited prematurely before closing check started: %+v", res)
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for closing check to start")
+	}
+
+	// While the closing check is still live, the second item ("queue-before")
+	// must be dispatched, settled, gated, and landed, and passes must be recorded.
+	readDB, err := store.OpenRead(ctx, f.storePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer readDB.Close()
+	readStateAndPasses := func() (secondState, parentState string, passCount int) {
+		if err := readDB.ReadTx(ctx, func(r *store.Reader) error {
+			if err := r.QueryRow(`SELECT state FROM items WHERE item_id='queue-before'`).Scan(&secondState); err != nil {
+				return err
+			}
+			if err := r.QueryRow(`SELECT state FROM items WHERE item_id=?`, parent).Scan(&parentState); err != nil {
+				return err
+			}
+			return r.QueryRow(`SELECT count(*) FROM events WHERE kind=?`, LoopPassKind).Scan(&passCount)
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return secondState, parentState, passCount
+	}
+
+	deadline := time.Now().Add(hangGuard)
+	for {
+		secondState, parentState, passCount := readStateAndPasses()
+		if secondState == StateLanded && passCount > 0 {
+			if parentState != StateBlocked {
+				t.Fatalf("parent settled before closing check finished: state=%q", parentState)
+			}
+			break
+		}
+		select {
+		case err := <-loopErr:
+			t.Fatalf("loop failed while closing check was live: %v", err)
+		case res := <-loopDone:
+			t.Fatalf("loop exited while closing check was live: %+v", res)
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("second item did not land while closing check was live: second=%q parent=%q passes=%d why=%+v", secondState, parentState, passCount, parentWhyRow(t, ctx, l, f.storePath, "queue-before"))
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	// Release the closing check; a later pass must settle it and land the parent.
+	release()
+
+	select {
+	case err := <-loopErr:
+		t.Fatalf("loop failed after closing check finished: %v", err)
+	case res := <-loopDone:
+		if res.Stop != StopQueueDrained {
+			t.Fatalf("loop stop = %q, want %q (detail=%q)", res.Stop, StopQueueDrained, res.Detail)
+		}
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for loop to settle closing check and drain")
+	}
+
+	_, parentState, _ := readStateAndPasses()
+	if parentState != StateLanded {
+		t.Fatalf("parent state after closing check settled = %q, want %q", parentState, StateLanded)
+	}
+	closingMu.Lock()
+	gotRuns := closingRuns
+	closingMu.Unlock()
+	if gotRuns != 1 {
+		t.Fatalf("expected 1 closing check run, got %d", gotRuns)
+	}
+	if _, err := os.Stat(filepath.Join(RunDir(f.root, closingRunID), "closing-check.json")); err != nil {
+		t.Fatalf("closing-check.json missing after settlement: %v", err)
+	}
+}
+
+func TestSplitClosingCheckSurvivesLoopRestart(t *testing.T) {
+	t.Run("live across restart neither loses result nor starts a second check", func(t *testing.T) {
+		f, l1, steps1, parent, parts := splitClosingFixture(t)
+		ctx1, cancel1 := context.WithCancel(context.Background())
+		defer cancel1()
+
+		landPartOnTrunk(t, f, parts["first"], "run-first", "first.txt", "A works\n", 101)
+		landPartOnTrunk(t, f, parts["second"], "run-second", "second.txt", "B works\n", 102)
+		trunkBefore := runGit(t, f.root, "rev-parse", TrunkRef)
+		treeBefore := runGit(t, f.root, "rev-parse", trunkBefore+"^{tree}")
+
+		// Create a fake run-face script ("sh exec --input x --lane-root y")
+		// whose argv matches IsRunFaceArgv so liveRunFaces recognizes it across restart.
+		faceDir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(faceDir, "exec"), []byte("read _\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		storeIdentity, err := processStoreIdentity(f.storePath)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		started := make(chan struct {
+			runID   string
+			evalOut string
+			cmd     *exec.Cmd
+			stdin   io.WriteCloser
+		}, 1)
+
+		steps1.onClosingCtx = func(runCtx context.Context, req run.Request, _ string, evalOut string) (run.Record, string, error) {
+			cmd := exec.Command("sh", "exec", "--input", "req.json", "--lane-root", f.laneRoot)
+			cmd.Dir = faceDir
+			cmd.Env = append(os.Environ(), "TILLR_RUN_ID="+req.RunID, "TILLR_LOOP_STORE="+storeIdentity)
+			stdin, err := cmd.StdinPipe()
+			if err != nil {
+				return run.Record{}, "", err
+			}
+			if err := cmd.Start(); err != nil {
+				return run.Record{}, "", err
+			}
+			started <- struct {
+				runID   string
+				evalOut string
+				cmd     *exec.Cmd
+				stdin   io.WriteCloser
+			}{runID: req.RunID, evalOut: evalOut, cmd: cmd, stdin: stdin}
+			<-runCtx.Done()
+			return run.Record{}, "", runCtx.Err()
+		}
+
+		// Loop 1 starts the closing check asynchronously.
+		if worked, err := l1.advanceSplitClosingChecks(ctx1, "", &LoopResult{}); err != nil || !worked {
+			t.Fatalf("loop 1 start: worked=%v err=%v", worked, err)
+		}
+		live := <-started
+		defer func() {
+			if live.stdin != nil {
+				_ = live.stdin.Close()
+			}
+			if live.cmd.Process != nil {
+				_ = live.cmd.Process.Kill()
+				_ = live.cmd.Wait()
+			}
+		}()
+
+		// Loop 1 restarts while the closing check run face stays alive.
+		cancel1()
+		deadline := time.Now().Add(hangGuard)
+		for {
+			l1.mu.Lock()
+			n := len(l1.splitClosing.active)
+			l1.mu.Unlock()
+			if n == 0 {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("loop 1 closing check waiter did not exit on restart")
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+
+		// Loop 2 starts on the same store with fresh in-memory state.
+		l2 := f.loop(t, &recordingSteps{}, &itemContentStager{})
+		l2.cfg.Policy = l1.cfg.Policy
+		steps2 := newSplitClosingSteps(t, f, l2)
+		l2.cfg.Steps = steps2
+
+		ctx2 := context.Background()
+		// Pass on Loop 2 while fakeFace is still alive: must NOT start a second check.
+		if worked, err := l2.advanceSplitClosingChecks(ctx2, "", &LoopResult{}); err != nil || worked {
+			t.Fatalf("loop 2 pass while live: worked=%v err=%v", worked, err)
+		}
+		if len(steps2.runs) != 0 {
+			t.Fatalf("loop 2 started a second closing check while first was live: %+v", steps2.runs)
+		}
+		if !l2.hasSplitClosingWork() {
+			t.Fatal("loop 2 did not retain pending state for live inherited closing check")
+		}
+
+		// Now the inherited closing check finishes: writes eval.output and terminal run record, then exits.
+		writeClosingEvalOutput(t, f, parent, live.evalOut, trunkBefore, treeBefore, "pass", nil)
+		now := l2.cfg.Now().UTC().Format(time.RFC3339)
+		code := 0
+		fixtureWrite(t, f, func(tx *store.Tx) error {
+			return applyTerminal(tx, run.Record{
+				RunID:        live.runID,
+				ItemID:       parent,
+				LaneID:       "lane_" + live.runID,
+				Backend:      "reviewer",
+				Seat:         "review",
+				Workflow:     item.SplitClosingWorkflow,
+				State:        run.StateExited,
+				ExitCode:     &code,
+				StartedAt:    now,
+				FinishedAt:   now,
+				ArtifactRefs: []run.ArtifactRef{},
+			})
+		})
+		_ = live.cmd.Process.Kill()
+		_ = live.cmd.Wait()
+
+		// Later pass on Loop 2 settles the finished check without starting a second check.
+		if worked, err := l2.advanceSplitClosingChecks(ctx2, "", &LoopResult{}); err != nil || !worked {
+			t.Fatalf("loop 2 settle pass: worked=%v err=%v", worked, err)
+		}
+		if len(steps2.runs) != 0 {
+			t.Fatalf("loop 2 started a second closing check during settlement: %+v", steps2.runs)
+		}
+		if l2.hasSplitClosingWork() {
+			t.Fatal("loop 2 still reports pending split closing work after settlement")
+		}
+
+		var parentState string
+		s, err := store.OpenRead(ctx2, f.storePath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.ReadTx(ctx2, func(r *store.Reader) error {
+			return r.QueryRow(`SELECT state FROM items WHERE item_id=?`, parent).Scan(&parentState)
+		}); err != nil {
+			s.Close()
+			t.Fatal(err)
+		}
+		s.Close()
+		if parentState != StateLanded {
+			t.Fatalf("parent state after restart settlement = %q, want %q", parentState, StateLanded)
+		}
+		if _, err := os.Stat(filepath.Join(RunDir(f.root, live.runID), "closing-check.json")); err != nil {
+			t.Fatalf("closing-check.json missing after restart settlement: %v", err)
+		}
+	})
+
+	t.Run("finished during restart gap is settled without starting a second check", func(t *testing.T) {
+		f, l1, steps1, parent, parts := splitClosingFixture(t)
+		ctx1, cancel1 := context.WithCancel(context.Background())
+		defer cancel1()
+
+		landPartOnTrunk(t, f, parts["first"], "run-first", "first.txt", "A works\n", 101)
+		landPartOnTrunk(t, f, parts["second"], "run-second", "second.txt", "B works\n", 102)
+		trunkBefore := runGit(t, f.root, "rev-parse", TrunkRef)
+		treeBefore := runGit(t, f.root, "rev-parse", trunkBefore+"^{tree}")
+
+		started := make(chan struct{ runID, evalOut string }, 1)
+		steps1.onClosingCtx = func(runCtx context.Context, req run.Request, _ string, evalOut string) (run.Record, string, error) {
+			started <- struct{ runID, evalOut string }{runID: req.RunID, evalOut: evalOut}
+			<-runCtx.Done()
+			return run.Record{}, "", runCtx.Err()
+		}
+
+		if worked, err := l1.advanceSplitClosingChecks(ctx1, "", &LoopResult{}); err != nil || !worked {
+			t.Fatalf("loop 1 start: worked=%v err=%v", worked, err)
+		}
+		info := <-started
+		cancel1()
+
+		// Run finishes while no loop is running.
+		writeClosingEvalOutput(t, f, parent, info.evalOut, trunkBefore, treeBefore, "pass", nil)
+		now := l1.cfg.Now().UTC().Format(time.RFC3339)
+		code := 0
+		fixtureWrite(t, f, func(tx *store.Tx) error {
+			return applyTerminal(tx, run.Record{
+				RunID:        info.runID,
+				ItemID:       parent,
+				LaneID:       "lane_" + info.runID,
+				Backend:      "reviewer",
+				Seat:         "review",
+				Workflow:     item.SplitClosingWorkflow,
+				State:        run.StateExited,
+				ExitCode:     &code,
+				StartedAt:    now,
+				FinishedAt:   now,
+				ArtifactRefs: []run.ArtifactRef{},
+			})
+		})
+
+		l2 := f.loop(t, &recordingSteps{}, &itemContentStager{})
+		l2.cfg.Policy = l1.cfg.Policy
+		steps2 := newSplitClosingSteps(t, f, l2)
+		l2.cfg.Steps = steps2
+
+		if worked, err := l2.advanceSplitClosingChecks(context.Background(), "", &LoopResult{}); err != nil || !worked {
+			t.Fatalf("loop 2 settle: worked=%v err=%v", worked, err)
+		}
+		if len(steps2.runs) != 0 {
+			t.Fatalf("loop 2 started a second check: %+v", steps2.runs)
+		}
+		var parentState string
+		s, err := store.OpenRead(context.Background(), f.storePath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.ReadTx(context.Background(), func(r *store.Reader) error {
+			return r.QueryRow(`SELECT state FROM items WHERE item_id=?`, parent).Scan(&parentState)
+		}); err != nil {
+			s.Close()
+			t.Fatal(err)
+		}
+		s.Close()
+		if parentState != StateLanded {
+			t.Fatalf("parent state = %q, want %q", parentState, StateLanded)
+		}
+	})
+
+	t.Run("failed closing check holds without retry", func(t *testing.T) {
+		f, l, steps, parent, parts := splitClosingFixture(t)
+		ctx := context.Background()
+
+		landPartOnTrunk(t, f, parts["first"], "run-first", "first.txt", "A works\n", 101)
+		landPartOnTrunk(t, f, parts["second"], "run-second", "second.txt", "B works\n", 102)
+
+		steps.onClosingCtx = func(_ context.Context, req run.Request, _, _ string) (run.Record, string, error) {
+			now := l.cfg.Now().UTC().Format(time.RFC3339)
+			code := 1
+			return run.Record{
+				RunID:        req.RunID,
+				ItemID:       req.ItemID,
+				LaneID:       req.LaneID,
+				Backend:      req.Backend,
+				Seat:         req.Seat,
+				Workflow:     req.Workflow,
+				State:        run.StateExited,
+				ExitCode:     &code,
+				StartedAt:    now,
+				FinishedAt:   now,
+				ArtifactRefs: []run.ArtifactRef{},
+			}, "", nil
+		}
+
+		if worked, err := advanceSplitClosingAndSettle(t, ctx, l, "", &LoopResult{}); err != nil || !worked {
+			t.Fatalf("first check start+settle: worked=%v err=%v", worked, err)
+		}
+		if worked, err := l.advanceSplitClosingChecks(ctx, "", &LoopResult{}); err != nil || worked {
+			t.Fatalf("failed closing check retried: worked=%v err=%v", worked, err)
+		}
+		if len(steps.runs) != 1 {
+			t.Fatalf("expected 1 closing check run (no retry), got %d", len(steps.runs))
+		}
+		why := parentWhyRow(t, ctx, l, f.storePath, parent)
+		if why.State != StateBlocked || !strings.Contains(why.Why, "exited with code 1") {
+			t.Fatalf("unexpected parent why after failed closing check: %+v", why)
+		}
+	})
 }

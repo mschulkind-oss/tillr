@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -944,8 +945,134 @@ func (l *Loop) settleSplitCallRun(ctx context.Context, decision Decision, reques
 	return laneOutcome{stop: l.abandon(ctx, lane, request.RunID, l.headOf(ctx, lane), "split statement filed")}
 }
 
+type splitClosingState struct {
+	advanceMu        sync.Mutex
+	active           map[string]bool
+	results          map[string]splitclosing.RunResult
+	inheritedPending bool
+}
+
+func (l *Loop) hasSplitClosingWork() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.splitClosing.active) > 0 || len(l.splitClosing.results) > 0 || l.splitClosing.inheritedPending
+}
+
+func (l *Loop) hasSplitClosingResults() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.splitClosing.results) > 0
+}
+
+func (l *Loop) startSplitClosingRun(ctx context.Context, req run.Request) error {
+	runCtx := ctx
+	if loopCtx := l.getLoopCtx(); loopCtx != nil {
+		runCtx = loopCtx
+	}
+	l.mu.Lock()
+	if l.splitClosing.active == nil {
+		l.splitClosing.active = map[string]bool{}
+	}
+	if l.splitClosing.active[req.RunID] {
+		l.mu.Unlock()
+		return nil
+	}
+	l.splitClosing.active[req.RunID] = true
+	l.mu.Unlock()
+
+	go func() {
+		rec, _, runErr := l.runRestartable(runCtx, req)
+		l.mu.Lock()
+		delete(l.splitClosing.active, req.RunID)
+		if !errors.Is(runErr, errRestartPending) && runCtx.Err() == nil {
+			if l.splitClosing.results == nil {
+				l.splitClosing.results = map[string]splitclosing.RunResult{}
+			}
+			l.splitClosing.results[req.RunID] = splitclosing.RunResult{
+				Record: rec,
+				Err:    runErr,
+			}
+		}
+		l.mu.Unlock()
+		l.signalPassWake()
+		l.signalTrunkProofWake()
+	}()
+	return nil
+}
+
+func (l *Loop) checkSplitClosingRun(ctx context.Context, runID string) (splitclosing.RunResult, splitclosing.RunState, error) {
+	l.mu.Lock()
+	if l.splitClosing.active[runID] {
+		l.mu.Unlock()
+		return splitclosing.RunResult{}, splitclosing.RunStateRunning, nil
+	}
+	if res, ok := l.splitClosing.results[runID]; ok {
+		l.mu.Unlock()
+		return res, splitclosing.RunStateFinished, nil
+	}
+	l.mu.Unlock()
+
+	// Not tracked in this process (for example after a loop restart). Check the
+	// store for a terminal run record first.
+	readTerminal := func() (*run.Record, error) {
+		db, err := store.OpenRead(ctx, l.cfg.Store)
+		if err != nil {
+			return nil, err
+		}
+		defer db.Close()
+		var rec *run.Record
+		err = db.ReadTx(ctx, func(r *store.Reader) error {
+			var rerr error
+			rec, rerr = terminalRecord(r, runID)
+			return rerr
+		})
+		return rec, err
+	}
+	rec, err := readTerminal()
+	if err != nil {
+		return splitclosing.RunResult{}, splitclosing.RunStateRunning, err
+	}
+	if rec != nil && rec.State != "" && rec.State != "running" {
+		return splitclosing.RunResult{Record: *rec}, splitclosing.RunStateFinished, nil
+	}
+
+	here, err := currentLoopOwner()
+	if err != nil {
+		return splitclosing.RunResult{}, splitclosing.RunStateRunning, err
+	}
+	liveFaces, err := liveRunFaces(l.cfg.Store, runID, here)
+	if err != nil {
+		return splitclosing.RunResult{}, splitclosing.RunStateRunning, err
+	}
+	if len(liveFaces) > 0 {
+		return splitclosing.RunResult{}, splitclosing.RunStateRunning, nil
+	}
+
+	// Re-check the store after observing no live face to close the exit race
+	// where the run face wrote its terminal record and exited in between.
+	rec, err = readTerminal()
+	if err != nil {
+		return splitclosing.RunResult{}, splitclosing.RunStateRunning, err
+	}
+	if rec != nil && rec.State != "" && rec.State != "running" {
+		return splitclosing.RunResult{Record: *rec}, splitclosing.RunStateFinished, nil
+	}
+
+	return splitclosing.RunResult{
+		Err: fmt.Errorf("run %s exited without a terminal record", runID),
+	}, splitclosing.RunStateFinished, nil
+}
+
+func (l *Loop) consumeSplitClosingRun(runID string) {
+	l.mu.Lock()
+	delete(l.splitClosing.results, runID)
+	l.mu.Unlock()
+}
+
 func (l *Loop) advanceSplitClosingChecks(ctx context.Context, mainSHA string, result *LoopResult) (bool, error) {
-	return splitclosing.Advance(ctx, splitclosing.Env{
+	l.splitClosing.advanceMu.Lock()
+	defer l.splitClosing.advanceMu.Unlock()
+	adv, err := splitclosing.Advance(ctx, splitclosing.Env{
 		NonLanding: l.nonLanding,
 		Root:       l.cfg.Root,
 		Store:      l.cfg.Store,
@@ -967,13 +1094,21 @@ func (l *Loop) advanceSplitClosingChecks(ctx context.Context, mainSHA string, re
 				},
 			}, true
 		},
-		RunRestartable:   l.runRestartable,
-		CountSpend:       func(rec run.Record) { l.countSpend(result, rec) },
-		IsRestartPending: func(err error) bool { return errors.Is(err, errRestartPending) },
+		CanStart: func(ctx context.Context) bool {
+			return l.checkRestartAdmission(ctx, false) == nil
+		},
+		StartRun:   l.startSplitClosingRun,
+		CheckRun:   l.checkSplitClosingRun,
+		ConsumeRun: l.consumeSplitClosingRun,
+		CountSpend: func(rec run.Record) { l.countSpend(result, rec) },
 		SetItemState: func(ctx context.Context, id, runID, state string) error {
 			return l.cfg.Steps.ItemState(ctx, id, runID, state)
 		},
 		RequestWordsSuffix: requestWordsSuffix,
 		BraceLiteralCount:  braceLiteralCount,
 	}, mainSHA)
+	l.mu.Lock()
+	l.splitClosing.inheritedPending = adv.Pending && len(l.splitClosing.active) == 0
+	l.mu.Unlock()
+	return adv.Worked, err
 }
