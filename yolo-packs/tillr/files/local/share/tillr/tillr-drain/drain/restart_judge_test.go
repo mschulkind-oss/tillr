@@ -3,6 +3,7 @@ package drain
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/mschulkind-oss/tillr-drain/restart"
+	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -220,5 +222,135 @@ func TestStagedJudgeReceiptWithoutAHandoffCanStartOnTheSameBuild(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join(lane, SessionIDFile))
 	if err != nil || strings.TrimSpace(string(raw)) != session {
 		t.Fatalf("worker session=%q/%v", raw, err)
+	}
+}
+
+func TestJudgeCandidateAdoptsActiveResumedSegmentInsteadOfResumingAgain(t *testing.T) {
+	f, l, s := judgeRouteFixture(t, "pass")
+	persistFixtureJudgeSelection(t, f)
+	l.cfg.Restart = &RestartConfig{}
+	lane := l.laneDirPath("lane-1")
+	session, err := NewSessionID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeForkFile(t, filepath.Join(lane, BriefFile), "worker brief\n")
+	writeForkFile(t, filepath.Join(lane, SessionIDFile), session+"\n")
+	base := runGit(t, l.lanePath("lane-1"), "rev-parse", "HEAD")
+	worker := run.Request{RunID: "run-item-a-a1", ItemID: "item-a", LaneID: "lane-1", Backend: "fixture"}
+	if _, _, err := s.Run(context.Background(), worker); err != nil {
+		t.Fatal(err)
+	}
+	candidate := Candidate{ItemID: worker.ItemID, LaneID: worker.LaneID, RunID: worker.RunID, Worktree: l.lanePath(worker.LaneID), BaseSHA: base, HeadSHA: s.workerHead}
+	req := l.cfg.Policy.Request(worker.ItemID, worker.LaneID, worker.RunID+"-judge", "reviewer")
+	build, _ := l.build.Hash()
+	receipt := &JudgeReceipt{Build: build, Request: *req, WorkerBrief: []byte("worker brief\n"), WorkerSession: []byte(session + "\n")}
+	receipt.Options.Head = candidate.HeadSHA
+	receipt.Options.Tree = runGit(t, candidate.Worktree, "rev-parse", candidate.HeadSHA+"^{tree}")
+	receipt.Options.ItemID = candidate.ItemID
+	judgeSession, err := NewSessionID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt.JudgeSession = judgeSession
+	receipt.Options.Actor = "run=" + req.RunID + ";session=" + judgeSession + ";route=" + req.Route()
+	receipt.Options.JudgedActor = "run=" + candidate.RunID + ";session=" + session
+	receipt.Options.At = l.cfg.Now()
+	db, err := store.OpenRead(context.Background(), f.storePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.ReadTx(context.Background(), func(r *store.Reader) error {
+		var err error
+		receipt.Options.EvaluatorBinding, err = item.ReadEvaluatorBinding(r, candidate.ItemID)
+		return err
+	}); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	db.Close()
+	if err := writeJudgeReceipt(filepath.Join(RunDir(f.root, worker.RunID), judgeReceiptFile), receipt); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.stageJudge(context.Background(), candidate, receipt, judgeSession); err != nil {
+		t.Fatal(err)
+	}
+
+	// Segment 1 started, paused for restart, and segment 2 has already been resumed.
+	at := l.cfg.Now().UTC()
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		if err := appendEffectOn(tx, judgeRequestKind, "run", req.RunID, map[string]any{
+			"item_id":       candidate.ItemID,
+			"writer_run_id": worker.RunID,
+			"seat":          "review",
+			"request":       *req,
+		}, at); err != nil {
+			return err
+		}
+		rec := run.Record{
+			RunID: req.RunID, ItemID: req.ItemID, LaneID: req.LaneID,
+			Backend: req.Backend, State: run.StatePaused, EndCause: run.EndRestart,
+			StartedAt: at.Format(time.RFC3339), FinishedAt: at.Format(time.RFC3339),
+		}
+		if err := applyTerminal(tx, rec); err != nil {
+			return err
+		}
+		return appendEffectOn(tx, run.ResumeKind, "run", req.RunID, map[string]any{
+			"run_id":     req.RunID,
+			"item_id":    req.ItemID,
+			"lane_id":    req.LaneID,
+			"backend":    req.Backend,
+			"request":    *req,
+			"resumed_at": at.Add(time.Second).Format(time.RFC3339Nano),
+		}, at.Add(time.Second))
+	})
+
+	// Report a live face for segment 2 on the first probe (judgeCandidate), then
+	// complete segment 2 on the awaitJudgeRecord probe.
+	origFaces := liveRunFaces
+	t.Cleanup(func() { liveRunFaces = origFaces })
+	probes := 0
+	liveRunFaces = func(string, string, *LoopOwner) ([]*runFaceOwner, error) {
+		probes++
+		if probes == 1 {
+			return []*runFaceOwner{{LoopOwner: LoopOwner{PID: os.Getpid()}}}, nil
+		}
+		output := item.JudgeOutput{
+			EvaluatedHead: candidate.HeadSHA,
+			EvaluatedTree: receipt.Options.Tree,
+			Outcome:       "pass",
+			Verdicts: []item.JudgeEntry{{
+				CriterionID:   "c1",
+				CriterionHash: item.CriterionHash("the first criterion of item-a"),
+				Verdict:       "done",
+				ClaimClass:    item.ClaimVerification,
+				Reason:        "adopted resumed judge",
+				Evidence:      []string{"commit:" + candidate.HeadSHA},
+			}},
+		}
+		raw, err := json.Marshal(output)
+		if err != nil {
+			return nil, err
+		}
+		writeForkFile(t, l.judgeEvalOutputPath(candidate.LaneID, req.RunID), string(raw))
+		fixtureWrite(t, f, func(tx *store.Tx) error {
+			rec := run.Record{
+				RunID: req.RunID, ItemID: req.ItemID, LaneID: req.LaneID,
+				Backend: req.Backend, State: run.StateExited, ExitCode: countPtr(0),
+				StartedAt: at.Format(time.RFC3339), FinishedAt: at.Add(2 * time.Second).Format(time.RFC3339),
+			}
+			return applyTerminal(tx, rec)
+		})
+		return nil, nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), hangGuard)
+	defer cancel()
+	var res LoopResult
+	if got, ok, err := l.judgeCandidate(ctx, candidate, &res); err != nil || !ok {
+		t.Fatalf("judgeCandidate failed to adopt live resumed segment: ok=%v err=%v order=%v probes=%d res=%+v judge=%+v", ok, err, s.order, probes, res, got.Judge)
+	}
+	if strings.Join(s.order, ",") != "worker" {
+		t.Fatalf("judgeCandidate launched a duplicate judge instead of adopting the live resumed segment: order=%v", s.order)
 	}
 }

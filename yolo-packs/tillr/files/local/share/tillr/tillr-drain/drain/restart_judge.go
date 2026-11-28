@@ -8,6 +8,14 @@ import (
 	"github.com/mschulkind-oss/tillr/store"
 )
 
+func activeJudgeTerminalRecord(r *store.Reader, id string) (*run.Record, error) {
+	activeResume, err := runHasActiveResume(r, id)
+	if err != nil || activeResume {
+		return nil, err
+	}
+	return terminalRecord(r, id)
+}
+
 func (l *Loop) awaitJudgeRecord(ctx context.Context, id string) (run.Record, error) {
 	for {
 		db, err := store.OpenRead(ctx, l.cfg.Store)
@@ -18,7 +26,7 @@ func (l *Loop) awaitJudgeRecord(ctx context.Context, id string) (run.Record, err
 		var active int
 		err = db.ReadTx(ctx, func(r *store.Reader) error {
 			var err error
-			rec, err = terminalRecord(r, id)
+			rec, err = activeJudgeTerminalRecord(r, id)
 			if err != nil {
 				return err
 			}
@@ -47,7 +55,7 @@ func (l *Loop) awaitJudgeRecord(ctx context.Context, id string) (run.Record, err
 				}
 				err = db.ReadTx(ctx, func(r *store.Reader) error {
 					var err error
-					rec, err = terminalRecord(r, id)
+					rec, err = activeJudgeTerminalRecord(r, id)
 					return err
 				})
 				db.Close()

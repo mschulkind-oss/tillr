@@ -164,6 +164,13 @@ func (l *Loop) findLaunchableRuns(ctx context.Context) ([]launchableRun, error) 
 			if exists {
 				continue
 			}
+			activeResume, err := decisionHasActiveResume(r, work.Decision)
+			if err != nil {
+				return err
+			}
+			if activeResume {
+				continue
+			}
 			found = append(found, launchableRun{itemID: itemID, runID: runID, work: work})
 		}
 		return nil
@@ -173,27 +180,65 @@ func (l *Loop) findLaunchableRuns(ctx context.Context) ([]launchableRun, error) 
 	}
 	if len(found) > 0 && l.cfg.Store != "" {
 		live, _, liveErr := liveRunProcessIDs(l.cfg.Store)
-		if liveErr == nil && len(live) > 0 {
+		if liveErr != nil {
+			return nil, liveErr
+		}
+		if len(live) > 0 {
 			filtered := found[:0]
 			for _, c := range found {
-				if live[c.runID] {
+				if decisionHasLiveRun(c.work.Decision, live) {
 					continue
-				}
-				if len(c.work.Decision.Parallel) > 0 {
-					anyLive := false
-					for _, node := range parallelNodes(c.work.Decision) {
-						if node.RunRequest != nil && live[node.RunRequest.RunID] {
-							anyLive = true
-							break
-						}
-					}
-					if anyLive {
-						continue
-					}
 				}
 				filtered = append(filtered, c)
 			}
 			found = filtered
+		}
+		// Re-check the store after scanning /proc: an inherited live run can
+		// finish, or pause and resume under a new PID not yet visible to /proc,
+		// between the first ReadTx and liveRunProcessIDs inspecting its old PID.
+		// Once the old PID disappears, its run.finish / run.resume is already
+		// committed in the store.
+		if len(found) > 0 {
+			var confirmed []launchableRun
+			err = s.ReadTx(ctx, func(r *store.Reader) error {
+				works, err := readPending(r)
+				if err != nil {
+					return err
+				}
+				for _, c := range found {
+					work := works[c.itemID]
+					if work == nil || !isWorkLaunchEligible(work) || work.Decision.RunRequest.RunID != c.runID {
+						continue
+					}
+					paused, err := pausedPendingWork(r, work)
+					if err != nil {
+						return err
+					}
+					if paused {
+						continue
+					}
+					exists, err := decisionRunRecordsExist(r, work.Decision)
+					if err != nil {
+						return err
+					}
+					if exists {
+						continue
+					}
+					activeResume, err := decisionHasActiveResume(r, work.Decision)
+					if err != nil {
+						return err
+					}
+					if activeResume {
+						continue
+					}
+					confirmed = append(confirmed, launchableRun{itemID: c.itemID, runID: c.runID, work: work})
+				}
+				return nil
+			})
+			if err != nil {
+				return nil, err
+			}
+			found = confirmed
 		}
 	}
 	sort.Slice(found, func(i, j int) bool {
@@ -203,6 +248,31 @@ func (l *Loop) findLaunchableRuns(ctx context.Context) ([]launchableRun, error) 
 		return found[i].runID < found[j].runID
 	})
 	return found, nil
+}
+
+func decisionHasLiveRun(d Decision, live map[string]bool) bool {
+	if d.RunRequest != nil && live[d.RunRequest.RunID] {
+		return true
+	}
+	for _, node := range parallelNodes(d) {
+		if node.RunRequest != nil && live[node.RunRequest.RunID] {
+			return true
+		}
+	}
+	return false
+}
+
+func decisionHasActiveResume(r *store.Reader, d Decision) (bool, error) {
+	for _, node := range parallelNodes(d) {
+		if node.RunRequest == nil || node.RunRequest.RunID == "" {
+			continue
+		}
+		active, err := runHasActiveResume(r, node.RunRequest.RunID)
+		if err != nil || active {
+			return active, err
+		}
+	}
+	return false, nil
 }
 
 func (l *Loop) runCoordinatedLaunch(ctx context.Context, itemID, runID string, work *pendingWork, result *LoopResult) {

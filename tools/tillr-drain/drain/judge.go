@@ -272,7 +272,7 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 		}
 		err = db.ReadTx(ctx, func(r *store.Reader) error {
 			var err error
-			rec, err = terminalRecord(r, receipt.Request.RunID)
+			rec, err = activeJudgeTerminalRecord(r, receipt.Request.RunID)
 			return err
 		})
 		db.Close()
@@ -296,7 +296,7 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 				}
 				err = db.ReadTx(ctx, func(r *store.Reader) error {
 					var err error
-					rec, err = terminalRecord(r, receipt.Request.RunID)
+					rec, err = activeJudgeTerminalRecord(r, receipt.Request.RunID)
 					return err
 				})
 				db.Close()

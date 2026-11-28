@@ -382,6 +382,65 @@ func TestRestartedParallelSiblingStagesAndLaunchesWhenPrimaryFinished(t *testing
 	}
 }
 
+func TestFindLaunchableRunsRechecksStoreAfterProcScan(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), hangGuard)
+	defer cancel()
+
+	f, l := passFixture(t, "item-a")
+	l.cfg.Lanes = []string{"lane-1"}
+
+	plan := mustPlan(t, l)[0]
+	base := runGit(t, f.root, "rev-parse", TrunkRef)
+	at := l.cfg.Now().UTC()
+	ok, work, err := l.applyPlan(ctx, plan, base, at)
+	if !ok || err != nil || work == nil {
+		t.Fatalf("applyPlan: ok=%v work=%+v err=%v", ok, work, err)
+	}
+
+	var result LoopResult
+	ready, cancelled, err := l.stageAssignedRun(ctx, work.Decision, base, at, &result)
+	if err != nil || cancelled || ready == nil {
+		t.Fatalf("stageAssignedRun = ready=%v cancelled=%v err=%v; want non-nil, false, nil", ready != nil, cancelled, err)
+	}
+
+	// Simulate an inherited live run that pauses and is resumed during the
+	// /proc scan after findLaunchableRuns' initial ReadTx: its old PID exits
+	// before /proc inspects it and its resumed PID is absent from the scan,
+	// while the store already records both run.finish (paused) and run.resume.
+	origLive := liveRunProcessIDs
+	t.Cleanup(func() { liveRunProcessIDs = origLive })
+	liveRunProcessIDs = func(string) (map[string]bool, map[string]bool, error) {
+		req := *work.Decision.RunRequest
+		rec := run.Record{
+			RunID: req.RunID, ItemID: req.ItemID, LaneID: req.LaneID,
+			Backend: req.Backend, State: run.StatePaused, EndCause: run.EndRestart,
+			StartedAt: at.Format(time.RFC3339), FinishedAt: at.Format(time.RFC3339),
+		}
+		fixtureWrite(t, f, func(tx *store.Tx) error {
+			if err := applyTerminal(tx, rec); err != nil {
+				return err
+			}
+			return appendEffectOn(tx, run.ResumeKind, "run", req.RunID, map[string]any{
+				"run_id":     req.RunID,
+				"item_id":    req.ItemID,
+				"lane_id":    req.LaneID,
+				"backend":    req.Backend,
+				"request":    req,
+				"resumed_at": at.Add(time.Second).Format(time.RFC3339Nano),
+			}, at.Add(time.Second))
+		})
+		return map[string]bool{}, map[string]bool{}, nil
+	}
+
+	launchable, err := l.findLaunchableRuns(ctx)
+	if err != nil {
+		t.Fatalf("findLaunchableRuns: %v", err)
+	}
+	if len(launchable) != 0 {
+		t.Fatalf("findLaunchableRuns returned %d runs after run paused and resumed during proc scan, want 0", len(launchable))
+	}
+}
+
 func TestStageAndLaunchParityWithNoNotify(t *testing.T) {
 	runScenario := func(noNotify bool) (startedCount, stagedCount, runCount int) {
 		ctx, cancel := context.WithTimeout(context.Background(), hangGuard)
