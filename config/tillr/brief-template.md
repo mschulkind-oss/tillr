@@ -89,6 +89,21 @@ after staging new files and before `git commit` (then run `just pack-sync` if `t
 changed): `just format` reads tracked and staged paths, so running it before `git add` skips
 brand-new Go files.
 
+**The drain has an architecture test.** A change under `tools/tillr-drain` must pass
+`TestArchitecture`, which holds the package's standing structure rules: no new domain `.go`
+file in `drain/` (new code goes in an `internal/<pkg>` package), `*_bridge.go` and
+`*_aliases.go` files hold only type aliases, re-exports and forwarding wrappers of at most 10
+lines, and `struct Loop` stays under its field and mutex ceilings. Each seat acts on it:
+
+- **plan:** a piece that writes under `tools/tillr-drain` names these rules in its prompt.
+- **build:** run `go -C tools/tillr-drain test . -run '^TestArchitecture$'` before reporting
+  done, and fix the change, not the test.
+- **verify:** run the same command as one of your own checks.
+
+Never raise or weaken a ceiling or rule in that test to make a change fit. Measured in the
+24 hours to 6:21 AM ET on 2026-11-28: the gate refused 19 candidates on this test, each
+already planned, built and verified.
+
 ## Seats
 
 These are seats tillr runs as nodes; a worker cannot start one.

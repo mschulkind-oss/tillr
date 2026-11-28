@@ -6,9 +6,13 @@
     ],
     "reads": [
       "config/tillr/backend-policy.json",
+      "config/tillr/brief-template.md",
       "tools/tillr-drain/"
     ],
     "read_tests": {
+      "config/tillr/brief-template.md": [
+        "TestRepoBriefTellsDrainWorkersToRunArchitectureTest"
+      ],
       "tools/tillr-drain/": [
         "TestArchitecture"
       ]

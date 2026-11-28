@@ -12,6 +12,7 @@
   "timeout_ms": 3600000,
   "reads": [
     "config/tillr/backend-policy.json",
+    "config/tillr/brief-template.md",
     "config/tillr/commands.json",
     "config/tillr/deny-list.json",
     "config/tillr/gate-policy.json",
