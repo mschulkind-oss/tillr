@@ -2,6 +2,9 @@ package drain
 
 import (
 	"context"
+	"encoding/json"
+	"slices"
+	"strings"
 
 	"github.com/mschulkind-oss/tillr-drain/internal/policy"
 	"github.com/mschulkind-oss/tillr-run/run"
@@ -69,6 +72,15 @@ func classifyUnsavedBackendOutcomes(r *store.Reader, out []backendOutcome, offer
 				closes = false
 			}
 		}
+		if closes {
+			missingWT, err := isMissingWorktreeFailure(r, rec, log, out[i].Seq)
+			if err != nil {
+				return err
+			}
+			if missingWT {
+				closes = false
+			}
+		}
 		out[i].Closes = closes
 	}
 	return nil
@@ -123,4 +135,63 @@ func answeredByAnotherRule(rec run.Record, interrupted map[string]bool, byRun ma
 // edit or loss of its report.
 func RecordBackendOutcomes(ctx context.Context, path string) error {
 	return policy.RecordBackendOutcomesWith(ctx, path, readBackendOutcomes, infrastructureDetail)
+}
+
+// isMissingWorktreeFailure reports whether a run ended because its worktree was
+// missing or collected out from under it. That is a loop/worktree condition, not
+// evidence that the backend is broken.
+func isMissingWorktreeFailure(r *store.Reader, rec run.Record, log string, termSeq int64) (bool, error) {
+	if rec.State == run.StateExited && rec.ExitCode != nil && *rec.ExitCode == 0 {
+		return false, nil
+	}
+	for _, text := range []string{rec.StderrTail, rec.EndingException, log, policy.RawLogTail(rec.ArtifactRefs)} {
+		if hasMissingWorktreeDiagnostic(text) {
+			return true, nil
+		}
+	}
+	if r == nil || rec.RunID == "" || termSeq <= 0 || (rec.ItemID == "" && rec.LaneID == "") {
+		return false, nil
+	}
+	var startSeq int64
+	if err := r.QueryRow(
+		`SELECT COALESCE(MIN(seq), 0) FROM events WHERE object_id = ? AND kind IN (?, ?, ?) AND seq < ?`,
+		rec.RunID, dispatchStartedKind, dispatchStagedKind, run.AllocateKind, termSeq,
+	).Scan(&startSeq); err != nil {
+		return false, err
+	}
+	if startSeq == 0 {
+		return false, nil
+	}
+	rows, err := r.Query(
+		`SELECT payload FROM events WHERE kind = ? AND seq > ? AND seq < ? AND (object_id = ? OR json_extract(payload, '$.item_id') = ? OR json_extract(payload, '$.lane_id') = ?)`,
+		worktreeCollectedKind, startSeq, termSeq, rec.ItemID, rec.ItemID, rec.LaneID,
+	)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var raw []byte
+		if err := rows.Scan(&raw); err != nil {
+			return false, err
+		}
+		var col WorktreeCollected
+		if err := json.Unmarshal(raw, &col); err == nil && slices.Contains(col.Deleted, "worktree") {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
+}
+
+func hasMissingWorktreeDiagnostic(s string) bool {
+	if s == "" {
+		return false
+	}
+	lower := strings.ToLower(s)
+	if strings.Contains(lower, "getcwd: cannot access parent directories") ||
+		strings.Contains(lower, "error retrieving current directory") ||
+		strings.Contains(lower, "unable to read current working directory") {
+		return true
+	}
+	return strings.Contains(lower, "chdir ") && strings.Contains(lower, "no such file or directory")
 }

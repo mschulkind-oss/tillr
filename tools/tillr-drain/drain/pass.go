@@ -3047,6 +3047,7 @@ func (l *Loop) holdSettleFailure(c runCompletion) bool {
 	var seatConflict *seatDispatchConflictError
 	var started *runStartError
 	var pinErr *runPinError
+	var missingWT *targetWorktreeMissingError
 	if c.itemID == "" {
 		return false
 	}
@@ -3054,7 +3055,7 @@ func (l *Loop) holdSettleFailure(c runCompletion) bool {
 	switch {
 	case errors.As(c.outcome.err, &collision), errors.As(c.outcome.err, &seatConflict):
 		reason = ReasonDecisionCollision
-	case errors.As(c.outcome.err, &pinErr), c.step == "run" && errors.As(c.outcome.err, &started):
+	case errors.As(c.outcome.err, &pinErr), errors.As(c.outcome.err, &missingWT), c.step == "run" && errors.As(c.outcome.err, &started):
 	default:
 		return false
 	}

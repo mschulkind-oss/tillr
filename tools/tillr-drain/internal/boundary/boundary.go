@@ -153,6 +153,17 @@ func (v Violation) String() string {
 	return strings.Join(parts, " ")
 }
 
+// TargetWorktreeMissingError reports that a boundary snapshot could not be taken
+// because one item's target worktree is missing or no longer a registered worktree.
+// That is one item's condition, so the loop holds the item instead of stopping.
+type TargetWorktreeMissingError struct {
+	Target string
+	Err    error
+}
+
+func (e *TargetWorktreeMissingError) Error() string { return e.Err.Error() }
+func (e *TargetWorktreeMissingError) Unwrap() error { return e.Err }
+
 // TakeBoundary records one snapshot: the repository's refs, its registered worktrees with
 // each one's HEAD, the working-tree status of the main checkout and of every named lane,
 // and the store file's stat when the caller named one.
@@ -180,11 +191,17 @@ func TakeBoundary(ctx context.Context, spec BoundarySpec) (*Boundary, error) {
 	for _, target := range spec.Targets {
 		path, err := CanonicalDir(target)
 		if err != nil {
+			if _, statErr := os.Stat(target); os.IsNotExist(statErr) {
+				return nil, &TargetWorktreeMissingError{Target: target, Err: err}
+			}
 			return nil, err
 		}
 		if !hasWorktree(worktrees, path) {
-			return nil, drainmodel.Usagef("the target %s is not a worktree of %s: a run's boundary is a worktree of the repository it was given",
-				target, repo)
+			return nil, &TargetWorktreeMissingError{
+				Target: target,
+				Err: drainmodel.Usagef("the target %s is not a worktree of %s: a run's boundary is a worktree of the repository it was given",
+					target, repo),
+			}
 		}
 		if IsTarget(targets, path) {
 			return nil, drainmodel.Usagef("the target %s is named twice: one bracket owns one worktree per run, and the same worktree twice is two runs in one tree",

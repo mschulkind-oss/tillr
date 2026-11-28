@@ -15,15 +15,16 @@ func init() {
 }
 
 type (
-	BoundarySpec       = boundary.BoundarySpec
-	StoreState         = boundary.StoreState
-	Worktree           = boundary.Worktree
-	StatusEntry        = boundary.StatusEntry
-	Boundary           = boundary.Boundary
-	Violation          = boundary.Violation
-	candidateSize      = boundary.CandidateSize
-	deliveryDecision   = boundary.DeliveryDecision
-	deliveryParseError = boundary.DeliveryParseError
+	BoundarySpec               = boundary.BoundarySpec
+	StoreState                 = boundary.StoreState
+	Worktree                   = boundary.Worktree
+	StatusEntry                = boundary.StatusEntry
+	Boundary                   = boundary.Boundary
+	Violation                  = boundary.Violation
+	targetWorktreeMissingError = boundary.TargetWorktreeMissingError
+	candidateSize              = boundary.CandidateSize
+	deliveryDecision           = boundary.DeliveryDecision
+	deliveryParseError         = boundary.DeliveryParseError
 )
 
 const (

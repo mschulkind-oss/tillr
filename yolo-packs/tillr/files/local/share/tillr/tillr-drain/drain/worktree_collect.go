@@ -14,6 +14,7 @@ import (
 	"github.com/mschulkind-oss/tillr-drain/holdrules"
 	"github.com/mschulkind-oss/tillr-drain/internal/drainmodel"
 	"github.com/mschulkind-oss/tillr-drain/internal/gateland"
+	"github.com/mschulkind-oss/tillr-drain/internal/stagelaunch"
 	"github.com/mschulkind-oss/tillr-drain/internal/worktreebudget"
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/definition"
@@ -111,14 +112,54 @@ func (l *Loop) collectIdleWorktrees(ctx context.Context) (worktreebudget.Snapsho
 	for id := range l.active {
 		activeRunIDs[id] = true
 	}
+	for id := range l.activeBrackets {
+		activeRunIDs[id] = true
+	}
+	for itemID, runID := range l.activeItems {
+		if runID != "" {
+			inUse[itemID] = true
+			activeRunIDs[runID] = true
+		}
+	}
+	for itemID, n := range l.stageLaunch.Stage.Items {
+		if n > 0 {
+			inUse[itemID] = true
+		}
+	}
+	for itemID, n := range l.stageLaunch.Launch.Items {
+		if n > 0 {
+			inUse[itemID] = true
+		}
+	}
+	for id := range l.stageLaunch.Stage.Runs {
+		activeRunIDs[id] = true
+	}
+	for id := range l.stageLaunch.Launch.Runs {
+		activeRunIDs[id] = true
+	}
 	for id := range l.examiningRuns {
 		activeRunIDs[id] = true
+	}
+	for itemID, n := range l.examiningItems {
+		if n > 0 {
+			inUse[itemID] = true
+		}
 	}
 	for id := range l.gateLand.Gate.Runs {
 		activeRunIDs[id] = true
 	}
+	for itemID, n := range l.gateLand.Gate.Items {
+		if n > 0 {
+			inUse[itemID] = true
+		}
+	}
 	for id := range l.gateLand.Land.Runs {
 		activeRunIDs[id] = true
+	}
+	for itemID, n := range l.gateLand.Land.Items {
+		if n > 0 {
+			inUse[itemID] = true
+		}
 	}
 	l.mu.Unlock()
 
@@ -508,12 +549,15 @@ func classifyItemWaitForCollection(r *store.Reader, itemID, state, waitingOn str
 			Waiter string `json:"waiter"`
 		}
 		if err := json.Unmarshal([]byte(waitingOn), &w); err == nil && w.Waiter != "" {
-			if w.Waiter == "owner" || w.Waiter == "design" {
+			if w.Waiter == "owner" {
 				return "wait-owner"
 			}
 			if strings.HasPrefix(w.Waiter, "item:") {
 				return "wait-item"
 			}
+			// Waiting on a seat (e.g. "design" or "plan") is not waiting on the
+			// owner or another item; leave the worktree for the seat's run.
+			return ""
 		}
 	}
 	if state == StateBlocked {
@@ -560,12 +604,133 @@ func classifyItemWaitForCollection(r *store.Reader, itemID, state, waitingOn str
 	return ""
 }
 
+func (l *Loop) isItemLaneInUseNow(ctx context.Context, laneID, itemID string) (bool, error) {
+	if l.hasLaneCondition(laneID, ReasonLaneChildren) || l.dirHasLiveChildProcess(l.laneDirPath(laneID)) {
+		return true, nil
+	}
+	activeRunIDs := map[string]bool{}
+	l.mu.Lock()
+	inUse := l.stagingLanes[laneID] > 0 ||
+		(itemID != "" && (l.activeItems[itemID] != "" || l.stageLaunch.HasItem(itemID) || l.examiningItems[itemID] > 0 || l.gateLand.HasItem(itemID)))
+	if !inUse {
+		for id := range l.active {
+			activeRunIDs[id] = true
+		}
+		for id := range l.activeBrackets {
+			activeRunIDs[id] = true
+		}
+		for id := range l.stageLaunch.Stage.Runs {
+			activeRunIDs[id] = true
+		}
+		for id := range l.stageLaunch.Launch.Runs {
+			activeRunIDs[id] = true
+		}
+		for id := range l.examiningRuns {
+			activeRunIDs[id] = true
+		}
+		for id := range l.gateLand.Gate.Runs {
+			activeRunIDs[id] = true
+		}
+		for id := range l.gateLand.Land.Runs {
+			activeRunIDs[id] = true
+		}
+	}
+	l.mu.Unlock()
+	if inUse || l.cfg.Store == "" {
+		return inUse, nil
+	}
+	s, err := store.OpenRead(ctx, l.cfg.Store)
+	if err != nil {
+		return false, err
+	}
+	defer s.Close()
+	err = s.ReadTx(ctx, func(r *store.Reader) error {
+		leasedRunIDs := map[string]bool{}
+		rows, err := queryEndedLaneRows(r, `SELECT lane_id, COALESCE(run_id, '') FROM lanes WHERE state = 'leased'`)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var lane, runID string
+			if err := rows.Scan(&lane, &runID); err != nil {
+				rows.Close()
+				return err
+			}
+			if lane == laneID {
+				inUse = true
+			}
+			if runID != "" {
+				leasedRunIDs[runID] = true
+			}
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return err
+		}
+		rows.Close()
+		if inUse {
+			return nil
+		}
+		works, err := readPending(r)
+		if err != nil {
+			return err
+		}
+		for _, w := range works {
+			if !w.Done && ((itemID != "" && w.Decision.ItemID == itemID) || (!w.LaneReleased && w.Decision.LaneID == laneID)) {
+				inUse = true
+				return nil
+			}
+		}
+		if itemID == "" {
+			return nil
+		}
+		var count int
+		if err := queryEndedLaneRow(r, `SELECT COUNT(*) FROM read_only_runs WHERE settled = 0 AND item_id = ?`, itemID).Scan(&count); err != nil {
+			return err
+		}
+		if count > 0 {
+			inUse = true
+			return nil
+		}
+		if err := queryEndedLaneRow(r, `SELECT COUNT(*) FROM quota_pauses WHERE item_id = ?`, itemID).Scan(&count); err != nil {
+			return err
+		}
+		if count > 0 {
+			inUse = true
+			return nil
+		}
+		live, err := itemHasLiveOrInterruptedNode(r, itemID, leasedRunIDs, activeRunIDs)
+		if err != nil {
+			return err
+		}
+		inUse = live
+		return nil
+	})
+	return inUse, err
+}
+
 func (l *Loop) collectOneIdleWorktree(ctx context.Context, c idleWorktreeCandidate) bool {
 	if c.poolSub != "" {
 		return l.collectOnePoolRunScratch(ctx, c)
 	}
 	itemDir := l.laneDirPath(c.laneID)
-	if l.dirHasLiveChildProcess(itemDir) {
+	if _, err := os.Stat(itemDir); os.IsNotExist(err) {
+		return false
+	}
+	// Serialize per directory with Step 1 staging via <worktree>.stage.lock.
+	unlockStage, acquired, lockErr := stagelaunch.AcquireStageLock(l.lanePath(c.laneID))
+	if lockErr != nil {
+		l.recordCollectionFailed(ctx, c.itemID, c.itemState, c.laneID, l.lanePath(c.laneID), lockErr)
+		return false
+	}
+	if !acquired {
+		return false
+	}
+	defer unlockStage()
+
+	// Re-check liveness after acquiring the stage lock so a run staged or
+	// started after the initial scan is never collected out from under it.
+	if inUse, err := l.isItemLaneInUseNow(ctx, c.laneID, c.itemID); err != nil || inUse {
 		return false
 	}
 	var deleted []string
@@ -589,6 +754,7 @@ func (l *Loop) collectOneIdleWorktree(ctx context.Context, c idleWorktreeCandida
 				}
 			}
 		}
+		l.noteLaneWrite(c.laneID)
 		if err := l.deleteEndedItemWorktree(ctx, endedLaneCandidate{
 			lane:      c.laneID,
 			itemID:    c.itemID,

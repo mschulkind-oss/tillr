@@ -615,7 +615,7 @@ func itemHasLiveOrInterruptedNode(r *store.Reader, itemID string, leasedRunIDs, 
 			runRows.Close()
 			return false, err
 		}
-		if state == run.StatePaused || leasedRunIDs[runID] || activeRunIDs[runID] {
+		if (state != run.StateExited && state != run.StateFailedToStart && state != run.StateTimedOut) || leasedRunIDs[runID] || activeRunIDs[runID] {
 			runRows.Close()
 			return true, nil
 		}
