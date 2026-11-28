@@ -3,13 +3,22 @@
 # Vantage discovers every `roadmap.md` on its own, and no roadmap path is pinned: this
 # repository keeps one, `docs/tillr/roadmap.md`.
 #
-# One tree is excluded from planning: the tillr pack's delivered copies of the tillr
-# design documents (`tools/pack-docs.py`, `just pack-docs`). They are a dated snapshot
-# for agents in other workspaces, not planning documents. Without the exclusion the copy
-# of `docs/tillr/roadmap.md` would be discovered as a second roadmap, and every open
-# question in a copy would be indexed a second time beside its source.
+# Two trees are excluded from planning:
+# - the tillr pack's delivered copies of the tillr design documents (`tools/pack-docs.py`,
+#   `just pack-docs`), which are a dated snapshot for agents in other workspaces, not
+#   planning documents; without the exclusion, the copy of `docs/tillr/roadmap.md` would
+#   be discovered as a second roadmap and every open question in a copy would be indexed
+#   a second time beside its source;
+# - untracked scratch trees under `scratch/`, so no scratch roadmap is discovered and no
+#   scratch file is reported unreadable.
+[check.rules]
+"planning/unrouted" = "error"
+
 [planning]
-exclude = ["yolo-packs/tillr/files/local/share/tillr/docs/**"]
+exclude = [
+  "yolo-packs/tillr/files/local/share/tillr/docs/**",
+  "scratch/**",
+]
 
 #
 # The seven words are the ones `design-doc` defines; a document's `stage:` says what

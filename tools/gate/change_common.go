@@ -30,16 +30,18 @@ const (
 	watchMainDoc            = "docs/design/tillr-watch.md"
 	watchRecordsPrefix      = "docs/design/tillr-watch/"
 	watchDecisionRecordsDoc = "docs/design/tillr-watch/decision-record-files.md"
+	unroutedBacklogPath     = "tools/gate/unrouted-questions-backlog.json"
 )
 
 var (
-	upstreamRefRe   = regexp.MustCompile(`^refs/(?:heads/patch/|published/patch/|remotes/[^/]+/patch/|remotes/upstream/|tags/)`)
-	hunkStartRe     = regexp.MustCompile(`\+(\d+)`)
-	wordRe          = regexp.MustCompile(`[^\s()<>\[\]{}"'` + "`" + `|,*]+`)
-	watchHTMLTagRe  = regexp.MustCompile(`(?i)<a\s+[^>]*>`)
-	watchHTMLAttrRe = regexp.MustCompile(`(?i)\s(?:id|name)\s*=\s*(?:"([^"]+)"|'([^']+)')`)
-	watchVantageQRe = regexp.MustCompile(`<!--\s*vantage:\s*question\s+id=([^\s]+)`)
-	linkPatterns    = []*regexp.Regexp{
+	upstreamRefRe      = regexp.MustCompile(`^refs/(?:heads/patch/|published/patch/|remotes/[^/]+/patch/|remotes/upstream/|tags/)`)
+	hunkStartRe        = regexp.MustCompile(`\+(\d+)`)
+	wordRe             = regexp.MustCompile(`[^\s()<>\[\]{}"'` + "`" + `|,*]+`)
+	watchHTMLTagRe     = regexp.MustCompile(`(?i)<a\s+[^>]*>`)
+	watchHTMLAttrRe    = regexp.MustCompile(`(?i)\s(?:id|name)\s*=\s*(?:"([^"]+)"|'([^']+)')`)
+	watchVantageQRe    = regexp.MustCompile(`<!--\s*vantage:\s*question\s+id=([^\s]+)`)
+	unroutedQuestionRe = regexp.MustCompile(`^Open question ([A-Za-z0-9._-]+)\b`)
+	linkPatterns       = []*regexp.Regexp{
 		regexp.MustCompile(`\]\(\s*<([^>\n]*)>`),
 		regexp.MustCompile(`\]\(\s*([^)\s]+)`),
 		regexp.MustCompile(`(?m)^ {0,3}\[[^\]\n]+\]:\s*<?([^\s>]+)`),
@@ -53,6 +55,7 @@ var documentCheckFiles = []string{
 	"tools/gate/roadmap_sections.go",
 	"tools/gate/main.go",
 	"tools/gate/repo-gate",
+	unroutedBacklogPath,
 }
 
 var documentConfigNames = map[string]bool{
@@ -846,7 +849,130 @@ func reportedPath(root, name string) string {
 	return path.Clean(filepath.ToSlash(name))
 }
 
-func renderDocuments(root string, paths []string, locations map[string]roadmapLocation) (int, *vantageReport, int64) {
+func readGitBlobOptional(root, rev, filePath string) ([]byte, bool, error) {
+	lsOut, err := gitRun(root, true, "ls-tree", "--name-only", rev, "--", filePath)
+	if err != nil {
+		return nil, false, err
+	}
+	if strings.TrimSpace(lsOut) == "" {
+		return nil, false, nil
+	}
+	cmd := exec.Command("git", "-C", root, "show", rev+":"+filePath)
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, false, err
+	}
+	return out, true, nil
+}
+
+func parseUnroutedBacklog(raw []byte) ([]string, error) {
+	var list []string
+	if err := json.Unmarshal(raw, &list); err != nil {
+		return nil, err
+	}
+	for _, entry := range list {
+		if strings.TrimSpace(entry) == "" {
+			return nil, errors.New("backlog contains an empty entry")
+		}
+	}
+	return list, nil
+}
+
+func unroutedBacklogGrowthFindings(root, base, head string, backlogChanged bool) ([]string, error) {
+	if !backlogChanged {
+		return nil, nil
+	}
+	baseRaw, baseExists, err := readGitBlobOptional(root, base, unroutedBacklogPath)
+	if err != nil {
+		return nil, err
+	}
+	headRaw, headExists, err := readGitBlobOptional(root, head, unroutedBacklogPath)
+	if err != nil {
+		return nil, err
+	}
+	if !headExists {
+		return nil, nil
+	}
+	headList, err := parseUnroutedBacklog(headRaw)
+	if err != nil {
+		return []string{fmt.Sprintf("%s: invalid recorded unrouted-question backlog: %v", unroutedBacklogPath, err)}, nil
+	}
+	if !baseExists {
+		return nil, nil
+	}
+	baseList, err := parseUnroutedBacklog(baseRaw)
+	if err != nil {
+		return nil, fmt.Errorf("%s at base: %w", unroutedBacklogPath, err)
+	}
+	baseSet := make(map[string]bool, len(baseList))
+	for _, entry := range baseList {
+		baseSet[entry] = true
+	}
+	addedSet := make(map[string]bool)
+	for _, entry := range headList {
+		if !baseSet[entry] {
+			addedSet[entry] = true
+		}
+	}
+	if len(addedSet) == 0 {
+		return nil, nil
+	}
+	added := make([]string, 0, len(addedSet))
+	for entry := range addedSet {
+		added = append(added, entry)
+	}
+	sort.Strings(added)
+	findings := make([]string, 0, len(added))
+	for _, entry := range added {
+		findings = append(findings, fmt.Sprintf(
+			"%s: adds %s to the recorded unrouted-question backlog; route the question from a tracked roadmap instead of growing the backlog",
+			unroutedBacklogPath, entry,
+		))
+	}
+	return findings, nil
+}
+
+func loadUnroutedBacklog(root, base, head string) (map[string]bool, error) {
+	raw, exists, err := readGitBlobOptional(root, base, unroutedBacklogPath)
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		raw, exists, err = readGitBlobOptional(root, head, unroutedBacklogPath)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if !exists {
+		return nil, nil
+	}
+	list, err := parseUnroutedBacklog(raw)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", unroutedBacklogPath, err)
+	}
+	set := make(map[string]bool, len(list))
+	for _, entry := range list {
+		set[entry] = true
+	}
+	return set, nil
+}
+
+func isBacklogUnrouted(root string, f vantageFinding, backlog map[string]bool) bool {
+	if len(backlog) == 0 || f.Rule != "planning/unrouted" {
+		return false
+	}
+	m := unroutedQuestionRe.FindStringSubmatch(f.Message)
+	if m == nil {
+		return false
+	}
+	rp := reportedPath(root, f.File)
+	if rp == "" {
+		return false
+	}
+	return backlog[rp+"#"+m[1]]
+}
+
+func renderDocuments(root string, paths []string, locations map[string]roadmapLocation, backlog map[string]bool) (int, *vantageReport, int64) {
 	started := time.Now()
 	args := append([]string{"vantage-check", "check", "--format", "json"}, paths...)
 	cmd := exec.Command("uvx", args...)
@@ -876,6 +1002,27 @@ func renderDocuments(root string, paths []string, locations map[string]roadmapLo
 		}
 	}
 	if report != nil {
+		if len(backlog) > 0 {
+			filtered := make([]vantageFinding, 0, len(report.Findings))
+			suppressedError := false
+			remainingError := false
+			for _, f := range report.Findings {
+				if isBacklogUnrouted(root, f, backlog) {
+					if f.Severity == checkresult.DetailError {
+						suppressedError = true
+					}
+					continue
+				}
+				if f.Severity == checkresult.DetailError {
+					remainingError = true
+				}
+				filtered = append(filtered, f)
+			}
+			report.Findings = filtered
+			if code == 1 && suppressedError && !remainingError && len(report.Failures) == 0 {
+				code = 0
+			}
+		}
 		for _, f := range report.Findings {
 			name := f.File
 			lineVal := f.Line
@@ -899,7 +1046,11 @@ func renderDocuments(root string, paths []string, locations map[string]roadmapLo
 	return code, report, durationMS
 }
 
-func judgeDocuments(root, head string, documents []string) (int, error) {
+func judgeDocuments(root, base, head string, documents []string) (int, error) {
+	backlog, err := loadUnroutedBacklog(root, base, head)
+	if err != nil {
+		return 4, err
+	}
 	keys, unsettled, err := documentKeys(root, head, documents)
 	if err != nil {
 		return 4, err
@@ -909,10 +1060,10 @@ func judgeDocuments(root, head string, documents []string) (int, error) {
 		return 4, err
 	}
 	defer cleanupRoadmapSections(temporary)
-	return judgeDocumentSet(root, head, paths, keys, unsettled, locations)
+	return judgeDocumentSet(root, head, paths, keys, unsettled, locations, backlog)
 }
 
-func judgeDocumentSet(root, head string, documents []string, keys map[string]string, unsettled map[string][]string, locations map[string]roadmapLocation) (int, error) {
+func judgeDocumentSet(root, head string, documents []string, keys map[string]string, unsettled map[string][]string, locations map[string]roadmapLocation, backlog map[string]bool) (int, error) {
 	store, err := resultStoreDir(root)
 	if err != nil {
 		return 4, err
@@ -944,7 +1095,7 @@ func judgeDocumentSet(root, head string, documents []string, keys map[string]str
 	var stale []string
 
 	if len(pending) > 0 {
-		code, report, durationMS = renderDocuments(root, pending, locations)
+		code, report, durationMS = renderDocuments(root, pending, locations, backlog)
 		if report != nil {
 			version = report.Version
 		}
@@ -965,7 +1116,7 @@ func judgeDocumentSet(root, head string, documents []string, keys map[string]str
 	if len(stale) > 0 {
 		fmt.Fprintf(os.Stderr, "documents: %d remembered pass(es) are not from renderer %s; judging again\n", len(stale), version)
 		pending = append([]string(nil), documents...)
-		code, report, durationMS = renderDocuments(root, pending, locations)
+		code, report, durationMS = renderDocuments(root, pending, locations, backlog)
 		if report != nil {
 			version = report.Version
 		} else {
@@ -1294,8 +1445,15 @@ func runChangeCheck(kind string, args []string) int {
 		return failJudge(err)
 	}
 	var documents []string
+	backlogChanged := false
 	for _, p := range strings.Split(changedOut, "\x00") {
-		if p == "" || !strings.HasSuffix(p, ".md") {
+		if p == "" {
+			continue
+		}
+		if p == unroutedBacklogPath {
+			backlogChanged = true
+		}
+		if !strings.HasSuffix(p, ".md") {
 			continue
 		}
 		excluded := false
@@ -1339,6 +1497,14 @@ func runChangeCheck(kind string, args []string) int {
 		}
 		return 0
 	case "documents":
+		backlogFindings, err := unroutedBacklogGrowthFindings(root, base, head, backlogChanged)
+		if err != nil {
+			return failJudge(err)
+		}
+		if len(backlogFindings) > 0 {
+			fmt.Println(strings.Join(backlogFindings, "\n"))
+			return 1
+		}
 		if len(documents) == 0 {
 			return 0
 		}
@@ -1369,7 +1535,7 @@ func runChangeCheck(kind string, args []string) int {
 			fmt.Println(strings.Join(findings, "\n"))
 			return 1
 		}
-		code, err := judgeDocuments(root, head, documents)
+		code, err := judgeDocuments(root, base, head, documents)
 		if err != nil {
 			return failJudge(err)
 		}

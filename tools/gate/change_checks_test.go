@@ -2121,3 +2121,173 @@ func TestChangeLandingGateRefusesBrokenGateAdapterBeforeMerge(t *testing.T) {
 		t.Fatalf("main moved to %s despite landing gate refusal (base=%s)", gotMain, base)
 	}
 }
+
+func TestDocumentsUnroutedQuestionRefusedUntilRoadmapLinksIt(t *testing.T) {
+	root, _ := loadTestContext(t)
+	f := newChangeFixture(t, false)
+	rawCfg, err := os.ReadFile(filepath.Join(root, ".vantage.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFixtureFile(t, f.repo, ".vantage.toml", string(rawCfg))
+	writeFixtureFile(t, f.repo, "docs/tillr/roadmap.md", "---\ntitle: \"Roadmap\"\nstatus: accepted\n---\n\n# Roadmap\n\n## Icebox\n\n- Existing item.\n")
+	base := f.commit()
+
+	designDoc := "---\ntitle: \"Sample design\"\nstatus: in-review\nstage: DESIGN\n---\n\n# Sample design\n\n## Open questions\n\n1. 💬 **OQ-SM1: Which option should we pick?**\n\n   <!-- vantage: question id=OQ-SM1 leaning=\"Option A\" -->\n\n   _Leaning:_ Option A.\n"
+	writeFixtureFile(t, f.repo, "docs/design/sample.md", designDoc)
+	unroutedHead := f.commit()
+
+	code, out, errOut := f.check("documents", base, unroutedHead)
+	if code != 1 {
+		t.Fatalf("expected unrouted question to fail documents check (exit 1), got code=%d out=%s err=%s", code, out, errOut)
+	}
+	if !strings.Contains(out, "planning/unrouted") || !strings.Contains(out, "OQ-SM1") || !strings.Contains(out, "docs/tillr/roadmap.md") {
+		t.Fatalf("expected planning/unrouted finding naming OQ-SM1 and docs/tillr/roadmap.md, got out=%s err=%s", out, errOut)
+	}
+
+	writeFixtureFile(t, f.repo, "docs/tillr/roadmap.md", "---\ntitle: \"Roadmap\"\nstatus: accepted\n---\n\n# Roadmap\n\n## Icebox\n\n- Existing item.\n- [Sample design](../design/sample.md)\n")
+	routedHead := f.commit()
+
+	code, out, errOut = f.check("documents", base, routedHead)
+	if code != 0 {
+		t.Fatalf("expected routed design to pass documents check (exit 0), got code=%d out=%s err=%s", code, out, errOut)
+	}
+}
+
+func TestDocumentsUnroutedBacklogAllowedAndCannotGrow(t *testing.T) {
+	root, _ := loadTestContext(t)
+	f := newChangeFixture(t, false)
+	rawCfg, err := os.ReadFile(filepath.Join(root, ".vantage.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFixtureFile(t, f.repo, ".vantage.toml", string(rawCfg))
+	writeFixtureFile(t, f.repo, "docs/tillr/roadmap.md", "---\ntitle: \"Roadmap\"\nstatus: accepted\n---\n\n# Roadmap\n\n## Icebox\n\n- Existing item.\n")
+	legacyDoc := "---\ntitle: \"Legacy design\"\nstatus: in-review\nstage: DESIGN\n---\n\n# Legacy design\n\nContext.\n\n## Open questions\n\n1. 💬 **OQ-LG1: Pre-existing unrouted question?**\n\n   <!-- vantage: question id=OQ-LG1 leaning=\"Option A\" -->\n\n   _Leaning:_ Option A.\n"
+	writeFixtureFile(t, f.repo, "docs/design/legacy.md", legacyDoc)
+	writeFixtureFile(t, f.repo, unroutedBacklogPath, "[\n  \"docs/design/legacy.md#OQ-LG1\"\n]\n")
+	base := f.commit()
+
+	// Editing the legacy document without adding any new unrouted question passes.
+	writeFixtureFile(t, f.repo, "docs/design/legacy.md", strings.ReplaceAll(legacyDoc, "Context.", "Updated context."))
+	editHead := f.commit()
+	if code, out, errOut := f.check("documents", base, editHead); code != 0 {
+		t.Fatalf("editing doc with backlog question must pass, got code=%d out=%s err=%s", code, out, errOut)
+	}
+
+	// Adding a new unrouted question beside the backlog question fails and names only the new question.
+	withNewQ := legacyDoc + "\n2. 💬 **OQ-LG2: Brand new unrouted question?**\n\n   <!-- vantage: question id=OQ-LG2 leaning=\"Option B\" -->\n\n   _Leaning:_ Option B.\n"
+	writeFixtureFile(t, f.repo, "docs/design/legacy.md", withNewQ)
+	newQHead := f.commit()
+	code, out, errOut := f.check("documents", editHead, newQHead)
+	if code != 1 {
+		t.Fatalf("new unrouted question beside backlog must fail (exit 1), got code=%d out=%s err=%s", code, out, errOut)
+	}
+	if !strings.Contains(out, "OQ-LG2") {
+		t.Fatalf("expected failure to name OQ-LG2, got out=%s err=%s", out, errOut)
+	}
+	if strings.Contains(out, "OQ-LG1") {
+		t.Fatalf("expected backlog question OQ-LG1 to stay suppressed, got out=%s", out)
+	}
+
+	// Growing the recorded backlog file is refused even when no Markdown file changes.
+	writeFixtureFile(t, f.repo, unroutedBacklogPath, "[\n  \"docs/design/legacy.md#OQ-LG1\",\n  \"docs/design/legacy.md#OQ-LG2\"\n]\n")
+	growHead := f.commit()
+	code, out, errOut = f.check("documents", newQHead, growHead)
+	if code != 1 {
+		t.Fatalf("growing recorded backlog must fail (exit 1), got code=%d out=%s err=%s", code, out, errOut)
+	}
+	if !strings.Contains(out, unroutedBacklogPath) || !strings.Contains(out, "docs/design/legacy.md#OQ-LG2") {
+		t.Fatalf("expected backlog growth refusal naming file and added entry, got out=%s err=%s", out, errOut)
+	}
+}
+
+func TestDocumentsDesignWorkflowPromptsRequireRoadmapLinkWithoutPriority(t *testing.T) {
+	root, _ := loadTestContext(t)
+	cases := []struct {
+		file    string
+		stageID string
+	}{
+		{"config/tillr/workflows/scouted-design@v1.json", "write"},
+		{"config/tillr/workflows/design-from-scouts@v1.json", "join"},
+	}
+	for _, tc := range cases {
+		raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(tc.file)))
+		if err != nil {
+			t.Fatalf("read %s: %v", tc.file, err)
+		}
+		var wf struct {
+			Stages []struct {
+				ID     string `json:"id"`
+				Prompt string `json:"prompt"`
+			} `json:"stages"`
+		}
+		if err := json.Unmarshal(raw, &wf); err != nil {
+			t.Fatalf("parse %s: %v", tc.file, err)
+		}
+		found := false
+		for _, s := range wf.Stages {
+			if s.ID != tc.stageID {
+				continue
+			}
+			found = true
+			lower := strings.ToLower(s.Prompt)
+			for _, want := range []string{"roadmap", "same change", "icebox", "priority"} {
+				if !strings.Contains(lower, want) {
+					t.Errorf("%s stage %s prompt missing %q: %s", tc.file, tc.stageID, want, s.Prompt)
+				}
+			}
+		}
+		if !found {
+			t.Fatalf("%s missing stage %s", tc.file, tc.stageID)
+		}
+	}
+}
+
+func TestDocumentsPlanningIndexExcludesScratch(t *testing.T) {
+	root, _ := loadTestContext(t)
+	f := newChangeFixture(t, false)
+	rawCfg, err := os.ReadFile(filepath.Join(root, ".vantage.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFixtureFile(t, f.repo, ".vantage.toml", string(rawCfg))
+	writeFixtureFile(t, f.repo, "docs/tillr/roadmap.md", "---\ntitle: \"Roadmap\"\nstatus: accepted\n---\n\n# Roadmap\n")
+	f.commit()
+
+	// Create an untracked scratch roadmap and an unreadable scratch file.
+	writeFixtureFile(t, f.repo, "scratch/tillr-build-src/docs/tillr/roadmap.md", "---\ntitle: \"Scratch Roadmap\"\n---\n\n# Scratch Roadmap\n")
+	if err := os.Symlink("/nonexistent-vantage-target", filepath.Join(f.repo, "scratch", "unreadable.md")); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command("uvx", "vantage-check", "index", "--format", "json")
+	cmd.Dir = f.repo
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("vantage-check index: %v: %s", err, out)
+	}
+	var parsed struct {
+		Roadmaps []struct {
+			Path string `json:"path"`
+		} `json:"roadmaps"`
+		Index struct {
+			Unreadable []struct {
+				Path string `json:"path"`
+			} `json:"unreadable"`
+		} `json:"index"`
+	}
+	if err := json.Unmarshal(out, &parsed); err != nil {
+		t.Fatalf("parse index json: %v: %s", err, out)
+	}
+	for _, rm := range parsed.Roadmaps {
+		if strings.HasPrefix(rm.Path, "scratch/") {
+			t.Fatalf("planning index discovered scratch roadmap: %s", rm.Path)
+		}
+	}
+	for _, u := range parsed.Index.Unreadable {
+		if strings.HasPrefix(u.Path, "scratch/") {
+			t.Fatalf("planning index reported unreadable scratch file: %s", u.Path)
+		}
+	}
+}
