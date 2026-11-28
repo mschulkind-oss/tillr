@@ -44,6 +44,7 @@ func (l *Loop) restartUnreadParallelNode(node Decision, rec run.Record, unreadFo
 	node.RunRequest = request
 	node.WorkflowRestart = true
 	node.UnreadFooter = unreadFooter
+	node.UnreadReportRestart = true
 	node.InfrastructureFrom = rec.RunID
 	node.SelectSeat = false
 	return node, true, nil
@@ -64,6 +65,7 @@ func (l *Loop) parallelInterrupted(node Decision, rec run.Record) (Decision, boo
 	node.RunRequest = request
 	node.WorkflowRestart = true
 	node.UnreadFooter = ""
+	node.UnreadReportRestart = false
 	node.InfrastructureFrom = ""
 	return node, true, nil
 }
@@ -99,7 +101,7 @@ func (l *Loop) claimParallelReplacement(ctx context.Context, nodes []Decision, i
 	}
 	updated := append([]Decision(nil), nodes...)
 	updated[index] = replacement
-	claimed := false
+	claimed, refused := false, false
 	err = s.WriteTx(ctx, func(tx *store.Tx) error {
 		works, byRun, err := readPendingHistory(tx.Reader())
 		if err != nil {
@@ -108,6 +110,20 @@ func (l *Loop) claimParallelReplacement(ctx context.Context, nodes []Decision, i
 		work := works[replacement.ItemID]
 		if work == nil || work.Done || work.Orphaned || work.Owner == nil || *work.Owner != *here || work.LoopID != l.sessionID {
 			return fmt.Errorf("parallel replacement lost its dispatch owner for %s", replacement.RunRequest.RunID)
+		}
+		if work.Examining || work.Examiner != nil {
+			// The group is being settled: a replacement would overwrite the node run the
+			// examination reads.
+			refused = true
+			return nil
+		}
+		faults, err := ReadItemFaults(tx.Reader())
+		if err != nil {
+			return err
+		}
+		if _, faulted := faults[replacement.ItemID]; faulted {
+			refused = true
+			return nil
 		}
 		current := parallelNodes(work.Decision)
 		if index >= len(current) || current[index].RunRequest.RunID != nodes[index].RunRequest.RunID {
@@ -138,7 +154,21 @@ func (l *Loop) claimParallelReplacement(ctx context.Context, nodes []Decision, i
 		}
 		return appendEffect(tx, dispatchStartedKind, d.RunRequest.RunID, work, l.cfg.Now())
 	})
+	if refused {
+		return nodes, false, err
+	}
 	return updated, claimed, err
+}
+
+// itemHasOpenFault answers whether an item fault is open for itemID.
+func (l *Loop) itemHasOpenFault(ctx context.Context, itemID string) (bool, error) {
+	faulted := false
+	err := l.readStore(ctx, func(r *store.Reader) error {
+		faults, err := ReadItemFaults(r)
+		_, faulted = faults[itemID]
+		return err
+	})
+	return faulted, err
 }
 
 func (l *Loop) stageParallelReplacement(ctx context.Context, nodes []Decision, index int) error {

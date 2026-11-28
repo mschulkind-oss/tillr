@@ -187,6 +187,7 @@ func computeRefusalCauses(p refusalPayload) []RefusalCause {
 		RefusalLand,
 		RefusalNoOp,
 		RefusalNodeOutput,
+		RefusalReportMissing,
 		RefusalVerifyNoVerdict,
 		RefusalPlanWrong,
 		RefusalDeliveryOrder,

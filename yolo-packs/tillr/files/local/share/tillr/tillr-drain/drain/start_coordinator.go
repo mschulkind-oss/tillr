@@ -128,6 +128,10 @@ func (l *Loop) findLaunchableRuns(ctx context.Context) ([]launchableRun, error) 
 		if err != nil {
 			return err
 		}
+		faults, err := ReadItemFaults(r)
+		if err != nil {
+			return err
+		}
 		l.mu.Lock()
 		skip := make(map[string]bool, len(l.stageLaunch.Launch.Runs)+len(l.active)+len(l.activeBrackets))
 		for id := range l.stageLaunch.Launch.Runs {
@@ -143,6 +147,9 @@ func (l *Loop) findLaunchableRuns(ctx context.Context) ([]launchableRun, error) 
 		l.mu.Unlock()
 
 		for itemID, work := range works {
+			if _, faulted := faults[itemID]; faulted {
+				continue
+			}
 			if !isWorkLaunchEligible(work) {
 				continue
 			}

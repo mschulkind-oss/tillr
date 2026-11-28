@@ -2918,10 +2918,17 @@ func (l *Loop) launchRun(ctx context.Context, d Decision, at time.Time, watch *l
 	go func() {
 		defer cancel()
 		bracketCleared := false
+		// bracketed is the group's run and every replacement of its primary reader: the
+		// pending dispatch names the replacement, so it stays inside the bracket too.
+		bracketed := []string{id}
+		bracketAlias := func(runID string) {
+			l.markBracketActive(runID)
+			bracketed = append(bracketed, runID)
+		}
 		clearBracket := func() {
 			if !bracketCleared {
 				bracketCleared = true
-				l.clearBracketActive(id)
+				l.clearBracketActive(bracketed...)
 			}
 		}
 		defer clearBracket()
@@ -2960,7 +2967,7 @@ func (l *Loop) launchRun(ctx context.Context, d Decision, at time.Time, watch *l
 				completion.result = &local
 			} else if len(d.Parallel) > 0 {
 				finishStartHandoff(runCtx)
-				err = l.runParallel(runCtx, d, &local, completion.timing, watched)
+				err = l.runParallel(runCtx, d, &local, completion.timing, watched, bracketAlias)
 				completion.result = &local
 			} else {
 				req := *d.RunRequest

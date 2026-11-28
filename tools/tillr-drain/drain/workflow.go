@@ -375,6 +375,7 @@ func (l *Loop) advanceNode(ctx context.Context, d Decision, base, report string)
 	next.NodeStartRunID = ""
 	next.WorkflowRestart = false
 	next.UnreadFooter = ""
+	next.UnreadReportRestart = false
 	next.NodeInfraFailures = 0
 	next.InfrastructureFrom = ""
 	next.WorkflowRelease = false
@@ -818,6 +819,7 @@ func (l *Loop) settleNodeFormat(ctx context.Context, d Decision, rec run.Record,
 					return true, err
 				}
 				d.UnreadFooter = ""
+				d.UnreadReportRestart = false
 				return true, l.recordWorkflowRestart(ctx, d, base, rec, "fresh", "", true)
 			}
 		}
@@ -835,6 +837,27 @@ func (l *Loop) settleNodeFormat(ctx context.Context, d Decision, rec run.Record,
 			return true, l.holdFailedWorkflowNode(ctx, d, base, rec, result)
 		}
 		if rec.State == run.StateExited && !readableFooter(footer) && !noChangeAllowed {
+			repeats, err := l.unreadReportRepeats(ctx, d, rec)
+			if err != nil {
+				return true, err
+			}
+			if repeats {
+				// The one restart this node gets for an unreadable report already ran, and
+				// it left none again: the node is refused, not restarted without end.
+				target := l.nodeTarget(d)
+				detail := reportMissingDetail(stage.ID, rec.RunID)
+				c := Candidate{ItemID: d.ItemID, LaneID: d.LaneID, RunID: rec.RunID, Worktree: target, BaseSHA: nodeBase, HeadSHA: head, RefusalDetail: detail}
+				if err := l.nodeOutcome(ctx, d, "refused"); err != nil {
+					return true, err
+				}
+				if err := l.refuse(ctx, c, result, RefusalReportMissing); err != nil {
+					return true, err
+				}
+				if stop := l.abandon(ctx, d.LaneID, rec.RunID, head, detail); stop != "" {
+					return true, retainedAfter(d.LaneID, stop)
+				}
+				return true, l.markExamined(ctx, d)
+			}
 			return true, l.restartUnreadWorkflowNode(ctx, d, base, rec, footer)
 		}
 	}

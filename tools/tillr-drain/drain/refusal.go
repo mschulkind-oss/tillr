@@ -33,7 +33,7 @@ func (l *Loop) refuse(ctx context.Context, candidate Candidate, result *LoopResu
 		l.reportf("loop: repeated-refusal: %s\n", line)
 	}
 	switch step {
-	case RefusalLand, RefusalDeliveryOrder, RefusalGate, RefusalVerifyNotDone, RefusalPlanWrong, RefusalFence, RefusalNoOp, RefusalNodeOutput, RefusalPlanOutput, RefusalWordsMissing, RefusalWordsAltered, RefusalIdeaNoOutcome:
+	case RefusalLand, RefusalDeliveryOrder, RefusalGate, RefusalVerifyNotDone, RefusalPlanWrong, RefusalFence, RefusalNoOp, RefusalNodeOutput, RefusalReportMissing, RefusalPlanOutput, RefusalWordsMissing, RefusalWordsAltered, RefusalIdeaNoOutcome:
 		return l.recordRefusal(ctx, candidate, step)
 	}
 	return nil

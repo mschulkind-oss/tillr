@@ -79,6 +79,7 @@ const (
 	RefusalLand              = runhistory.RefusalLand
 	RefusalConflict          = runhistory.RefusalConflict
 	RefusalNodeOutput        = runhistory.RefusalNodeOutput
+	RefusalReportMissing     = runhistory.RefusalReportMissing
 	RefusalPlanOutput        = runhistory.RefusalPlanOutput
 	RefusalStaging           = runhistory.RefusalStaging
 	RefusalWordsMissing      = runhistory.RefusalWordsMissing

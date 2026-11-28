@@ -141,27 +141,30 @@ type Decision struct {
 	// replacement uses its shared lane. It is drain-owned, never a run field.
 	BuildRestartFrom string `json:"build_restart_from,omitempty"`
 	// Designer is the row read when the session choice was made, not a later reread.
-	DeskDocument      string           `json:"desk_document,omitempty"`
-	Designer          *lastDesigner    `json:"-"`
-	DesignerSessionID string           `json:"designer_session_id,omitempty"`
-	DesignerReason    string           `json:"designer_reason,omitempty"`
-	NodeStartRunID    string           `json:"node_start_run_id,omitempty"`
-	WorkflowRestart   bool             `json:"workflow_restart,omitempty"`
-	UnreadFooter      string           `json:"unread_footer,omitempty"`
-	NodeInfraFailures int              `json:"node_infra_failures,omitempty"`
-	WorkflowRelease   bool             `json:"workflow_release,omitempty"`
-	FreshNodeStage    bool             `json:"fresh_node_stage,omitempty"`
-	Workflow          *Workflow        `json:"workflow,omitempty"`
-	SelectedWorkflow  string           `json:"selected_workflow,omitempty"`
-	WorkflowSource    string           `json:"workflow_source,omitempty"`
-	NodeIndex         int              `json:"node_index,omitempty"`
-	NodeBaseSHA       string           `json:"node_base_sha,omitempty"`
-	PreviousReport    string           `json:"previous_report,omitempty"`
-	ConflictID        string           `json:"conflict_id,omitempty"`
-	BlockConflict     *item.Conflict   `json:"block_conflict,omitempty"`
-	SplitCall         *item.SplitCall  `json:"split_call,omitempty"`
-	SplitDonor        *item.SplitDonor `json:"split_donor,omitempty"`
-	Inputs            *RunInputs       `json:"inputs,omitempty"`
+	DeskDocument      string        `json:"desk_document,omitempty"`
+	Designer          *lastDesigner `json:"-"`
+	DesignerSessionID string        `json:"designer_session_id,omitempty"`
+	DesignerReason    string        `json:"designer_reason,omitempty"`
+	NodeStartRunID    string        `json:"node_start_run_id,omitempty"`
+	WorkflowRestart   bool          `json:"workflow_restart,omitempty"`
+	UnreadFooter      string        `json:"unread_footer,omitempty"`
+	// UnreadReportRestart says this run is the one restart a node gets for an unreadable
+	// report: a second unreadable ending takes the report-missing refusal, not a restart.
+	UnreadReportRestart bool             `json:"unread_report_restart,omitempty"`
+	NodeInfraFailures   int              `json:"node_infra_failures,omitempty"`
+	WorkflowRelease     bool             `json:"workflow_release,omitempty"`
+	FreshNodeStage      bool             `json:"fresh_node_stage,omitempty"`
+	Workflow            *Workflow        `json:"workflow,omitempty"`
+	SelectedWorkflow    string           `json:"selected_workflow,omitempty"`
+	WorkflowSource      string           `json:"workflow_source,omitempty"`
+	NodeIndex           int              `json:"node_index,omitempty"`
+	NodeBaseSHA         string           `json:"node_base_sha,omitempty"`
+	PreviousReport      string           `json:"previous_report,omitempty"`
+	ConflictID          string           `json:"conflict_id,omitempty"`
+	BlockConflict       *item.Conflict   `json:"block_conflict,omitempty"`
+	SplitCall           *item.SplitCall  `json:"split_call,omitempty"`
+	SplitDonor          *item.SplitDonor `json:"split_donor,omitempty"`
+	Inputs              *RunInputs       `json:"inputs,omitempty"`
 
 	// ReusedNodes are the read-only nodes a retry keeps from attempt ReusedAttempt: they
 	// passed there, no write node had run, so the new attempt starts at the first node not
@@ -2414,6 +2417,8 @@ func (p *planner) retryHoldReason(itemID string) string {
 		return RefusalPlanOutput
 	case RefusalNodeOutput:
 		return ReasonNodeOutputMissing
+	case RefusalReportMissing:
+		return RefusalReportMissing
 	case RefusalFence:
 		return ReasonBoundaryScopeEscape
 	case RefusalNoOp:

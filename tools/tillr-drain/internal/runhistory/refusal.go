@@ -33,6 +33,9 @@ const (
 	RefusalConflict  = "conflict"
 	// RefusalNodeOutput means a successful run did not supply a usable declared file.
 	RefusalNodeOutput = "node-output-missing"
+	// RefusalReportMissing means a workflow agent node exited 0 and left no report that
+	// states an ending: the run is returned to its builder rather than restarted again.
+	RefusalReportMissing = "report-missing"
 	// RefusalPlanOutput means a plan or classification step wrote a delivery output that
 	// could not be parsed; it returns to the same session with the parse error and shape.
 	RefusalPlanOutput = "plan-output-unparseable"
@@ -83,7 +86,7 @@ func FormatRepeatedRefusalLine(report *RepeatedRefusal) string {
 
 // RefusalStepsWords is the steps breakdown as one phrase: `fence=2`, `gate=1, fence=1`.
 func RefusalStepsWords(steps map[string]int) string {
-	order := []string{RefusalNoOp, RefusalFence, RefusalGate, RefusalVerifyNotDone, RefusalPlanWrong, RefusalLand, drainmodel.RefusalDeliveryOrder, RefusalConflict, RefusalNodeOutput, RefusalPlanOutput, RefusalWordsMissing, RefusalWordsAltered, RefusalIdeaNoOutcome}
+	order := []string{RefusalNoOp, RefusalFence, RefusalGate, RefusalVerifyNotDone, RefusalPlanWrong, RefusalLand, drainmodel.RefusalDeliveryOrder, RefusalConflict, RefusalNodeOutput, RefusalReportMissing, RefusalPlanOutput, RefusalWordsMissing, RefusalWordsAltered, RefusalIdeaNoOutcome}
 	parts := make([]string, 0, len(order))
 	for _, step := range order {
 		if steps[step] > 0 {
@@ -97,7 +100,7 @@ func RefusalStepsWords(steps map[string]int) string {
 }
 
 // ConcludingRefusals are the refusal steps that end their run's examination.
-var ConcludingRefusals = []string{RefusalLand, drainmodel.RefusalDeliveryOrder, RefusalGate, RefusalVerifyNotDone, RefusalFence, RefusalNoOp, RefusalNodeOutput, RefusalPlanOutput}
+var ConcludingRefusals = []string{RefusalLand, drainmodel.RefusalDeliveryOrder, RefusalGate, RefusalVerifyNotDone, RefusalFence, RefusalNoOp, RefusalNodeOutput, RefusalReportMissing, RefusalPlanOutput}
 
 // GateRefusalCauses derives the countable cross-item cause keys for a gate refusal's
 // failing checks (D-TW-RRS1, D-TW-RRS2, D-TW-RRS5). A named failing case keys on check,

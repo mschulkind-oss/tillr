@@ -216,6 +216,10 @@ func (l *Loop) findStageableRuns(ctx context.Context) ([]stageableRun, error) {
 		if err != nil {
 			return err
 		}
+		faults, err := ReadItemFaults(r)
+		if err != nil {
+			return err
+		}
 		l.mu.Lock()
 		skip := make(map[string]bool, l.stageLaunch.RunCount()+len(l.active)+len(l.activeBrackets))
 		for id := range l.stageLaunch.Stage.Runs {
@@ -234,6 +238,9 @@ func (l *Loop) findStageableRuns(ctx context.Context) ([]stageableRun, error) {
 		l.mu.Unlock()
 
 		for itemID, work := range works {
+			if _, faulted := faults[itemID]; faulted {
+				continue
+			}
 			if !isWorkStageEligible(work) {
 				continue
 			}
@@ -481,6 +488,13 @@ func (l *Loop) recordDispatchStaged(ctx context.Context, d Decision, base, reque
 		}
 		work := works[d.ItemID]
 		if !isWorkStageEligible(work) || work.Decision.RunRequest.RunID != d.RunRequest.RunID {
+			return nil
+		}
+		faults, err := ReadItemFaults(tx.Reader())
+		if err != nil {
+			return err
+		}
+		if _, faulted := faults[d.ItemID]; faulted {
 			return nil
 		}
 		exists, err := decisionRunRecordsExist(tx.Reader(), d)

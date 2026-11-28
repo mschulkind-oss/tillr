@@ -35,6 +35,7 @@ func (l *Loop) holdFailedWorkflowNode(ctx context.Context, d Decision, base stri
 	}
 	d.InfrastructureFrom = rec.RunID
 	d.UnreadFooter = ""
+	d.UnreadReportRestart = false
 	return l.restartWorkflowNode(ctx, d, base, rec, "restart", "workflow infrastructure failure")
 }
 
@@ -43,6 +44,7 @@ func (l *Loop) holdFailedWorkflowNode(ctx context.Context, d Decision, base stri
 func (l *Loop) restartUnreadWorkflowNode(ctx context.Context, d Decision, base string, rec run.Record, unreadFooter string) error {
 	d.InfrastructureFrom = rec.RunID
 	d.UnreadFooter = unreadFooter
+	d.UnreadReportRestart = true
 	preserveReason := "workflow node answer unread"
 	if unreadFooter != "" {
 		preserveReason = unreadFooterReason(unreadFooter)
@@ -68,6 +70,7 @@ func (l *Loop) emptyQuotaRefusal(d Decision, rec run.Record, base, head, dirty s
 
 func (l *Loop) restartInterruptedNode(ctx context.Context, d Decision, base string, rec run.Record) error {
 	d.UnreadFooter = ""
+	d.UnreadReportRestart = false
 	return l.restartWorkflowNode(ctx, d, base, rec, "interrupted", "run interrupted by signal")
 }
 
@@ -139,4 +142,43 @@ func restartBackendRequest(policy *Policy, d Decision, runID, backend string) *r
 	retained.RunID = runID
 	retained.Backend = backend
 	return &retained
+}
+
+// reportMissingDetail is the refusal's words for a node that left no readable report twice.
+func reportMissingDetail(node, runID string) string {
+	return fmt.Sprintf("node %s: run %s exited 0 without a readable RESULT footer, and the one restart this node gets for an unreadable report had already run", node, runID)
+}
+
+// unreadReportRepeats answers whether rec, a workflow agent node's run that exited 0
+// with no readable ending, is the second such ending of this node: the run is itself the
+// restart the node got for an unreadable report. It is a structural stop on repeating
+// that restart, not a count or a timer. Evaluator slots keep their own route and design
+// runs theirs, and an ending that is not an exit 0 is not a missing report.
+func (l *Loop) unreadReportRepeats(ctx context.Context, d Decision, rec run.Record) (bool, error) {
+	if d.Workflow == nil || evaluatorNode(d) || isDesignDecision(d) ||
+		rec.State != run.StateExited || rec.ExitCode == nil || *rec.ExitCode != 0 {
+		return false, nil
+	}
+	if d.UnreadReportRestart {
+		return true, nil
+	}
+	// A restart recorded before the flag existed is a `-restart` run whose predecessor on
+	// this node exited 0 outside the infrastructure class with no readable footer.
+	_, turns, kind := splitRunID(rec.RunID)
+	if turns == 0 || kind != "restart" || d.InfrastructureFrom == "" {
+		return false, nil
+	}
+	var prior *run.Record
+	if err := l.readStore(ctx, func(r *store.Reader) error {
+		var err error
+		prior, err = terminalRecord(r, d.InfrastructureFrom)
+		return err
+	}); err != nil {
+		return false, err
+	}
+	if prior == nil || prior.State != run.StateExited || prior.ExitCode == nil || *prior.ExitCode != 0 {
+		return false, nil
+	}
+	log := logTail(prior.ArtifactRefs)
+	return classifyDecisionAttempt(d, *prior, log) != AttemptInfrastructure && !readableFooter(reportFooter(log)), nil
 }

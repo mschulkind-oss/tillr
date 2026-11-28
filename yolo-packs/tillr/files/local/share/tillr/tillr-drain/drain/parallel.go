@@ -317,7 +317,9 @@ func (l *Loop) stageParallel(ctx context.Context, d Decision, base string) (Deci
 
 // runParallel keeps one outside-boundary bracket around all readers. No sibling
 // completion can blame a still-running reader or release the item's lane early.
-func (l *Loop) runParallel(ctx context.Context, d Decision, result *LoopResult, timing *PassTiming, watched []string) error {
+// bracket registers a replacement of the group's primary reader as an active bracket
+// that the caller ends together with the group's own.
+func (l *Loop) runParallel(ctx context.Context, d Decision, result *LoopResult, timing *PassTiming, watched []string, bracket func(runID string)) error {
 	nodes := parallelNodes(d)
 	type readerCompletion struct {
 		index  int
@@ -415,12 +417,29 @@ func (l *Loop) runParallel(ctx context.Context, d Decision, result *LoopResult, 
 		if c.reason == "" || firstErr != nil {
 			continue
 		}
+		if faulted, err := l.itemHasOpenFault(ctx, d.ItemID); err != nil {
+			firstErr = err
+			continue
+		} else if faulted {
+			// An open fault holds the item: no replacement is claimed or launched
+			// under it, and clearing the fault restarts the node from its record.
+			continue
+		}
 		updated, claimed, err := l.claimParallelReplacement(ctx, nodes, c.index, c.node)
 		if err != nil {
 			firstErr = err
 			continue
 		}
+		if !claimed && updated[c.index].RunRequest.RunID == nodes[c.index].RunRequest.RunID {
+			// Refused under an open fault or a running examination: nothing was written.
+			continue
+		}
 		nodes = updated
+		if c.index == 0 {
+			// The pending dispatch now names the replacement; keep it inside the bracket
+			// so the examination coordinator cannot settle it while readers still run.
+			bracket(nodes[0].RunRequest.RunID)
+		}
 		if !claimed {
 			held = true
 			continue
@@ -560,7 +579,7 @@ func (l *Loop) settleParallel(ctx context.Context, work *pendingWork, result *Lo
 		}
 		retry = retry || strings.HasPrefix(outcome, "workflow-node-")
 		infraRetry = infraRetry || outcome == "workflow-node-restart"
-		failed = failed || outcome == "failed" || outcome == "fault" || outcome == "blocked" || outcome == "unjudged"
+		failed = failed || outcome == "failed" || outcome == "fault" || outcome == "blocked" || outcome == "unjudged" || outcome == "refused"
 	}
 	finalHead, err := l.revParse(ctx, target, "HEAD")
 	if err != nil {
@@ -704,6 +723,22 @@ func (l *Loop) settleParallelReader(ctx context.Context, work *pendingWork, node
 			// No footer, or one naming no ending, is no answer: this reader alone runs
 			// again and its finished siblings are kept, without counting a normal exit
 			// as an infrastructure failure.
+			repeats, e := l.unreadReportRepeats(ctx, node, rec)
+			if e != nil {
+				return node, rec, log, "", laneOutcome{err: e}
+			}
+			if repeats {
+				// The restart this reader already had left no report again: it ends
+				// refused, without a replacement, and the collective settlement releases
+				// the lane.
+				outcome = "refused"
+				detail := reportMissingDetail(stage.ID, rec.RunID)
+				c := Candidate{ItemID: d.ItemID, LaneID: d.LaneID, RunID: rec.RunID, Worktree: target, BaseSHA: work.BaseSHA, HeadSHA: head, RefusalDetail: detail}
+				if err = l.refuse(ctx, c, result, RefusalReportMissing); err != nil {
+					return node, rec, log, "", laneOutcome{err: err}
+				}
+				break
+			}
 			updated, ok, e := l.restartUnreadParallelNode(node, rec, reportFooter(log))
 			if e != nil {
 				return node, rec, log, "", laneOutcome{err: e}

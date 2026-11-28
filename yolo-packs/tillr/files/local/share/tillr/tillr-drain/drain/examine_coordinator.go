@@ -59,12 +59,15 @@ func (l *Loop) markBracketActive(runID string) {
 	l.mu.Unlock()
 }
 
-func (l *Loop) clearBracketActive(runID string) {
-	if runID == "" {
-		return
-	}
+// clearBracketActive ends the brackets of runIDs together: a parallel group's run and
+// the replacements of its primary reader leave activeBrackets under one lock.
+func (l *Loop) clearBracketActive(runIDs ...string) {
 	l.mu.Lock()
-	delete(l.activeBrackets, runID)
+	for _, runID := range runIDs {
+		if runID != "" {
+			delete(l.activeBrackets, runID)
+		}
+	}
 	l.mu.Unlock()
 	l.signalExamineWake()
 }
