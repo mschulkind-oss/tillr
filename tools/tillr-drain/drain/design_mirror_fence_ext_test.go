@@ -71,11 +71,13 @@ printf 'RESULT: done\n'
 			fence := []string{"candidate.txt", "docs/design/fixture.md"}
 			report := &strings.Builder{}
 			steps := f.steps(t, always(t, "gate", 0), always(t, "land", 0), always(t, "verdict", 0))
+			questions := strings.Fields(indexStub(t, map[string]any{"path": "docs/design/fixture.md", "questions": []any{}}))
+			steps.QuestionsCmd = questions
 			loop, err := drain.NewLoop(drain.LoopConfig{ExitWhenDrained: true,
 				Root: f.root, Store: f.store, LaneRoot: f.laneRoot, Lanes: []string{"lane-1"},
 				Policy: f.policy, Steps: &evidenceProcessSteps{steps}, Stage: passStager{laneRoot: f.laneRoot, fence: fence},
 				Now: steps.Now, Report: report,
-				QuestionsCmd: strings.Fields(indexStub(t, map[string]any{"path": "docs/design/fixture.md", "questions": []any{}})),
+				QuestionsCmd: questions,
 			})
 			if err != nil {
 				t.Fatal(err)

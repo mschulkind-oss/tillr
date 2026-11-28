@@ -11,6 +11,8 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+
+	"github.com/mschulkind-oss/tillr-gate/internal/pathenv"
 )
 
 // EnvSliceToMap converts a KEY=VALUE slice into a map.
@@ -341,6 +343,7 @@ func PrivateEnvironment(label, scratch string, gitValues [][2]string) (map[strin
 	base["GIT_CONFIG_GLOBAL"] = configPath
 	base["GIT_CEILING_DIRECTORIES"] = withGitCeiling(base["GIT_CEILING_DIRECTORIES"], scratch)
 	env := BypassGitShimEnv(base, SharedCacheDir(base), scratch)
+	env["PATH"] = pathenv.StripExecutableFromPath(env["PATH"], "uvx", SharedCacheDir(base), scratch, os.TempDir())
 
 	values := gitValues
 	if values == nil {

@@ -18,6 +18,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-gate/internal/pathenv"
+	"github.com/mschulkind-oss/tillr-gate/shards"
 	"github.com/mschulkind-oss/tillr/checkresult"
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/record"
@@ -776,6 +778,20 @@ func checkEnv(check PlanCheck) []string {
 	sort.Strings(names)
 	for _, name := range names {
 		env = append(env, name+"="+check.Env[name])
+	}
+	if !slices.Contains(check.Tools, "uvx") {
+		envMap := shards.EnvSliceToMap(env)
+		if pathVal, ok := envMap["PATH"]; ok {
+			stripped := pathenv.StripExecutableFromPath(pathVal, "uvx", shards.SharedCacheDir(envMap), envMap["YOLO_DURABLE_DIR"], envMap["TMPDIR"], os.TempDir())
+			if stripped != pathVal {
+				for i, entry := range env {
+					if strings.HasPrefix(entry, "PATH=") {
+						env[i] = "PATH=" + stripped
+						break
+					}
+				}
+			}
+		}
 	}
 	return env
 }

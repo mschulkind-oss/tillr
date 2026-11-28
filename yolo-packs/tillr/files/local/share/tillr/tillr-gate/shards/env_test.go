@@ -349,3 +349,25 @@ func TestPrivateEnvironmentSetsGitCeilingDirectories(t *testing.T) {
 		t.Fatalf("GIT_CEILING_DIRECTORIES = %q, want [%q, %q]", env["GIT_CEILING_DIRECTORIES"], existing, scratch)
 	}
 }
+
+func TestPrivateEnvironmentStripsUvxFromPath(t *testing.T) {
+	binDir := t.TempDir()
+	for _, name := range []string{"uvx", "shard-sibling-tool"} {
+		if err := os.WriteFile(filepath.Join(binDir, name), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("GOCACHE", t.TempDir())
+	env, err := PrivateEnvironment("test", t.TempDir(), [][2]string{{"user.name", "Fixture"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", env["PATH"])
+	if found, err := exec.LookPath("uvx"); err == nil {
+		t.Fatalf("expected uvx stripped from shard PrivateEnvironment PATH, found %q", found)
+	}
+	if _, err := exec.LookPath("shard-sibling-tool"); err != nil {
+		t.Fatalf("expected sibling tool kept on shard PrivateEnvironment PATH: %v", err)
+	}
+}

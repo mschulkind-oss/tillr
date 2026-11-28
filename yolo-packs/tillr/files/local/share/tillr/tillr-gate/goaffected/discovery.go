@@ -18,6 +18,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+
+	"github.com/mschulkind-oss/tillr-gate/internal/pathenv"
 )
 
 // ExcludedPackMirrorPrefix is the pack mirror tree excluded from read-rule matching
@@ -862,6 +864,7 @@ func BuildEnv() []string {
 		durableScratch = filepath.Join(d, ".go-affected-scratch")
 	}
 	bypassGitShimEnv(envMap, sharedCacheDir(envMap), durableScratch)
+	envMap["PATH"] = pathenv.StripExecutableFromPath(envMap["PATH"], "uvx", sharedCacheDir(envMap), durableScratch, os.TempDir())
 
 	keys := make([]string, 0, len(envMap))
 	for k := range envMap {
