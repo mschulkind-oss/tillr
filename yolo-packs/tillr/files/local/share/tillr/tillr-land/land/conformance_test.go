@@ -18,6 +18,7 @@ func TestTheRefusalReasonsAreTheRegisteredSet(t *testing.T) {
 		"patch-rewind",
 		"trunk-rewritten",
 		"trunk-worktree-uncommitted",
+		"unchanged-tree",
 		"verdict-error",
 		"verdict-failed",
 		"verdict-mismatch",

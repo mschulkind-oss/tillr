@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/mschulkind-oss/tillr-drain/obstacles"
+	"github.com/mschulkind-oss/tillr-drain/remotesync"
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/store"
@@ -252,6 +253,18 @@ func TestSingleWorkerNoChangeRefusesDirtyOrIncompleteAndLeavesPlannedBuildUnchan
 	}
 	if allowsPlanNoChange(pb, workStage, "item-a", false, nil, nil, "") {
 		t.Fatal("planned-build@v1 work stage must not enable plan no_change")
+	}
+	sw := &Workflow{Name: "single-worker", Version: 1}
+	if !allowsSingleWorkerNoChange(sw, workStage, "single-worker@v1", "item-a", true, nil, nil, "") {
+		t.Fatal("single-worker@v1 must allow no_change on non-rebase fork items")
+	}
+	if !allowsPlanNoChange(pb, planStage, "item-a", true, nil, nil, "") {
+		t.Fatal("planned-build@v1 plan stage must allow no_change on non-rebase fork items")
+	}
+	rebaseID := remotesync.ForkRebasePrefix + "pi"
+	if allowsSingleWorkerNoChange(sw, workStage, "single-worker@v1", rebaseID, true, nil, nil, "") ||
+		allowsPlanNoChange(pb, planStage, rebaseID, true, nil, nil, "") {
+		t.Fatal("fork rebase items must not allow no_change")
 	}
 }
 
@@ -604,5 +617,274 @@ func TestIntakeLandingOfferReexaminesNoChangeOffer(t *testing.T) {
 	}
 	if _, err := l.intakeLandingOffer(ctx, d, rec, base); err == nil || !strings.Contains(err.Error(), "changed its recorded landing offer") {
 		t.Fatalf("mutated intake err = %v, want changed its recorded landing offer", err)
+	}
+}
+
+type forkNoChangeSteps struct {
+	t           *testing.T
+	storePath   string
+	laneRoot    string
+	forkDir     string
+	report      string
+	judgePass   bool
+	workerBrief string
+	judgeBrief  string
+	workerRuns  int
+	judgeRuns   int
+	cancelAfter int
+	cancel      context.CancelFunc
+}
+
+func (s *forkNoChangeSteps) Sync(context.Context) (SyncOutcome, error) { return SyncOutcome{}, nil }
+func (s *forkNoChangeSteps) Gate(context.Context, Candidate) (GateOutcome, error) {
+	s.t.Fatal("gate must not run on fork no_change")
+	return GateOutcome{}, nil
+}
+func (s *forkNoChangeSteps) Land(context.Context, Candidate) (LandOutcome, error) {
+	s.t.Fatal("land must not run on fork no_change")
+	return LandOutcome{}, nil
+}
+func (s *forkNoChangeSteps) Verdict(context.Context, Candidate, string) error {
+	s.t.Fatal("verdict must not run on fork no_change")
+	return nil
+}
+func (s *forkNoChangeSteps) ItemState(context.Context, string, string, string, ...item.WaitingOn) error {
+	return nil
+}
+
+func (s *forkNoChangeSteps) Run(_ context.Context, req run.Request) (run.Record, string, error) {
+	laneDir := filepath.Join(s.laneRoot, req.LaneID)
+	code := 0
+	var refs []run.ArtifactRef
+	var out string
+	if strings.HasSuffix(req.RunID, "-judge") || req.Seat == "verify" || req.Seat == "review" {
+		s.judgeRuns++
+		rawBrief, err := os.ReadFile(filepath.Join(laneDir, BriefFile))
+		if err != nil {
+			return run.Record{}, "", err
+		}
+		s.judgeBrief = string(rawBrief)
+		head := runGit(s.t, s.forkDir, "rev-parse", "HEAD")
+		tree := runGit(s.t, s.forkDir, "rev-parse", head+"^{tree}")
+		var verdicts []item.JudgeEntry
+		st, err := store.OpenRead(context.Background(), s.storePath)
+		if err != nil {
+			return run.Record{}, "", err
+		}
+		err = st.ReadTx(context.Background(), func(r *store.Reader) error {
+			rows, err := r.Query(`SELECT criterion_id,text,claim_class FROM item_criteria WHERE item_id=? ORDER BY criterion_id`, req.ItemID)
+			if err != nil {
+				return err
+			}
+			defer rows.Close()
+			for rows.Next() {
+				var id, text, class string
+				if err := rows.Scan(&id, &text, &class); err != nil {
+					return err
+				}
+				verdict := item.VerdictDone
+				reason := "independently verified all fork commits are still needed"
+				if !s.judgePass {
+					verdict = item.VerdictNotDone
+					reason = "fork commit is now covered by upstream and must be dropped"
+				}
+				verdicts = append(verdicts, item.JudgeEntry{
+					CriterionID:   id,
+					CriterionHash: item.CriterionHash(text),
+					Verdict:       verdict,
+					ClaimClass:    class,
+					Reason:        reason,
+					Evidence:      []string{"cmd:git-log-upstream-check"},
+				})
+			}
+			return rows.Err()
+		})
+		st.Close()
+		if err != nil {
+			return run.Record{}, "", err
+		}
+		outcome := "pass"
+		if !s.judgePass {
+			outcome = "fail"
+		}
+		raw, err := json.Marshal(item.JudgeOutput{
+			EvaluatedHead: head,
+			EvaluatedTree: tree,
+			Outcome:       outcome,
+			Verdicts:      verdicts,
+		})
+		if err != nil {
+			return run.Record{}, "", err
+		}
+		outPath := filepath.Join(run.DurableDir(laneDir, req.RunID), "eval.output")
+		if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
+			return run.Record{}, "", err
+		}
+		if err := os.WriteFile(outPath, raw, 0o644); err != nil {
+			return run.Record{}, "", err
+		}
+		out = "RESULT: done\n"
+	} else {
+		s.workerRuns++
+		if s.cancelAfter > 0 && s.workerRuns > s.cancelAfter && s.cancel != nil {
+			s.cancel()
+			return run.Record{}, "", context.Canceled
+		}
+		rawBrief, err := os.ReadFile(filepath.Join(laneDir, BriefFile))
+		if err != nil {
+			return run.Record{}, "", err
+		}
+		s.workerBrief = string(rawBrief)
+		reportPath := filepath.Join(run.DurableDir(laneDir, req.RunID), "report.md")
+		writeForkFile(s.t, reportPath, s.report)
+		refs = append(refs, run.ArtifactRef{Kind: "report", Ref: reportPath})
+		out = s.report
+	}
+	rec := run.Record{
+		RunID: req.RunID, ItemID: req.ItemID, LaneID: req.LaneID, Backend: req.Backend,
+		State: run.StateExited, ExitCode: &code,
+		StartedAt: "2026-11-15T00:00:00Z", FinishedAt: "2026-11-15T00:00:00Z", ArtifactRefs: refs,
+	}
+	st, err := store.Open(context.Background(), s.storePath, true)
+	if err != nil {
+		return run.Record{}, "", err
+	}
+	defer st.Close()
+	if err := st.WriteTx(context.Background(), func(tx *store.Tx) error { return applyTerminal(tx, rec) }); err != nil {
+		return run.Record{}, "", err
+	}
+	return rec, out, nil
+}
+
+func TestForkSingleWorkerNoChangeClosesWithFindingAndRefusesNotDone(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		judgePass bool
+	}{
+		{name: "verified-nothing-to-change", judgePass: true},
+		{name: "work-still-owed-not-done", judgePass: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			runCtx, cancel := context.WithCancel(ctx)
+			defer cancel()
+
+			f := newRefusalLoopFixture(t, "item-a")
+			if err := os.MkdirAll(filepath.Join(f.root, "bin"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			writeForkFile(t, filepath.Join(f.root, "bin/pi-forks.list"), "upstream/pi patch/pi\n")
+			writeForkFile(t, filepath.Join(f.root, ".gitignore"), ".forks/\n")
+			runGit(t, f.root, "add", "bin/pi-forks.list", ".gitignore")
+			runGit(t, f.root, "commit", "-qm", "fork catalog")
+
+			forkDir := filepath.Join(f.root, ".forks/lanes/lane-1/pi")
+			if err := os.MkdirAll(forkDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			runGit(t, forkDir, "init", "-qb", "main")
+			writeForkFile(t, filepath.Join(forkDir, "fork.txt"), "base\n")
+			runGit(t, forkDir, "add", "fork.txt")
+			runGit(t, forkDir, "commit", "-qm", "fork base")
+			forkBase := runGit(t, forkDir, "rev-parse", "HEAD")
+			runGit(t, f.root, "fetch", "--no-tags", forkDir, "refs/heads/main:refs/heads/patch/pi")
+
+			fixtureWrite(t, f, func(tx *store.Tx) error {
+				if _, err := tx.Exec(`UPDATE items SET workflow='single-worker@v1', judge_mode='agent' WHERE item_id='item-a'`); err != nil {
+					return err
+				}
+				return recordFixtureFork(tx, "item-a")
+			})
+
+			steps := &forkNoChangeSteps{
+				t:           t,
+				storePath:   f.storePath,
+				laneRoot:    f.laneRoot,
+				forkDir:     forkDir,
+				report:      "CAUSE: upstream release does not cover any of the fork commits\nEVIDENCE: compared every fork commit against upstream tag v2.0\nWHY_NO_CHANGE: every fork commit is still required\nRESULT: no_change\n",
+				judgePass:   tc.judgePass,
+				cancelAfter: 1,
+				cancel:      cancel,
+			}
+			backends := filepath.Join("..", "..", "tillr-run", "backends")
+			stager := &LaneStager{Root: f.root, LaneRoot: f.laneRoot, Store: f.storePath, Template: filepath.Join(backends, "brief-template.md")}
+			l := f.loop(t, steps, stager)
+			l.cfg.Lanes = []string{"lane-1"}
+			if l.cfg.Policy.Seats == nil {
+				l.cfg.Policy.Seats = map[string]string{}
+			}
+			if l.cfg.Policy.Backends == nil {
+				l.cfg.Policy.Backends = map[string]Backend{}
+			}
+			l.cfg.Policy.Seats["review"] = "verify-backend"
+			l.cfg.Policy.Seats["verify"] = "verify-backend"
+			l.cfg.Policy.Backends["verify-backend"] = Backend{Adapter: "verify-backend", Model: "verify-model"}
+			var reportBuf strings.Builder
+			l.cfg.Report = &reportBuf
+
+			_, err := l.Run(runCtx)
+			if tc.judgePass && err != nil {
+				t.Fatalf("loop run: %v\nreport:\n%s", err, reportBuf.String())
+			}
+			if !strings.Contains(steps.workerBrief, noChangeMarkerLine) {
+				t.Fatalf("fork worker brief missing no_change marker:\n%s", steps.workerBrief)
+			}
+			if steps.judgeRuns != 1 {
+				t.Fatalf("judgeRuns = %d, want 1", steps.judgeRuns)
+			}
+			if !strings.Contains(steps.judgeBrief, "## No-change finding") || !strings.Contains(steps.judgeBrief, "every fork commit is still required") {
+				t.Fatalf("judge brief missing no_change finding:\n%s", steps.judgeBrief)
+			}
+			if tip := runGit(t, f.root, "rev-parse", "refs/heads/patch/pi"); tip != forkBase {
+				t.Fatalf("patch/pi moved from %s to %s", forkBase, tip)
+			}
+
+			var shown struct {
+				State       string        `json:"state"`
+				CloseReason string        `json:"close_reason"`
+				ClosedBy    string        `json:"closed_by"`
+				Finding     *item.Finding `json:"finding"`
+			}
+			var holds, notDoneRefusals int
+			var holdDetail string
+			fixtureRead(t, f, func(r *store.Reader) error {
+				env, err := item.Show(r, "item-a", f.root)
+				if err != nil {
+					return err
+				}
+				if err := json.Unmarshal(env.Payload, &shown); err != nil {
+					return err
+				}
+				_ = r.QueryRow(`SELECT COALESCE(json_extract(payload,'$.detail'), '') FROM events WHERE kind='drain.refusal' ORDER BY seq DESC LIMIT 1`).Scan(&holdDetail)
+				if err := r.QueryRow(`SELECT COUNT(*) FROM events WHERE kind=? AND object_id='item-a'`, obstacles.HeldKind).Scan(&holds); err != nil {
+					return err
+				}
+				return r.QueryRow(`SELECT COUNT(*) FROM events WHERE kind=? AND json_extract(payload,'$.step') IN (?, ?)`, RefusalKind, RefusalVerifyNotDone, ReasonEvalFailed).Scan(&notDoneRefusals)
+			})
+			if tc.judgePass {
+				if shown.State != "closed" || shown.CloseReason != "no_change: every fork commit is still required" || shown.ClosedBy == "" || shown.ClosedBy == "operator" {
+					t.Fatalf("unexpected closed fork item: %+v (holdDetail=%q)\nreport:\n%s", shown, holdDetail, reportBuf.String())
+				}
+				if shown.Finding == nil || shown.Finding.Cause != "upstream release does not cover any of the fork commits" ||
+					shown.Finding.Evidence != "compared every fork commit against upstream tag v2.0" ||
+					shown.Finding.WhyNoChange != "every fork commit is still required" ||
+					shown.Finding.EvaluatedHead != forkBase || shown.Finding.WorkerRun == "" || shown.Finding.JudgeRun == "" {
+					t.Fatalf("unexpected finding: %+v", shown.Finding)
+				}
+				if holds != 0 {
+					t.Fatalf("obstacle holds = %d, want 0", holds)
+				}
+			} else {
+				if shown.State != "in-queue" {
+					t.Fatalf("state = %q, want in-queue when verify returned not-done", shown.State)
+				}
+				if shown.Finding != nil {
+					t.Fatalf("finding = %+v, want nil when verify returned not-done", shown.Finding)
+				}
+				if notDoneRefusals == 0 {
+					t.Fatalf("verify-not-done refusals = %d, want >0", notDoneRefusals)
+				}
+			}
+		})
 	}
 }

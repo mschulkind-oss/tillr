@@ -207,6 +207,10 @@ by hand produces the same row as an unattended one.
   callers that omit the observation do not claim to detect a loop's lost history.
 - **A verdict that does not bind the head's tree and the base sha** — there is no judgment
   about this change to act on.
+- **A candidate whose tree equals its base's tree** — refused as `unchanged-tree` (rather than
+  `verdict-mismatch` when a fork gate skipped its build, or `already-on-trunk` on a trunk
+  squash). A non-fast-forward same-tree linear fork rewrite is still allowed through the
+  [fork delivery](#fork-delivery) rewrite path.
 - **A head that does not squash onto the trunk** — the row records `squash-conflict` and the
   paths git reported; the head is pinned and the verdict stands.
 - **A squash whose tree does not build** — when the squash differs from the tree the gate judged

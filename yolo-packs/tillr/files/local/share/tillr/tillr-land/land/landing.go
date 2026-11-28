@@ -64,6 +64,11 @@ const (
 	// A retry of this run's own unrecorded landing is not this refusal: that is recorded as
 	// the landing it was.
 	ReasonAlreadyOnTrunk = "already-on-trunk"
+	// ReasonUnchangedTree is a candidate whose tree equals its base's tree (for example an
+	// empty commit on top of base), not a same-tree linear fork rewrite. Naming it keeps
+	// the refusal about the candidate rather than reporting verdict-mismatch when a fork
+	// gate skipped its build or already-on-trunk when a trunk squash would be empty.
+	ReasonUnchangedTree = "unchanged-tree"
 )
 
 // Reasons answers every refusal reason this utility can emit.
@@ -78,6 +83,7 @@ func Reasons() []string {
 		ReasonItemNotLandable,
 		ReasonTrunkRewritten,
 		ReasonAlreadyOnTrunk,
+		ReasonUnchangedTree,
 	}
 }
 
@@ -280,6 +286,10 @@ func Land(ctx context.Context, s *store.Store, t *Trunk, req LandingRequest) (an
 	if err != nil {
 		return Landing{}, err
 	}
+	baseTree, err := t.TreeOf(req.BaseSHA)
+	if err != nil {
+		return Landing{}, err
+	}
 
 	baseRef := req.BaseRef
 	if ref := PatchRef(baseRef); ref != "" {
@@ -294,7 +304,13 @@ func Land(ctx context.Context, s *store.Store, t *Trunk, req LandingRequest) (an
 		HeadSHA:   req.HeadSHA,
 		GatedTree: tree,
 	}
-	landing.Result, landing.Reason = decide(req, tree)
+	unchangedTree := tree == baseTree && (PatchRef(req.BaseRef) == "" || t.IsAncestor(req.BaseSHA, req.HeadSHA))
+	if unchangedTree && req.Verdict.TreeSHA == tree && req.Verdict.BaseSHA == req.BaseSHA &&
+		(req.Verdict.Result == VerdictPass || req.Verdict.Result == VerdictPassInherited) {
+		landing.Result, landing.Reason = ResultRefused, ReasonUnchangedTree
+	} else {
+		landing.Result, landing.Reason = decide(req, tree)
+	}
 	// A fork publishes the exact gated head. Resolve a possible release rebase
 	// without the lock; this read can never authorize a move over a changed tip.
 	var rebase forkRebase

@@ -40,7 +40,8 @@ failure.
 *Enforced by:* [`tools/tillr-land`](../../tools/tillr-land/). No refusal reason means "unverified":
 `Reasons()` in [`landing.go`](../../tools/tillr-land/land/landing.go) is a closed set
 (`verdict-mismatch`, `verdict-failed`, `verdict-error`, `trunk-worktree-uncommitted`,
-`patch-rewind`, `patch-at-head`, `item-not-landable`, `trunk-rewritten`, `already-on-trunk`),
+`patch-rewind`, `patch-at-head`, `item-not-landable`, `trunk-rewritten`, `already-on-trunk`,
+`unchanged-tree`),
 pinned by `TestTheRefusalReasonsAreTheRegisteredSet` in
 [`conformance_test.go`](../../tools/tillr-land/land/conformance_test.go). `squash-conflict`
 (`ResultSquashConflict`) is its own outcome, not a refusal. Refusals that are not about the

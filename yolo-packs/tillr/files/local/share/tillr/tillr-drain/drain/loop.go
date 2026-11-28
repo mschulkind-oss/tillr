@@ -3586,7 +3586,7 @@ func (l *Loop) settleSingleWorkerNoChange(ctx context.Context, decision Decision
 	}
 	candidate := Candidate{
 		ItemID: request.ItemID, LaneID: lane, RunID: request.RunID, TickID: tick,
-		Worktree: target, BaseSHA: baseSHA, HeadSHA: baseSHA,
+		Worktree: target, BaseSHA: baseSHA, HeadSHA: baseSHA, BaseRef: l.lanePatchRef(lane),
 		Request: &request, Seat: decision.Seat, Workflow: decision.workflowRef(),
 		NoChange: &nc,
 	}

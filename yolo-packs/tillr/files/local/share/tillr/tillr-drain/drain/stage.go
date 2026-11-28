@@ -226,7 +226,7 @@ type StageSpec struct {
 }
 
 func allowsSingleWorkerNoChange(w *Workflow, stage *WorkflowStage, selected, itemID string, isFork bool, blockConflict *item.Conflict, conflict *ConflictBrief, deskDocument string) bool {
-	if isFork || blockConflict != nil || conflict != nil || deskDocument != "" || item.IsCommentItem(itemID) || IsGeneratedRepair(itemID) || isForkRebaseItem(itemID) {
+	if blockConflict != nil || conflict != nil || deskDocument != "" || item.IsCommentItem(itemID) || IsGeneratedRepair(itemID) || isForkRebaseItem(itemID) {
 		return false
 	}
 	if w == nil {
@@ -239,7 +239,7 @@ func allowsSingleWorkerNoChange(w *Workflow, stage *WorkflowStage, selected, ite
 }
 
 func allowsPlanNoChange(w *Workflow, stage *WorkflowStage, itemID string, isFork bool, blockConflict *item.Conflict, conflict *ConflictBrief, deskDocument string) bool {
-	if isFork || blockConflict != nil || conflict != nil || deskDocument != "" || item.IsCommentItem(itemID) || IsGeneratedRepair(itemID) || isForkRebaseItem(itemID) {
+	if blockConflict != nil || conflict != nil || deskDocument != "" || item.IsCommentItem(itemID) || IsGeneratedRepair(itemID) || isForkRebaseItem(itemID) {
 		return false
 	}
 	if w == nil || w.Name != "planned-build" || w.Version != 1 || w.Revision != 0 || stage == nil {

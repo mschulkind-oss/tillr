@@ -21,6 +21,44 @@ func TestForkDeliveryRequiresABuildCheckInTheVerdict(t *testing.T) {
 	}
 }
 
+func TestForkDeliveryRefusesUnchangedTreeWithoutBuildCheck(t *testing.T) {
+	f := newFixture(t)
+	git(t, f.dir, "checkout", "-q", "-B", "candidate", f.baseSHA)
+	git(t, f.dir, "commit", "-q", "--allow-empty", "-m", "audit: all commits still needed")
+	f.headSHA = git(t, f.dir, "rev-parse", "HEAD")
+	f.treeSHA = git(t, f.dir, "rev-parse", "HEAD^{tree}")
+	git(t, f.dir, "checkout", "-q", f.ref)
+	git(t, f.dir, "branch", "patch/pi", f.baseSHA)
+
+	verdict := f.verdict("pass")
+	verdict["checks"] = []map[string]any{}
+	path := input(t, envelope(t, "gate.verdict", "verdict_001", verdict))
+	_, code, out := f.land(t, "run-unchanged-fork", "pass", "--base-ref", "patch/pi", "--verdict", path)
+	if code != 1 || decodeLanding(t, out).Payload.Reason != "unchanged-tree" {
+		t.Fatalf("unchanged fork candidate exited %d: %s", code, out)
+	}
+	if tip := git(t, f.dir, "rev-parse", "patch/pi"); tip != f.baseSHA {
+		t.Fatalf("unchanged fork candidate moved branch to %s", tip)
+	}
+}
+
+func TestTrunkLandingRefusesUnchangedTreeCandidate(t *testing.T) {
+	f := newFixture(t)
+	git(t, f.dir, "checkout", "-q", "-B", "candidate", f.baseSHA)
+	git(t, f.dir, "commit", "-q", "--allow-empty", "-m", "audit: nothing to change")
+	f.headSHA = git(t, f.dir, "rev-parse", "HEAD")
+	f.treeSHA = git(t, f.dir, "rev-parse", "HEAD^{tree}")
+	git(t, f.dir, "checkout", "-q", f.ref)
+
+	_, code, out := f.land(t, "run-unchanged-trunk", "pass")
+	if code != 1 || decodeLanding(t, out).Payload.Reason != "unchanged-tree" {
+		t.Fatalf("unchanged trunk candidate exited %d: %s", code, out)
+	}
+	if tip := f.trunk(t); tip != f.baseSHA {
+		t.Fatalf("unchanged trunk candidate moved trunk to %s", tip)
+	}
+}
+
 func TestForkDeliveryNeverOverwritesDirtyCacheWork(t *testing.T) {
 	f := newFixture(t)
 	git(t, f.dir, "branch", "patch/pi", f.baseSHA)
