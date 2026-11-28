@@ -2,6 +2,7 @@ package drain
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -211,7 +212,6 @@ func (l *Loop) beginHeavyProof(ctx context.Context) bool {
 func (l *Loop) reportHeavyRun(ctx context.Context, run HeavyRun) {
 	l.reportf("loop: heavy run %s at %s; green base %s\n", run.Result, shortSHA(run.TipSHA), shortSHA(run.BaseSHA))
 	if run.Result == "green" {
-		l.clearUnrecordedTrunkCommit(ctx)
 		l.offerGreenAdvance(ctx, run.TipSHA)
 	}
 	if len(run.ReusedChecks) > 0 {
@@ -413,19 +413,22 @@ func (l *Loop) recordUnrecordedTrunkCommit(ctx context.Context, commit string) {
 	}
 	s, err := store.Open(ctx, l.cfg.Store, false)
 	if err != nil {
-		l.reportf("loop: could not record unrecorded-trunk-commit alarm for %s: %v\n", shortSHA(commit), err)
+		l.reportf("loop: could not record unrecorded trunk commit %s: %v\n", shortSHA(commit), err)
 		return
 	}
 	defer s.Close()
+	recorded := false
 	if err := s.WriteTx(ctx, func(tx *store.Tx) error {
-		var activeCommit string
-		err := tx.Reader().QueryRow(`SELECT coalesce(json_extract(payload,'$.commit'), '')
-FROM events
+		var seen int
+		err := tx.Reader().QueryRow(`SELECT 1 FROM events
 WHERE kind = ?
- AND seq > COALESCE((SELECT seq FROM events WHERE kind = ? ORDER BY seq DESC LIMIT 1), 0)
-ORDER BY seq DESC LIMIT 1`, alarms.UnrecordedTrunkCommitKind, alarms.UnrecordedTrunkClearedKind).Scan(&activeCommit)
-		if err == nil && activeCommit == commit {
+ AND json_extract(payload, '$.commit') = ?
+LIMIT 1`, alarms.UnrecordedTrunkCommitKind, commit).Scan(&seen)
+		if err == nil {
 			return nil
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return err
 		}
 		payload, err := json.Marshal(map[string]any{"commit": commit})
 		if err != nil {
@@ -439,64 +442,39 @@ ORDER BY seq DESC LIMIT 1`, alarms.UnrecordedTrunkCommitKind, alarms.UnrecordedT
 			At:         l.nowTimeUTC(),
 			Payload:    payload,
 		})
+		if err == nil {
+			recorded = true
+		}
 		return err
 	}); err != nil {
-		l.reportf("loop: could not record unrecorded-trunk-commit alarm for %s: %v\n", shortSHA(commit), err)
+		l.reportf("loop: could not record unrecorded trunk commit %s: %v\n", shortSHA(commit), err)
 		return
 	}
-	l.reportf("loop: ALARM %s: trunk commit %s was not made by a landing\n", alarms.UnrecordedTrunkCommit, commit)
+	if recorded {
+		l.reportf("loop: recorded hand-made trunk commit %s (no landing record)\n", commit)
+	}
 }
 
-func (l *Loop) clearUnrecordedTrunkCommit(ctx context.Context) {
-	if l.cfg.Store == "" {
-		return
-	}
-	s, err := store.Open(ctx, l.cfg.Store, false)
-	if err != nil {
-		return
-	}
-	defer s.Close()
-	_ = s.WriteTx(ctx, func(tx *store.Tx) error {
-		var active int
-		err := tx.Reader().QueryRow(`SELECT COUNT(*)
-FROM events
-WHERE kind = ?
- AND seq > COALESCE((SELECT seq FROM events WHERE kind = ? ORDER BY seq DESC LIMIT 1), 0)`,
-			alarms.UnrecordedTrunkCommitKind, alarms.UnrecordedTrunkClearedKind).Scan(&active)
-		if err != nil || active == 0 {
-			return err
-		}
-		id := "trunk"
-		_, err = tx.Append(event.Event{
-			Kind:       alarms.UnrecordedTrunkClearedKind,
-			ObjectType: "trunk",
-			ObjectID:   &id,
-			At:         l.nowTimeUTC(),
-			Payload:    []byte("{}"),
-		})
-		return err
-	})
-}
-
-func (l *Loop) firstUnrecordedTrunkCommit(ctx context.Context, base, tip string) (string, error) {
+func (l *Loop) unrecordedTrunkCommits(ctx context.Context, base, tip string) ([]string, error) {
 	if l.cfg.Store == "" || base == "" || tip == "" || base == tip {
-		return "", nil
+		return nil, nil
 	}
 	raw, err := rawGit(ctx, l.cfg.Root, nil, "rev-list", "--first-parent", "--reverse", base+".."+tip)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	runner := HeavyRunner{Root: l.cfg.Root, Store: l.cfg.Store}
+	var unrecorded []string
 	for _, sha := range strings.Fields(raw) {
 		has, err := runner.HasLandingRecord(ctx, sha)
 		if err != nil {
-			return "", err
+			return nil, err
 		}
 		if !has {
-			return sha, nil
+			unrecorded = append(unrecorded, sha)
 		}
 	}
-	return "", nil
+	return unrecorded, nil
 }
 
 type detachedHeavyHandle struct {
@@ -797,8 +775,8 @@ func (l *Loop) settleDetachedHeavyProof(ctx context.Context, dir string, done he
 	for i := range done.Attempt.Runs {
 		run := done.Attempt.Runs[i]
 		fp := fixByTip[run.TipSHA]
-		if fp.UnrecordedCommit != "" {
-			l.recordUnrecordedTrunkCommit(sctx, fp.UnrecordedCommit)
+		for _, sha := range fp.UnrecordedCommits {
+			l.recordUnrecordedTrunkCommit(sctx, sha)
 		}
 		if run.Result == "green" && done.Error == "" {
 			base, err := heavy.Green(sctx, l.cfg.Root)

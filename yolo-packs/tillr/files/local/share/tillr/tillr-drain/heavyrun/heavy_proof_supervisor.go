@@ -66,10 +66,10 @@ type HeavyProofFace struct {
 
 // HeavyFixPlan records the post-run fixer inputs deferred from --tillr-heavy-proof to Loop.
 type HeavyFixPlan struct {
-	TipSHA           string                  `json:"tip_sha"`
-	Order            []string                `json:"order,omitempty"`
-	ByLanding        map[string][]HeavyCheck `json:"by_landing,omitempty"`
-	UnrecordedCommit string                  `json:"unrecorded_commit,omitempty"`
+	TipSHA            string                  `json:"tip_sha"`
+	Order             []string                `json:"order,omitempty"`
+	ByLanding         map[string][]HeavyCheck `json:"by_landing,omitempty"`
+	UnrecordedCommits []string                `json:"unrecorded_commits,omitempty"`
 }
 
 // HeavyProofDone is published atomically by --tillr-heavy-proof when the attempt ends.
@@ -335,7 +335,7 @@ func SuperviseHeavyProof(args []string, cb HeavyProofCallbacks) int {
 		UnlockRegisteredWorktree: cb.UnlockRegisteredWorktree,
 		OnUnrecorded: func(_ context.Context, sha string) {
 			fixMu.Lock()
-			fixPlan.UnrecordedCommit = sha
+			fixPlan.UnrecordedCommits = append(fixPlan.UnrecordedCommits, sha)
 			fixMu.Unlock()
 		},
 		Fix: func(_ context.Context, sha string, checks []HeavyCheck) error {
@@ -398,7 +398,7 @@ func SuperviseHeavyProof(args []string, cb HeavyProofCallbacks) int {
 	if len(attempt.Runs) > 0 {
 		fixPlan.TipSHA = attempt.Runs[len(attempt.Runs)-1].TipSHA
 	}
-	if len(fixPlan.Order) > 0 || fixPlan.UnrecordedCommit != "" {
+	if len(fixPlan.Order) > 0 || len(fixPlan.UnrecordedCommits) > 0 {
 		done.FixPlans = []HeavyFixPlan{fixPlan}
 	}
 	fixMu.Unlock()

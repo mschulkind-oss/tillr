@@ -351,23 +351,18 @@ inside tillr's namespaces, any other worktree's registration, and a main-checkou
 observations go on the run's `boundary.check` event and the check stays clean. The
 [common deny-list](./tillr-vocabulary.md#51-the-work-and-its-statement) refuses a candidate whose
 committed change touches protected paths or item declarations. Pinned by
-`TestOrdinaryGitUseDuringARunNeverConvictsIt`.
+`TestOrdinaryGitUseDuringARunNeverConvictsIt`. For a hand-made commit on the trunk
+([`D-VO21`](./tillr-vocabulary.md#D-VO21)), `HeavyRunner.RunAttempt` in
+[`heavy.go`](../../tools/tillr-drain/heavyrun/heavy.go) judges the tree at the tip and advances
+`refs/tillr/green` when checks pass, `Loop.pushTipOnce` in
+[`remote_sync.go`](../../tools/tillr-drain/drain/remote_sync.go) pushes without withholding, and
+each commit with no `landings` record is recorded once as a `drain.unrecorded-trunk-commit` event
+that holds no item, stops no proof, and raises no alarm. Pinned by
+`TestHandMadeTrunkCommitStillProvesGreen` in
+[`heavy_loop_test.go`](../../tools/tillr-drain/drain/heavy_loop_test.go).
 
 *Not enforced:* a worker whose only escape lies outside the lanes is not stopped. A rogue ref or a
-stray worktree is named for an operator, and nothing acts on it. In addition, since 2026-11-25 a
-commit the owner makes by hand on the trunk breaks the 2026-11-17 ruling above:
-`firstUnrecordedCommit` in [`heavy.go`](../../tools/tillr-drain/heavyrun/heavy.go) turns a passing
-trunk proof into `"unknown"` for any first-parent commit with no `landings` record, `Loop.pushTipOnce`
-in [`remote_sync.go`](../../tools/tillr-drain/drain/remote_sync.go) refuses `tip` pushes on the same
-check, and the `unrecorded-trunk-commit` alarm tells the operator to reset the trunk.
-[`D-VO21`](./tillr-vocabulary.md#D-VO21) (the designer's decision of 2026-11-28 from a request filed
-on 2026-11-27, which is not an owner ruling and which the owner may overturn) settles the repair: the
-proof judges the tree at the tip, the push is not withheld, the alarm is removed, and each commit with
-no `landings` record is recorded once as a `drain.unrecorded-trunk-commit` event that holds no item
-and stops nothing. The test that will hold a hand-made trunk commit to "the proof still goes green" is
-`TestHandMadeTrunkCommitStillProvesGreen` in
-[`heavy_loop_test.go`](../../tools/tillr-drain/drain/heavy_loop_test.go); it is not written yet, and
-moves to *Enforced by* when the build lands.
+stray worktree is named for an operator, and nothing acts on it.
 
 *Scope:* **not lander-scoped.** The lander never convicts a run; the trunk proof and the push are
 the loop's.

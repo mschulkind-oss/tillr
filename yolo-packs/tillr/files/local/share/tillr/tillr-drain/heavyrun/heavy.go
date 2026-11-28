@@ -325,15 +325,12 @@ func (r HeavyRunner) RunAttempt(ctx context.Context, requested string) (out Heav
 			return out, ctx.Err()
 		}
 		if e == nil && run.Result == "green" {
-			unrecorded, unrecErr := r.firstUnrecordedCommit(ctx, base, tip)
+			unrecorded, unrecErr := r.unrecordedCommits(ctx, base, tip)
 			if unrecErr != nil {
-				e = Externalf("checking landing records for %s..%s: %v", ShortSHA(base), ShortSHA(tip), unrecErr)
-				run.Result = "unknown"
-			} else if unrecorded != "" {
-				e = Externalf("trunk commit %s was not made by a landing; %s stays", unrecorded, GreenRef)
-				run.Result = "unknown"
-				if r.OnUnrecorded != nil {
-					r.OnUnrecorded(ctx, unrecorded)
+				r.progressf("loop: could not check landing records for %s..%s: %v\n", ShortSHA(base), ShortSHA(tip), unrecErr)
+			} else if r.OnUnrecorded != nil {
+				for _, sha := range unrecorded {
+					r.OnUnrecorded(ctx, sha)
 				}
 			}
 		}
@@ -1217,24 +1214,25 @@ func commitTouchesReads(ctx context.Context, root, sha string, reads []string) (
 	}
 	return false, nil
 }
-func (r HeavyRunner) firstUnrecordedCommit(ctx context.Context, base, tip string) (string, error) {
+func (r HeavyRunner) unrecordedCommits(ctx context.Context, base, tip string) ([]string, error) {
 	if r.Store == "" || base == "" || tip == "" || base == tip {
-		return "", nil
+		return nil, nil
 	}
 	raw, err := heavy.GitOutput(ctx, r.Root, "rev-list", "--first-parent", "--reverse", base+".."+tip)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
+	var unrecorded []string
 	for _, sha := range strings.Fields(raw) {
 		has, err := r.HasLandingRecord(ctx, sha)
 		if err != nil {
-			return "", err
+			return nil, err
 		}
 		if !has {
-			return sha, nil
+			unrecorded = append(unrecorded, sha)
 		}
 	}
-	return "", nil
+	return unrecorded, nil
 }
 
 func (r HeavyRunner) HasLandingRecord(ctx context.Context, sha string) (bool, error) {

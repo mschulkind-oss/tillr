@@ -195,7 +195,7 @@ func TestHeavyGreenAdvancePushesTheProvedCommitOnly(t *testing.T) {
 	}
 }
 
-func TestLoopRefusesUnrecordedTrunkCommitAndRaisesAlarm(t *testing.T) {
+func TestHandMadeTrunkCommitStillProvesGreen(t *testing.T) {
 	ctx := context.Background()
 	root, base := heavyRepo(t)
 	heavyGit(t, root, "update-ref", GreenRef, base)
@@ -219,59 +219,117 @@ func TestLoopRefusesUnrecordedTrunkCommitAndRaisesAlarm(t *testing.T) {
 	}
 	l.cfg.PostLanding.Push.What = "green"
 	remoteTip := func() string { return heavyGit(t, root, "--git-dir="+remote, "rev-parse", "refs/heads/"+TrunkRef) }
+	unrecordedEvents := func() []string {
+		t.Helper()
+		var commits []string
+		if err := s.ReadTx(ctx, func(r *store.Reader) error {
+			rows, err := r.Query(`SELECT object_type, coalesce(object_id, ''), coalesce(json_extract(payload, '$.commit'), '')
+FROM events WHERE kind = ? ORDER BY seq ASC`, alarms.UnrecordedTrunkCommitKind)
+			if err != nil {
+				return err
+			}
+			defer rows.Close()
+			for rows.Next() {
+				var objType, objID, commit string
+				if err := rows.Scan(&objType, &objID, &commit); err != nil {
+					return err
+				}
+				if objType != "trunk" || objID != "trunk" {
+					t.Fatalf("event object = (%q, %q), want (trunk, trunk)", objType, objID)
+				}
+				commits = append(commits, commit)
+			}
+			return rows.Err()
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return commits
+	}
+	assertNoAlarms := func() {
+		t.Helper()
+		var active []alarms.Alarm
+		if err := s.ReadTx(ctx, func(r *store.Reader) error {
+			var err error
+			active, err = alarms.Read(r, time.Now(), nil)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if len(active) != 0 {
+			t.Fatalf("active alarms = %+v, want none", active)
+		}
+	}
 
-	// A commit appears on trunk with no landing record in the store.
-	unrecorded := heavyCommit(t, root, "unrecorded")
-	if err := l.startHeavy(ctx, unrecorded); err != nil {
+	// Owner commits one file on trunk by hand, then an item lands on top.
+	hand := heavyCommit(t, root, "hand-made")
+	landed := heavyCommit(t, root, "landed-on-top")
+	if err := s.WriteTx(ctx, func(tx *store.Tx) error {
+		return recordFixtureLanding(tx, "item-landed", "run-landed", landed, 0)
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := l.startHeavy(ctx, landed); err != nil {
 		t.Fatal(err)
 	}
 	l.heavyWG.Wait()
 	waitAction(t, &l.pushAction)
 
-	if got := heavyGit(t, root, "rev-parse", GreenRef); got != base {
-		t.Fatalf("green ref moved to %s, want %s (unchanged)", got, base)
+	if got := heavyGit(t, root, "rev-parse", GreenRef); got != landed {
+		t.Fatalf("green ref = %s, want %s", got, landed)
 	}
-	if got := remoteTip(); got != base {
-		t.Fatalf("remote pushed unrecorded commit %s, want %s", got, base)
+	if got := remoteTip(); got != landed {
+		t.Fatalf("remote tip = %s, want %s", got, landed)
 	}
-	var active []alarms.Alarm
-	if err := s.ReadTx(ctx, func(r *store.Reader) error {
-		var err error
-		active, err = alarms.Read(r, time.Now(), nil)
-		return err
-	}); err != nil {
-		t.Fatal(err)
+	if got := unrecordedEvents(); len(got) != 1 || got[0] != hand {
+		t.Fatalf("unrecorded-trunk-commit events = %v, want [%s]", got, hand)
 	}
-	if len(active) != 1 || active[0].Kind != alarms.UnrecordedTrunkCommit || !strings.Contains(active[0].Cause, unrecorded) {
-		t.Fatalf("alarms = %+v, want one %s naming %s", active, alarms.UnrecordedTrunkCommit, unrecorded)
-	}
-	if !strings.Contains(log.String(), unrecorded) {
-		t.Fatalf("loop log does not name unrecorded commit %s:\n%s", unrecorded, log.String())
+	assertNoAlarms()
+	for _, forbidden := range []string{"reset", "accept-rewrite", "ALARM"} {
+		if strings.Contains(log.String(), forbidden) {
+			t.Fatalf("loop log must not contain %q:\n%s", forbidden, log.String())
+		}
 	}
 
-	// Recording the landing and re-running clears the alarm and allows green to advance and push.
-	if err := s.WriteTx(ctx, func(tx *store.Tx) error {
-		return recordFixtureLanding(tx, "item-recorded", "run-recorded", unrecorded, 0)
-	}); err != nil {
+	// A second proof seeing the same hand-made commit writes no second event.
+	heavyGit(t, root, "update-ref", GreenRef, base)
+	l.heavyAttempted = ""
+	if err := l.startHeavy(ctx, landed); err != nil {
 		t.Fatal(err)
+	}
+	l.heavyWG.Wait()
+	waitAction(t, &l.pushAction)
+	if got := heavyGit(t, root, "rev-parse", GreenRef); got != landed {
+		t.Fatalf("green ref on second proof = %s, want %s", got, landed)
+	}
+	if got := unrecordedEvents(); len(got) != 1 || got[0] != hand {
+		t.Fatalf("unrecorded-trunk-commit events after second proof = %v, want [%s]", got, hand)
+	}
+	assertNoAlarms()
+
+	// Tip publication also pushes without withholding a hand-made commit and records it once.
+	hand2 := heavyCommit(t, root, "hand-made-tip")
+	l.cfg.PostLanding.Push.What = "tip"
+	if _, err := l.pushTipOnce(ctx, l.cfg.PostLanding.Push); err != nil {
+		t.Fatalf("pushTipOnce with hand-made commit failed: %v", err)
+	}
+	if got := remoteTip(); got != hand2 {
+		t.Fatalf("remote tip after pushTipOnce = %s, want %s", got, hand2)
+	}
+	if got := unrecordedEvents(); len(got) != 2 || got[0] != hand || got[1] != hand2 {
+		t.Fatalf("unrecorded-trunk-commit events after pushTipOnce = %v, want [%s %s]", got, hand, hand2)
 	}
 	l.heavyAttempted = ""
-	if err := l.startHeavy(ctx, unrecorded); err != nil {
+	if err := l.startHeavy(ctx, hand2); err != nil {
 		t.Fatal(err)
 	}
 	l.heavyWG.Wait()
 	waitAction(t, &l.pushAction)
-	if got := remoteTip(); got != unrecorded {
-		t.Fatalf("remote = %s, want %s after landing recorded", got, unrecorded)
+	if got := heavyGit(t, root, "rev-parse", GreenRef); got != hand2 {
+		t.Fatalf("green ref after hand2 proof = %s, want %s", got, hand2)
 	}
-	if err := s.ReadTx(ctx, func(r *store.Reader) error {
-		var err error
-		active, err = alarms.Read(r, time.Now(), nil)
-		return err
-	}); err != nil {
-		t.Fatal(err)
+	if got := unrecordedEvents(); len(got) != 2 || got[0] != hand || got[1] != hand2 {
+		t.Fatalf("unrecorded-trunk-commit events after hand2 proof = %v, want [%s %s]", got, hand, hand2)
 	}
-	if len(active) != 0 {
-		t.Fatalf("expected alarms to clear after landing recorded, got %+v", active)
-	}
+	assertNoAlarms()
 }

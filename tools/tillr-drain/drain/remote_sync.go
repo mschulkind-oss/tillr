@@ -84,13 +84,13 @@ func (l *Loop) pushTipOnce(ctx context.Context, p settings.Push) (string, error)
 		tip := optionalCommit(ctx, l.cfg.Root, "refs/heads/"+trunkBranchFor(l.cfg.Root))
 		green, _ := heavyGreen(ctx, l.cfg.Root)
 		if tip != "" && green != "" && tip != green {
-			unrecorded, err := l.firstUnrecordedTrunkCommit(ctx, green, tip)
+			unrecorded, err := l.unrecordedTrunkCommits(ctx, green, tip)
 			if err != nil {
-				return tip, err
-			}
-			if unrecorded != "" {
-				l.recordUnrecordedTrunkCommit(ctx, unrecorded)
-				return tip, fmt.Errorf("trunk commit %s was not made by a landing; refusing to push", unrecorded)
+				l.reportf("loop: could not check landing records for %s..%s: %v\n", shortSHA(green), shortSHA(tip), err)
+			} else {
+				for _, sha := range unrecorded {
+					l.recordUnrecordedTrunkCommit(ctx, sha)
+				}
 			}
 		}
 	}
