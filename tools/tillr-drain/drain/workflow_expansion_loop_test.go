@@ -1,6 +1,7 @@
 package drain
 
 import (
+	"context"
 	"crypto/sha256"
 	"fmt"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -97,8 +99,29 @@ func TestWorkflowExpansionNarrowFinalScopeDoesNotConvictEarlierNodes(t *testing.
 	}
 }
 
+// briefRecordingSteps keeps each run's brief, read as the run starts.
+type briefRecordingSteps struct {
+	*restartWorkflowSteps
+	briefs []string
+}
+
+func (s *briefRecordingSteps) Run(ctx context.Context, req run.Request) (run.Record, string, error) {
+	brief, err := os.ReadFile(filepath.Join(s.f.laneRoot, req.LaneID, BriefFile))
+	if err != nil {
+		return run.Record{}, "", err
+	}
+	s.briefs = append(s.briefs, string(brief))
+	return s.restartWorkflowSteps.Run(ctx, req)
+}
+
+// Each node's diff is checked against its own write_scope: node one (unscoped) passes, and
+// node two, scoped to tools/item-a/other/, escapes on every run. Its first escape goes back
+// to the builder, with the escaped path named; the returned run escapes again and, with no
+// plan stage to return to, the item is held. Nothing is gated or landed.
 func TestWorkflowExpansionScopeChecksEachNodeDiff(t *testing.T) {
-	f, l, steps := restartGraphFixture(t)
+	f, l, inner := restartGraphFixture(t)
+	steps := &briefRecordingSteps{restartWorkflowSteps: inner}
+	l.cfg.Steps = steps
 	// The final worker's inline refusal frees the lane for other queued items.
 	fixtureWrite(t, f, func(tx *store.Tx) error {
 		_, err := tx.Exec(`UPDATE items SET state='closed' WHERE item_id='item-b'`)
@@ -106,21 +129,44 @@ func TestWorkflowExpansionScopeChecksEachNodeDiff(t *testing.T) {
 	})
 	expansionFile(t, f.root, "scout-then-build", `"stages":[{"id":"one","kind":"agent","seat":"build","access":"write"},{"id":"two","kind":"agent","seat":"build","access":"write","write_scope":["tools/item-a/other/"]}],"edges":[{"from_node":"one","to_node":"two"}]`)
 	runGit(t, f.root, "commit", "-qm", "scope graph")
-	result := &LoopResult{}
-	for i := 0; i < 4; i++ {
-		graphPass(t, l, result)
+	result, held := drivePieceScope(t, l)
+	if held.Reason != ReasonBoundaryScopeEscape || steps.gates != 0 || result.Landed != 0 {
+		t.Fatalf("held %+v gates %d landed %d", held, steps.gates, result.Landed)
 	}
-	if len(steps.runs) != 2 || steps.gates != 0 || result.Landed != 0 {
-		t.Fatalf("runs %d gates %d landed %d", len(steps.runs), steps.gates, result.Landed)
+	var nodes []string
+	for _, req := range steps.runs {
+		nodes = append(nodes, req.NodeID)
 	}
+	if got := strings.Join(nodes, ","); got != "one,two,two" {
+		t.Fatalf("nodes ran %s, want one,two,two", got)
+	}
+	// The first escape is a fence refusal naming the path node two wrote outside its scope.
+	escaped := "tools/item-a/" + steps.runs[1].RunID + ".txt"
+	refusals := pieceScopeRefusals(t, f)
+	if len(refusals) == 0 || refusals[0].Step != RefusalFence || strings.Join(refusals[0].ScopeEscapes, ",") != escaped {
+		t.Fatalf("refusals = %+v", refusals)
+	}
+	if returned := steps.briefs[2]; !strings.Contains(returned, escaped) || !strings.Contains(returned, "inside its write_scope") {
+		t.Fatalf("returned brief does not name the escaped path %s:\n%s", escaped, returned)
+	}
+	// Both runs of node two were refused, and node one's run passed.
 	fixtureWrite(t, f, func(tx *store.Tx) error {
-		var outcome string
-		if err := tx.QueryRow(`SELECT outcome FROM node_runs WHERE node_id='two'`).Scan(&outcome); err != nil {
+		rows, err := tx.Query(`SELECT node_id,outcome FROM node_runs WHERE item_id='item-a' ORDER BY run_id`)
+		if err != nil {
 			return err
 		}
-		if outcome != "refused" {
-			t.Fatalf("scope outcome %s", outcome)
+		defer rows.Close()
+		var got []string
+		for rows.Next() {
+			var node, outcome string
+			if err := rows.Scan(&node, &outcome); err != nil {
+				return err
+			}
+			got = append(got, node+"="+outcome)
 		}
-		return nil
+		if strings.Join(got, ",") != "one=passed,two=refused,two=refused" {
+			t.Fatalf("node runs %v", got)
+		}
+		return rows.Err()
 	})
 }
