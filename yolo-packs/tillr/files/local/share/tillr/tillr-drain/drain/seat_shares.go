@@ -62,6 +62,24 @@ func selectSeatDispatch(tx *store.Tx, d *Decision, p *Policy, shut map[string]bo
 	if _, err := tx.Exec(`DELETE FROM seat_waiting_choices WHERE run_id=?`, old.RunID); err != nil {
 		return false, err
 	}
+	if d.BackendMove != nil {
+		move := *d.BackendMove
+		move.ToBackend = chosen
+		if move.RunID == "" {
+			move.RunID = old.RunID
+		}
+		if move.NodeID == "" {
+			move.NodeID = copy.NodeID
+		}
+		if move.FromBackend == move.ToBackend {
+			d.BackendMove = nil
+		} else {
+			if err := recordBackendMoveTx(tx, move, at); err != nil {
+				return false, err
+			}
+			d.BackendMove = nil
+		}
+	}
 	return true, recordSeatDispatch(tx, *d)
 }
 

@@ -12,20 +12,21 @@ import (
 
 // Type aliases to tools/tillr-drain/internal/policy.
 type (
-	Backend              = policy.Backend
-	Policy               = policy.Policy
-	PolicyState          = policy.PolicyState
-	policyChange         = policy.PolicyChange
-	seatEscalation       = policy.SeatEscalation
-	dispatchDecline      = policy.DispatchDecline
-	seatWait             = policy.SeatWait
-	QuotaWindow          = policy.QuotaWindow
-	QuotaStatus          = policy.QuotaStatus
-	AttemptClass         = policy.AttemptClass
-	priorRun             = policy.PriorRun
-	backendOutcome       = policy.BackendOutcome
-	backendOutcomesState = policy.BackendOutcomesState
-	BackendMove          = policy.BackendMove
+	Backend                   = policy.Backend
+	Policy                    = policy.Policy
+	PolicyState               = policy.PolicyState
+	policyChange              = policy.PolicyChange
+	seatEscalation            = policy.SeatEscalation
+	dispatchDecline           = policy.DispatchDecline
+	seatWait                  = policy.SeatWait
+	QuotaWindow               = policy.QuotaWindow
+	QuotaStatus               = policy.QuotaStatus
+	AttemptClass              = policy.AttemptClass
+	priorRun                  = policy.PriorRun
+	backendOutcome            = policy.BackendOutcome
+	backendOutcomesState      = policy.BackendOutcomesState
+	BackendMove               = policy.BackendMove
+	seatDispatchConflictError = policy.SeatDispatchConflictError
 )
 
 // Constants re-exported from tools/tillr-drain/internal/policy.

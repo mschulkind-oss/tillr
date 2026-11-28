@@ -3,6 +3,7 @@ package policy
 import (
 	"context"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/mschulkind-oss/tillr-drain/internal/drainmodel"
@@ -47,8 +48,8 @@ func RecordBackendMoveTx(tx *store.Tx, move BackendMove, at time.Time) error {
 	if move.ItemID == "" || move.FromBackend == "" || move.ToBackend == "" || move.FromBackend == move.ToBackend {
 		return nil
 	}
+	exists := 0
 	if move.RunID != "" {
-		var exists int
 		err := tx.Reader().QueryRow(
 			`SELECT EXISTS(SELECT 1 FROM events WHERE kind = ? AND object_type = 'item' AND object_id = ? AND json_extract(payload, '$.run_id') = ? AND json_extract(payload, '$.from_backend') = ? AND json_extract(payload, '$.to_backend') = ?)`,
 			BackendMovedKind, move.ItemID, move.RunID, move.FromBackend, move.ToBackend,
@@ -56,11 +57,30 @@ func RecordBackendMoveTx(tx *store.Tx, move BackendMove, at time.Time) error {
 		if err != nil {
 			return storelog.ReadFailure(err)
 		}
-		if exists != 0 {
-			return nil
+	}
+	if exists == 0 {
+		if err := runhistory.AppendEffectOn(tx, BackendMovedKind, "item", move.ItemID, move, at); err != nil {
+			return err
 		}
 	}
-	return runhistory.AppendEffectOn(tx, BackendMovedKind, "item", move.ItemID, move, at)
+	if move.RunID != "" {
+		var err error
+		if move.Seat != "" {
+			_, err = tx.Exec(
+				`UPDATE seat_dispatches SET backend = ? WHERE run_id = ? AND seat = ? AND backend = ?`,
+				move.ToBackend, move.RunID, move.Seat, move.FromBackend,
+			)
+		} else {
+			_, err = tx.Exec(
+				`UPDATE seat_dispatches SET backend = ? WHERE run_id = ? AND backend = ?`,
+				move.ToBackend, move.RunID, move.FromBackend,
+			)
+		}
+		if err != nil && !strings.Contains(err.Error(), "no such table: seat_dispatches") {
+			return err
+		}
+	}
+	return nil
 }
 
 func RecordBackendMove(ctx context.Context, storePath string, move BackendMove, at time.Time) error {

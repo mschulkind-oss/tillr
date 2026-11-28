@@ -1893,14 +1893,25 @@ func (l *Loop) applyPlanGeneration(ctx context.Context, p plannedApplication, ma
 
 func (l *Loop) applyPlanTrunk(ctx context.Context, p plannedApplication, mainSHA *string, at time.Time, generation *string) (bool, *pendingWork, error) {
 	applied, work, err := l.applyPlanRecorded(ctx, p, mainSHA, at, generation)
+	if err == nil {
+		return applied, work, nil
+	}
 	var collision *decisionCollisionError
-	if err == nil || !errors.As(err, &collision) {
-		return applied, work, err
+	if errors.As(err, &collision) {
+		if holdErr := l.holdItemFault(ctx, Candidate{ItemID: p.decision.ItemID}, ReasonDecisionCollision, decisionCollisionDetail(collision, p.decision.Action)); holdErr != nil {
+			return false, nil, err
+		}
+		return false, nil, nil
 	}
-	if holdErr := l.holdItemFault(ctx, Candidate{ItemID: p.decision.ItemID}, ReasonDecisionCollision, decisionCollisionDetail(collision, p.decision.Action)); holdErr != nil {
-		return false, nil, err
+	var seatConflict *seatDispatchConflictError
+	if errors.As(err, &seatConflict) {
+		detail := seatConflict.Error() + "; the planned " + p.decision.Action + " was not applied"
+		if holdErr := l.holdItemFault(ctx, Candidate{ItemID: p.decision.ItemID}, ReasonDecisionCollision, detail); holdErr != nil {
+			return false, nil, err
+		}
+		return false, nil, nil
 	}
-	return false, nil, nil
+	return applied, work, err
 }
 
 // trunkAdvancedUntouched reports whether trunk advanced fast-forward from base to head
@@ -3037,6 +3048,7 @@ func (l *Loop) takeCompletion(c runCompletion, result *LoopResult) (string, erro
 // examination boundary in examineClaimed. The operator can repair and clear the fault.
 func (l *Loop) holdSettleFailure(c runCompletion) bool {
 	var collision *decisionCollisionError
+	var seatConflict *seatDispatchConflictError
 	var started *runStartError
 	var pinErr *runPinError
 	if c.itemID == "" {
@@ -3044,7 +3056,7 @@ func (l *Loop) holdSettleFailure(c runCompletion) bool {
 	}
 	reason := ReasonSettleFailed
 	switch {
-	case errors.As(c.outcome.err, &collision):
+	case errors.As(c.outcome.err, &collision), errors.As(c.outcome.err, &seatConflict):
 		reason = ReasonDecisionCollision
 	case errors.As(c.outcome.err, &pinErr), c.step == "run" && errors.As(c.outcome.err, &started):
 	default:

@@ -5,7 +5,9 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/store"
 	"github.com/mschulkind-oss/tillr/watch"
 )
@@ -136,5 +138,93 @@ receiver = "foreground"
 	}
 	if len(rules) != 1 || len(rules[0].Reads.Events) != 1 || rules[0].Reads.Events[0] != "drain.dispatch-declined" {
 		t.Fatalf("loaded rules = %+v, want one rule reading drain.dispatch-declined", rules)
+	}
+}
+
+func TestSeatDispatchConflictDeclineHoldsOnlyItsItemAndLoopKeepsPassing(t *testing.T) {
+	f, l := passFixture(t, "item-a", "item-b")
+	l.cfg.Lanes = []string{"lane-1", "lane-2"}
+	var report bytes.Buffer
+	l.cfg.Report = &report
+
+	p := Policy{
+		DefaultBackend: "pi",
+		Seats:          map[string]string{"build": "pi"},
+		Backends: map[string]Backend{
+			"pi": {Adapter: "pi", Model: "model-pi", TimeoutSeconds: 60},
+		},
+	}
+	l.cfg.Policy = &p
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := tx.Exec(`UPDATE items SET seat = 'build'`)
+		return err
+	})
+
+	planA := decisionFor(t, l, "item-a")
+	if !isDispatch(planA.decision) || planA.decision.RunRequest == nil {
+		t.Fatalf("fixture did not plan dispatch for item-a: %+v", planA.decision)
+	}
+	conflictRunID := planA.decision.RunRequest.RunID
+
+	// Record a conflicting seat_dispatches row for item-a's run id on an earlier
+	// backend with no recorded backend move so dispatch declines on the mismatch.
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := tx.Exec(`INSERT INTO seat_dispatches(run_id, seat, backend) VALUES(?, 'build', 'claude')`, conflictRunID)
+		return err
+	})
+
+	steps := &policyRunSteps{requests: make(chan run.Request, 4), release: make(chan struct{})}
+	l.cfg.Steps = steps
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	defer func() {
+		close(steps.release)
+		for len(l.active) > 0 {
+			c := <-l.completions
+			delete(l.active, c.id)
+		}
+	}()
+
+	var result LoopResult
+	if _, err := l.pass(ctx, &result); err != nil {
+		t.Fatalf("pass exited on item-a seat_dispatches conflict: %v; report:\n%s", err, report.String())
+	}
+
+	// item-b must still dispatch in the same pass.
+	select {
+	case req := <-steps.requests:
+		if req.ItemID != "item-b" || req.Backend != "pi" {
+			t.Fatalf("dispatched = %+v, want item-b on pi", req)
+		}
+	case <-time.After(hangGuard):
+		t.Fatalf("item-b did not dispatch while item-a was held; report:\n%s", report.String())
+	}
+
+	// item-a is held with the conflict cause; item-b has no fault.
+	fixtureRead(t, f, func(r *store.Reader) error {
+		faults, err := ReadItemFaults(r)
+		if err != nil {
+			return err
+		}
+		fa, ok := faults["item-a"]
+		if !ok {
+			t.Fatalf("item-a not held after seat_dispatches conflict; faults=%+v", faults)
+		}
+		if fa.Reason != ReasonDecisionCollision || !strings.Contains(fa.Detail, "already records seat build backend claude") {
+			t.Errorf("item-a fault = %+v, want reason=%s mentioning already records seat build backend claude", fa, ReasonDecisionCollision)
+		}
+		if fb, ok := faults["item-b"]; ok {
+			t.Errorf("item-b unexpectedly held: %+v", fb)
+		}
+		return nil
+	})
+	if held := planFor(t, l, "item-a"); held.Action != ActionHold || held.Reason != ReasonDecisionCollision {
+		t.Fatalf("next plan for item-a = %+v, want ActionHold/%s", held, ReasonDecisionCollision)
+	}
+
+	// A subsequent pass keeps running cleanly without exiting.
+	if _, err := l.pass(ctx, &result); err != nil {
+		t.Fatalf("subsequent pass failed: %v", err)
 	}
 }

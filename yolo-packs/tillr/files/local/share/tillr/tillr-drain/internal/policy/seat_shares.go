@@ -14,6 +14,20 @@ import (
 
 var ErrSeatWindowClosed = fmt.Errorf("seat backends closed during claim")
 
+// SeatDispatchConflictError reports that seat_dispatches already records a
+// different seat or backend for run_id.
+type SeatDispatchConflictError struct {
+	RunID           string
+	Seat            string
+	Backend         string
+	RecordedSeat    string
+	RecordedBackend string
+}
+
+func (e *SeatDispatchConflictError) Error() string {
+	return fmt.Sprintf("run %s already records seat %s backend %s", e.RunID, e.RecordedSeat, e.RecordedBackend)
+}
+
 // A closed draw is kept even though the rest of the claim must roll back.
 // It does not count as a dispatch until the run actually claims a lane.
 type SeatWait struct {
@@ -89,7 +103,10 @@ func ChooseSeatBackend(tx *store.Tx, p *Policy, runID, seat string, shut map[str
 	if err != nil && err != sql.ErrNoRows {
 		return "", err
 	}
-	if err == sql.ErrNoRows {
+	if err == nil && !slices.Contains(list, saved) {
+		saved = ""
+	}
+	if saved == "" {
 		saved, err = WaitingSeatBackend(tx.Reader(), runID, seat, list)
 		if err != nil {
 			return "", err
@@ -178,7 +195,13 @@ func RecordSeatDispatchRow(tx *store.Tx, runID, seat, backend string) error {
 		return err
 	}
 	if recordedSeat != seat || recordedBackend != backend {
-		return fmt.Errorf("run %s already records seat %s backend %s", runID, recordedSeat, recordedBackend)
+		return &SeatDispatchConflictError{
+			RunID:           runID,
+			Seat:            seat,
+			Backend:         backend,
+			RecordedSeat:    recordedSeat,
+			RecordedBackend: recordedBackend,
+		}
 	}
 	return nil
 }

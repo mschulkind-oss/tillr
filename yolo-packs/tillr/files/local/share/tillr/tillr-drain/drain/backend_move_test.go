@@ -278,3 +278,141 @@ func TestQuotaHeldItemMovesToCurrentBackendAfterProfileChange(t *testing.T) {
 		})
 	}
 }
+
+func TestProfileChangeWithRecordedVerifyRunDispatchesOnNewBackendWithoutRefusal(t *testing.T) {
+	f, l := passFixture(t, "item-a")
+	l.cfg.Lanes = []string{"lane-1"}
+	ref := filepath.Join(f.root, "policy.json")
+	p := Policy{
+		DefaultBackend: "claude",
+		Seats:          map[string]string{"build": "claude", "verify": "claude"},
+		Backends: map[string]Backend{
+			"claude": {Adapter: "claude", Model: "model-claude", TimeoutSeconds: 60},
+		},
+	}
+	l.cfg.Policy, l.cfg.PolicyRef = savePolicyFile(t, ref, p), ref
+
+	// Seed a built commit in item-a's lane worktree.
+	laneID := "item-a"
+	laneWT := l.lanePath(laneID)
+	runGit(t, f.root, "worktree", "add", "--detach", laneWT, TrunkRef)
+	baseSHA := runGit(t, laneWT, "rev-parse", "HEAD")
+	writeForkFile(t, filepath.Join(laneWT, "built.txt"), "built on claude\n")
+	runGit(t, laneWT, "add", "built.txt")
+	runGit(t, laneWT, "commit", "-qm", "feat: build work")
+	builtSHA := runGit(t, laneWT, "rev-parse", "HEAD")
+
+	wf := &Workflow{
+		Name:    "build-then-verify",
+		Version: 1,
+		Stages: []WorkflowStage{
+			{ID: "build", Seat: "build", Access: "write"},
+			{ID: "verify", Seat: "verify", Access: "read_only"},
+		},
+	}
+	const runID = "run-item-a-a1-n2"
+	at := l.cfg.Now().UTC()
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		if _, err := tx.Exec(`UPDATE items SET seat = 'build' WHERE item_id = 'item-a'`); err != nil {
+			return err
+		}
+		// Verify was previously recorded on claude in seat_dispatches and is
+		// ready to dispatch again with the same run id after a profile switch.
+		req := l.cfg.Policy.Request("item-a", laneID, runID, "claude")
+		req.NodeID = "verify"
+		d := Decision{
+			ItemID:      "item-a",
+			Attempt:     1,
+			Action:      ActionDispatch,
+			Reason:      "workflow-next-node",
+			From:        "running",
+			To:          "running",
+			LaneID:      laneID,
+			Seat:        "verify",
+			Workflow:    wf,
+			NodeIndex:   1,
+			NodeBaseSHA: builtSHA,
+			RunRequest:  req,
+		}
+		stampDecisionRequest(d, req)
+		identifyDecision(&d)
+		if err := recordSeatDispatch(tx, d); err != nil {
+			return err
+		}
+		return appendEffect(tx, nodeAdvancedKind, runID, pendingWork{
+			Decision:    d,
+			BaseSHA:     baseSHA,
+			Ready:       true,
+			ParentRunID: "run-item-a-a1-n1",
+		}, at)
+	})
+
+	// Switch the profile to one where verify maps to pi and claude is absent.
+	p = Policy{
+		DefaultBackend: "pi",
+		Seats:          map[string]string{"build": "pi", "verify": "pi"},
+		Backends: map[string]Backend{
+			"pi": {Adapter: "pi", Model: "model-pi", TimeoutSeconds: 60},
+		},
+	}
+	savePolicyFile(t, ref, p)
+
+	steps := &policyRunSteps{requests: make(chan run.Request, 4), release: make(chan struct{})}
+	l.cfg.Steps = steps
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	defer func() {
+		close(steps.release)
+		for len(l.active) > 0 {
+			c := <-l.completions
+			delete(l.active, c.id)
+		}
+	}()
+
+	var result LoopResult
+	if _, err := l.pass(ctx, &result); err != nil {
+		t.Fatalf("pass after profile switch with recorded verify run: %v", err)
+	}
+
+	select {
+	case req := <-steps.requests:
+		if req.ItemID != "item-a" || req.NodeID != "verify" || req.Backend != "pi" || req.RunID != runID {
+			t.Fatalf("verify dispatch = %+v, want item-a verify %s on pi", req, runID)
+		}
+	case c := <-l.completions:
+		t.Fatalf("verify completed without running: %+v", c.outcome)
+	case <-time.After(hangGuard):
+		t.Fatalf("verify did not dispatch after profile switch; result=%+v active=%d plan=%+v", result, len(l.active), planFor(t, l, "item-a"))
+	}
+
+	fixtureRead(t, f, func(r *store.Reader) error {
+		var seat, backend string
+		if err := r.QueryRow(`SELECT seat, backend FROM seat_dispatches WHERE run_id = ?`, runID).Scan(&seat, &backend); err != nil {
+			return err
+		}
+		if seat != "verify" || backend != "pi" {
+			t.Errorf("seat_dispatches(%s) = (%s, %s), want (verify, pi)", runID, seat, backend)
+		}
+		var declines int
+		if err := r.QueryRow(`SELECT count(*) FROM events WHERE kind = ? AND object_id = 'item-a'`, dispatchDeclinedKind).Scan(&declines); err != nil {
+			return err
+		}
+		if declines != 0 {
+			t.Errorf("dispatch declines = %d, want 0", declines)
+		}
+		faults, err := ReadItemFaults(r)
+		if err != nil {
+			return err
+		}
+		if f, ok := faults["item-a"]; ok {
+			t.Errorf("unexpected item fault on item-a: %+v", f)
+		}
+		return nil
+	})
+
+	moves := readBackendMoves(t, f, "item-a")
+	if len(moves) != 1 || moves[0].ItemID != "item-a" || moves[0].RunID != runID || moves[0].FromBackend != "claude" || moves[0].ToBackend != "pi" || moves[0].Seat != "verify" {
+		t.Fatalf("backend moves = %+v, want one move claude -> pi for verify run %s", moves, runID)
+	}
+}

@@ -353,7 +353,8 @@ func (l *Loop) holdExaminationFailure(ctx context.Context, d Decision, work *pen
 	c := Candidate{ItemID: d.ItemID, RunID: d.RunRequest.RunID, LaneID: d.LaneID}
 	reason, detail := ReasonSettleFailed, fmt.Sprintf("%s: %v", step, failure)
 	var collision *decisionCollisionError
-	if errors.As(failure, &collision) {
+	var seatConflict *seatDispatchConflictError
+	if errors.As(failure, &collision) || errors.As(failure, &seatConflict) {
 		reason = ReasonDecisionCollision
 	}
 	err := l.holdItemFault(ctx, c, reason, detail)
