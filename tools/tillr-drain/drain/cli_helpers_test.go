@@ -427,6 +427,7 @@ type decision struct {
 	DeferredBy       string       `json:"deferred_by"`
 	BackendHoldCause string       `json:"backend_hold_cause"`
 	QuestionID       string       `json:"question_id"`
+	QuestionRefs     []string     `json:"question_refs"`
 	Seat             string       `json:"seat"`
 }
 

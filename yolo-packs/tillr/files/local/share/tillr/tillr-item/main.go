@@ -68,6 +68,8 @@ func run(args []string) int {
 		env, code = rankFace(rest)
 	case "dep":
 		env, code = depFace(rest)
+	case "wait-question":
+		env, code = waitQuestionFace(rest)
 	case "sync":
 		return syncFace(rest)
 	case "reconcile":
@@ -957,7 +959,7 @@ func rejectionOrFailure(err error, at time.Time) (record.Envelope, int) {
 
 // faceList is this binary's faces, in the order the usage lines print them. One home,
 // so the refusal, the unknown-face line and `--help` cannot disagree.
-const faceList = "apply, rank, dep, sync, reconcile, comments, list, show, state, place, idea, doc-triage, request, close, reopen, decision, mail, verdict or judge"
+const faceList = "apply, rank, dep, wait-question, sync, reconcile, comments, list, show, state, place, idea, doc-triage, request, close, reopen, decision, mail, verdict or judge"
 
 // errHelp is what parseFlags answers for a `--help`. A face's flags are the layer-1
 // surface (docs/reference/tillr-distribution.md, "Documentation split"), so a help request is an answer
@@ -1000,4 +1002,56 @@ func verbHelp(noun, verbs string, args []string) bool {
 		return true
 	}
 	return false
+}
+
+// waitQuestionFace records which design questions an item waits on, as an override of
+// what the companion plan recorded. The drain holds the item on those questions alone.
+func waitQuestionFace(args []string) (record.Envelope, int) {
+	fs := newFlagSet("wait-question")
+	path := fs.String("store", "", "the store to write")
+	root := fs.String("root", ".", "the repository root a prose question's document is read from")
+	id := fs.String("item", "", "the item whose question waits change")
+	add := fs.String("add", "", "wait on <doc>#<OQ-id>, or on <doc>#<heading-slug> with --quote")
+	drop := fs.String("drop", "", "stop waiting on <doc>#<id-or-heading-slug>")
+	none := fs.Bool("none", false, "wait on no question at all (opts a legacy item out of the whole-document hold)")
+	quote := fs.String("quote", "", "the prose question an unmarked --add waits on")
+	reason := fs.String("reason", "", "why the wait changes (required)")
+	by := fs.String("by", "owner", "actor making the change")
+	now := fs.String("now", "", "the injected clock, RFC 3339 (default: wall clock)")
+	if err := parseFlags(fs, args); err != nil {
+		return record.Envelope{}, fail(err)
+	}
+	if fs.NArg() == 1 && *id == "" {
+		*id = fs.Arg(0)
+	} else if fs.NArg() != 0 {
+		return record.Envelope{}, fail(item.Usagef("wait-question takes the item as --item <id> or one argument"))
+	}
+	ops := 0
+	c := item.QuestionWaitChange{Reason: *reason, Actor: *by, Root: *root, Quote: *quote}
+	if *add != "" {
+		ops++
+		c.Op, c.Ref = "add", *add
+	}
+	if *drop != "" {
+		ops++
+		c.Op, c.Ref = "drop", *drop
+	}
+	if *none {
+		ops++
+		c.Op = "none"
+	}
+	if *path == "" || *id == "" || ops != 1 {
+		return record.Envelope{}, fail(item.Usagef("wait-question needs --store <path>, an item, and exactly one of --add <doc>#<id>, --drop <doc>#<id> or --none, with --reason"))
+	}
+	at := time.Now().UTC()
+	if *now != "" {
+		parsed, err := time.Parse(time.RFC3339, *now)
+		if err != nil {
+			return record.Envelope{}, fail(item.Usagef("--now %q is not an RFC 3339 timestamp: %v", *now, err))
+		}
+		at = parsed.UTC()
+	}
+	return writeStore(*path, at, func(ctx context.Context, tx *store.Tx) (record.Envelope, error) {
+		return item.WriteQuestionWait(ctx, tx, *id, c, at)
+	})
 }

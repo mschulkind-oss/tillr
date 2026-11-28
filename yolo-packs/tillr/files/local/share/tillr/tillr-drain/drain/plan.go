@@ -9,7 +9,9 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -229,6 +231,11 @@ type Decision struct {
 	// It is empty for every other hold and for every dispatch, so an operator who reads one
 	// decision can follow the hold to the question rather than to the section.
 	QuestionID string `json:"question_id,omitempty"`
+	// QuestionRefs lists every question an item recorded as waiting on that is still open,
+	// as `<doc>#<id>` in the item's own order. QuestionID is its first entry's id, kept for
+	// readers that predate the list. Items with no recorded waits hold on the document's
+	// first unanswered question and leave this empty.
+	QuestionRefs []string `json:"question_refs,omitempty"`
 	// Seat is the seat the item asked for, recorded beside the request it produced. It is
 	// what explains the request's backend and the model in its argv: the policy mapped this
 	// seat to that backend, and the backend names its model, so a decision read back later
@@ -269,6 +276,9 @@ type itemRow struct {
 	// asks for none. The policy maps it to the backend its dispatch runs on, so the item never
 	// names a model.
 	Seat string
+	// QuestionWaits is the item's recorded question-wait metadata, nil for an item with
+	// none: a legacy item, which keeps the whole-document hold.
+	QuestionWaits *item.QuestionWaits
 }
 
 // Plan computes one tick's decisions: one drain.decision record per item in the store, in
@@ -1826,6 +1836,7 @@ func (p *planner) decide(item itemRow, edges []itemEdge) Decision {
 	case questions.reason != "":
 		decision.Action, decision.Reason = ActionHold, questions.reason
 		decision.QuestionID = questions.questionID
+		decision.QuestionRefs = questions.questionRefs
 	case retry != nil && retry.refusal != "":
 		// The operator claimed this run was the harness's failure and the store says
 		// otherwise: the claim is recorded, and the decision names why it does not hold.
@@ -2118,8 +2129,9 @@ func identifyDecision(decision *Decision) {
 // questionState is what the planner learned about one item's design document: the hold the
 // document answers with, if any, and the question that hold names.
 type questionState struct {
-	reason     string
-	questionID string
+	reason       string
+	questionID   string
+	questionRefs []string
 }
 
 // questionState answers what the item's design document still asks, from the questions
@@ -2139,7 +2151,15 @@ type questionState struct {
 func (p *planner) questionState(item itemRow) questionState {
 	checkDocument := hasPrerequisite(p.rules(), definition.PrerequisiteDesignDocument)
 	checkQuestions := hasPrerequisite(p.rules(), definition.PrerequisiteDesignQuestions)
-	if (!checkDocument && !checkQuestions) || itemIsComment(item.ItemID) || item.DesignDoc == "" {
+	if (!checkDocument && !checkQuestions) || itemIsComment(item.ItemID) {
+		return questionState{}
+	}
+	if item.DesignDoc == "" {
+		// A standalone request names no design document, but it may still record the
+		// questions it waits on; those are evaluated, with no document to be missing.
+		if checkQuestions && item.QuestionWaits != nil && !strings.HasPrefix(item.ItemID, "item-design-") {
+			return p.recordedQuestionState(item)
+		}
 		return questionState{}
 	}
 	if p.questions == nil && !checkQuestions {
@@ -2150,9 +2170,12 @@ func (p *planner) questionState(item itemRow) questionState {
 	}
 	var answer DocumentQuestions
 	var err error
+	// An item with recorded waits needs the index only for the questions it names, so its
+	// own document is read for presence alone.
+	recorded := item.QuestionWaits != nil && !strings.HasPrefix(item.ItemID, "item-design-")
 	if source, ok := p.questions.(interface {
 		DocumentPresence(string) (DocumentQuestions, error)
-	}); ok && !checkQuestions {
+	}); ok && (!checkQuestions || recorded) {
 		answer, err = source.DocumentPresence(item.DesignDoc)
 	} else {
 		answer, err = p.questions.Document(item.DesignDoc)
@@ -2167,6 +2190,9 @@ func (p *planner) questionState(item itemRow) questionState {
 	}
 	if !answer.Present && checkDocument {
 		return questionState{reason: ReasonDesignDocMissing}
+	}
+	if checkQuestions && recorded {
+		return p.recordedQuestionState(item)
 	}
 	if checkQuestions && strings.HasPrefix(item.ItemID, "item-design-") {
 		if designSource, ok := p.questions.(interface {
@@ -2186,6 +2212,88 @@ func (p *planner) questionState(item itemRow) questionState {
 		return questionState{reason: ReasonQuestionOpen, questionID: question.ID}
 	}
 	return questionState{}
+}
+
+// recordedQuestionState holds an item on the questions it recorded it waits on, and on no
+// other question in its design document. An empty list holds nothing. A marked reference
+// is open while the index reports it unanswered, satisfied once it is answered or ruled in
+// the ledger, and `question-removed` when the document no longer has it. An unmarked prose
+// reference is open while its heading's section is there; a changed section stays open too,
+// because releasing it after a re-plan is not built yet, so nothing dispatches on an
+// unreviewed edit. The caller has already read the design document's presence.
+func (p *planner) recordedQuestionState(it itemRow) questionState {
+	refs := it.QuestionWaits.Refs
+	if len(refs) == 0 {
+		return questionState{}
+	}
+	docs := map[string]DocumentQuestions{}
+	var open []item.QuestionRef
+	for _, ref := range refs {
+		if ref.QuestionID == "" {
+			text, err := os.ReadFile(plannerDocumentPath(p.documentRoot, ref.DocPath))
+			if err != nil {
+				return removedQuestion(ref)
+			}
+			if _, found := item.SectionSHA256(string(text), ref.HeadingSlug); !found {
+				return removedQuestion(ref)
+			}
+			open = append(open, ref)
+			continue
+		}
+		answer, seen := docs[ref.DocPath]
+		if !seen {
+			if p.questions == nil {
+				return questionState{reason: ReasonQuestionsUnknown}
+			}
+			var err error
+			if answer, err = p.questions.Document(ref.DocPath); err != nil || !answer.Present {
+				return questionState{reason: ReasonQuestionsUnknown}
+			}
+			docs[ref.DocPath] = answer
+		}
+		state, found := "", false
+		for _, q := range answer.Questions {
+			if q.ID == ref.QuestionID {
+				state, found = q.State, true
+				break
+			}
+		}
+		switch {
+		case found && state != QuestionAnswered:
+			open = append(open, ref)
+		case found || slices.Contains(answer.LedgerIDs, ref.QuestionID):
+		default:
+			return removedQuestion(ref)
+		}
+	}
+	if len(open) == 0 {
+		return questionState{}
+	}
+	out := questionState{reason: ReasonQuestionOpen}
+	for _, ref := range open {
+		out.questionRefs = append(out.questionRefs, ref.Canonical())
+	}
+	out.questionID = open[0].QuestionID
+	if out.questionID == "" {
+		out.questionID = open[0].HeadingSlug
+	}
+	return out
+}
+
+// removedQuestion holds on `question-removed`, naming the reference that is gone.
+func removedQuestion(ref item.QuestionRef) questionState {
+	id := ref.QuestionID
+	if id == "" {
+		id = ref.HeadingSlug
+	}
+	return questionState{reason: ReasonQuestionRemoved, questionID: id, questionRefs: []string{ref.Canonical()}}
+}
+
+func plannerDocumentPath(root, doc string) string {
+	if filepath.IsAbs(doc) {
+		return doc
+	}
+	return filepath.Join(root, filepath.FromSlash(doc))
 }
 
 // itemFence is the fence the planner compares: the text staging writes to the lane
@@ -3345,6 +3453,10 @@ func readItems(r *store.Reader) ([]itemRow, error) {
 	if err != nil {
 		return nil, readFailure(err)
 	}
+	waits, err := item.ReadQuestionWaits(r)
+	if err != nil {
+		return nil, readFailure(err)
+	}
 	query, err := itemSelect(r)
 	if err != nil {
 		return nil, err
@@ -3362,6 +3474,9 @@ func readItems(r *store.Reader) ([]itemRow, error) {
 		}
 		row.OwnerOwed = owed[row.ItemID]
 		row.Delivery = deliveries[row.ItemID]
+		if w, ok := waits[row.ItemID]; ok {
+			row.QuestionWaits = &w
+		}
 		items = append(items, row)
 	}
 	return items, nil
@@ -3441,9 +3556,16 @@ func readOpenItems(r *store.Reader, def definition.Definition, extraIDs ...strin
 	if err != nil {
 		return nil, readFailure(err)
 	}
+	waits, err := item.ReadQuestionWaits(r)
+	if err != nil {
+		return nil, readFailure(err)
+	}
 	for i := range items {
 		items[i].OwnerOwed = owed[items[i].ItemID]
 		items[i].Delivery = deliveries[items[i].ItemID]
+		if w, ok := waits[items[i].ItemID]; ok {
+			items[i].QuestionWaits = &w
+		}
 	}
 	return items, nil
 }

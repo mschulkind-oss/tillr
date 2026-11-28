@@ -72,6 +72,19 @@ Unknown items or neighbors are refused as `unknown-item`; terminal or parked
 ones as `not-in-order`. Update events record `placed_by` and `placed_via`,
 defaulting to `owner` and `cli`. Run `tillr-item place --help` for all flags.
 
+## Recording which questions an item waits on
+
+`wait-question` records the design questions one item waits on, so the drain holds it on those questions alone instead of on every open question in its design document. It writes two tables that store only the dependency edge, never whether a question is open.
+
+```bash
+tillr-item wait-question --store /path/to/state.db --item item-example --add docs/design/topic.md#OQ-7 --reason "t3 builds the answer to OQ-7"
+tillr-item wait-question --store /path/to/state.db --item item-example --add docs/design/topic.md#open-questions --quote "Refresh in the background?" --reason "controls the 401 handler"
+tillr-item wait-question --store /path/to/state.db --item item-example --drop docs/design/topic.md#OQ-7 --reason "t3 does not touch it"
+tillr-item wait-question --store /path/to/state.db --item item-example --none --reason "waits on no question"
+```
+
+Exactly one of `--add`, `--drop` and `--none` is given, with `--reason`. `--add <doc>#<OQ-id>` names a marked question; `--add <doc>#<heading-slug> --quote <text>` names an unmarked prose question and stores a hash of that heading's section. `--none` records that the item waits on nothing, which takes a legacy item off the whole-document hold. An item with no recorded wait information keeps that whole-document hold.
+
 ## Adding and removing dependencies
 
 `dep` adds or removes scheduling edges (`blocked_by` via `--add`, ordering-only `after`
