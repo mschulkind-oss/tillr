@@ -193,6 +193,7 @@ func (l *Loop) claimSettledCandidateDirect(ctx context.Context, d Decision, timi
 		return nil, false, err
 	}
 	defer ws.Close()
+	claimAt := l.cfg.Now().UTC()
 	var claimed *pendingWork
 	err = ws.WriteTx(ctx, func(tx *store.Tx) error {
 		r := tx.Reader()
@@ -234,7 +235,6 @@ func (l *Loop) claimSettledCandidateDirect(ctx context.Context, d Decision, timi
 			return nil
 		}
 
-		claimAt := l.cfg.Now().UTC()
 		passID := timing.TickID
 		if passID == "" {
 			passID, err = allocateGeneration(tx)
