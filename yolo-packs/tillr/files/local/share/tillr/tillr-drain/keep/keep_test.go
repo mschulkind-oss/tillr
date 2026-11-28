@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -36,6 +37,8 @@ func TestMain(m *testing.M) {
 	case "impostor":
 		time.Sleep(30 * time.Second)
 		os.Exit(0)
+	case "keeper-then-term":
+		os.Exit(runKeeperThenTermHelper())
 	}
 	code := m.Run()
 	if builtDrainDir != "" {
@@ -70,6 +73,22 @@ func runDrainStubHelper() {
 		case <-time.After(10 * time.Millisecond):
 		}
 	}
+}
+
+// runKeeperThenTermHelper runs the keeper CLI face and, once it has returned
+// (its lock already released), sends this thread one more SIGTERM before the
+// process exits. That is the ordering a restart produces: it waits only for
+// the keeper lock, then its sweep for extra keepers finds the old keeper still
+// alive and signals it again. A thread-directed signal is delivered before
+// tgkill returns, so a process whose handler is gone dies here, every run.
+func runKeeperThenTermHelper() int {
+	code := Run(os.Args[1:], os.Stdout, os.Stderr)
+	runtime.LockOSThread()
+	if err := unix.Tgkill(os.Getpid(), unix.Gettid(), unix.SIGTERM); err != nil {
+		fmt.Fprintf(os.Stderr, "tgkill: %v\n", err)
+		return 3
+	}
+	return code
 }
 
 var (
@@ -1796,5 +1815,78 @@ func waitUntilProcComm(t *testing.T, pid int, wantComm string) {
 			t.Fatalf("timed out waiting for pid %d comm=%q (got ok=%v comm=%q)", pid, wantComm, ok, info.Comm)
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// A keeper stopped by SIGTERM exits 0 even when a second SIGTERM reaches it
+// after it has released its lock, as a restart's sweep for extra keepers does.
+func TestStoppedKeeperExitsCleanlyWhenSignaledAgainAfterReleasingLock(t *testing.T) {
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	work := t.TempDir()
+	root := filepath.Join(work, "repo")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	pidFile := filepath.Join(root, ".tillr", "stub.pid")
+	launcher := filepath.Join(work, "tillr-drain")
+	script := fmt.Sprintf("#!/usr/bin/env bash\nexport TILLR_KEEP_TEST_HELPER=drain-stub\nexport TILLR_KEEP_TEST_PROC_NAME=tillr-drain\nexport TILLR_KEEP_TEST_PID_FILE=%q\nexec -a %q %q \"$@\"\n", pidFile, launcher, self)
+	if err := os.WriteFile(launcher, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// A file, not a pipe: the loop the keeper leaves running holds its output open.
+	outPath := filepath.Join(work, "keeper.out")
+	keeperOut, err := os.Create(outPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer keeperOut.Close()
+	keeper := exec.Command(self, "--root", root)
+	keeper.Dir = root
+	keeper.Env = append(os.Environ(),
+		"TILLR_KEEP_TEST_HELPER=keeper-then-term",
+		"TILLR_LAUNCHER="+launcher,
+		"YOLO_DURABLE_DIR="+work,
+	)
+	keeper.Stdout = keeperOut
+	keeper.Stderr = keeperOut
+	if err := keeper.Start(); err != nil {
+		t.Fatal(err)
+	}
+	var loopPID int
+	defer func() {
+		stopAndWait(keeper)
+		stopAndWaitPID(loopPID)
+	}()
+
+	deadline := time.Now().Add(hangGuard)
+	for {
+		if data, err := os.ReadFile(pidFile); err == nil && len(bytes.TrimSpace(data)) > 0 {
+			if loopPID, err = strconv.Atoi(strings.TrimSpace(string(data))); err == nil {
+				break
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", pidFile)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	if err := StopKeeper(filepath.Join(root, ".tillr", "keeper.lock"), io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	waitErr := keeper.Wait()
+	out, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if waitErr != nil {
+		t.Fatalf("stopped keeper wait: %v\n%s", waitErr, out)
+	}
+	if !strings.Contains(string(out), "keeper: stopped; loop left running") {
+		t.Fatalf("keeper did not report a clean stop:\n%s", out)
 	}
 }

@@ -818,9 +818,14 @@ func runForeground(root string, extra []string, lockPath string, stdout, stderr 
 	var stopOnce sync.Once
 	triggerStop := func() { stopOnce.Do(func() { close(stopCh) }) }
 
+	// The handler stays installed until the process exits; it is never stopped
+	// on return. A restart waits only for this lock to be released, then its
+	// sweep for extra keepers can find this process still alive and send it
+	// another SIGTERM. With the handler stopped, that signal's default action
+	// would end a keeper that has already stopped cleanly. Later signals land
+	// in, or are dropped by, the buffered channel.
 	sigCh := make(chan os.Signal, 2)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
-	defer signal.Stop(sigCh)
 	go func() {
 		select {
 		case <-sigCh:
