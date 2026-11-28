@@ -2,7 +2,7 @@
 title: "Contract: tillr-gate"
 status: in-review
 stage: DESIGN
-updated: 2026-11-26
+updated: 2026-11-28
 tags: [tillr, contract, gate]
 summary: "What tillr-gate provides and expects: nine faces on HEAD (`shards` under `D-UC18` and `go-affected` under `D-UC19` now landed, plus `change-gate` and `tree-check` under `D-UC24`), four record kinds, seven exit codes with the stall code 6, and the remembered-results directory. Its record types are in a `main` package nobody can import, so five utilities each hold a copy. It expects the check declarations (`[gate] checks_dir` in `.tillr.toml` under `D-UC23`) and the registry from the operated repository. By `D-UC16` and `D-UC24` the default gate runners move into compiled `tillr-gate change-gate` and `tillr-gate tree-check` faces with the Python runner scripts deleted, by `D-UC18` `tools/go-test-shards.py` moved into `tillr-gate shards`, and by `D-UC19` `tools/gate/go_affected.py` moved into `tillr-gate go-affected`."
 depends-on:
@@ -86,8 +86,8 @@ None.
 
 | Expectation | Provider | Through | Where it is read |
 | :--- | :--- | :--- | :--- |
-| The envelope, the exit codes, the kind registry, settings (`.tillr.toml` `[gate] checks_dir`; `D-UC23`) | [tillr](./tillr.md) | Go import | throughout |
-| The check declarations: each direct `*.json` under `[gate] checks_dir` in `.tillr.toml` (default `tools/gate/checks`, or an explicit `--checks` directory; `D-UC23` of [the overview](../tillr-utility-contracts.md#88-the-check-declarations-directory-is-configured-in-tillrtoml), the designer's decision from an operator request, which the owner may overturn), with the keys `id label command scope tier budget_ms timeout_ms reads tools needs remember writes exclusive` and no others | the operated repository, outside tillr | files | `checkfiles.go`, `checks.go`, `classify.go`, `change-gate.py`, `tree-check.py` (`change-gate` and `tree-check` faces under `D-UC24`) |
+| The envelope, the exit codes, the kind registry, settings (`.tillr.toml` `[gate] checks_dir` via `ReadChecksDir` and `ParseChecksDir`; `D-UC23`, `D-UC26`) | [tillr](./tillr.md) | Go import | throughout |
+| The check declarations: each direct `*.json` under `[gate] checks_dir` in `.tillr.toml` (default `tools/gate/checks`, or an explicit `--checks` directory, read via `settings.ReadChecksDir` / `settings.ParseChecksDir` ignoring unknown tables and unknown keys; `D-UC23` and `D-UC26` of [the overview](../tillr-utility-contracts.md#811-candidate-and-check-declaration-reads-tolerate-unknown-tillrtoml-tables-and-keys), the designer's decisions from operator requests, which the owner may overturn), with the keys `id label command scope tier budget_ms timeout_ms reads tools needs remember writes exclusive` and no others | the operated repository, outside tillr | files | `checkfiles.go`, `checks.go`, `classify.go`, `change_gate.go`, `tree_check.go` |
 | The registry: `digest declarations in_process`, with the digest being the hash of the two arrays | the operated repository, outside tillr | files | `registry.go` |
 | The `--gate` program: its exit code, and the fast verdict it writes to the path in `TILLR_FAST_VERDICT_OUT` | the caller's program; in the drain's loop, the change gate (`change-gate.py` under `D-UC16`, replaced by `tillr-gate change-gate` under `D-UC24`) | subprocess, files | `gate.go` |
 | `TILLR_HEAVY_LOCK_FD`, an open lock handle | [tillr-drain](./tillr-drain.md) | environment | `checkgroup.go` |

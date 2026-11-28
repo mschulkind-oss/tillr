@@ -2,7 +2,7 @@
 title: "Contract: tillr-loop"
 status: in-review
 stage: DESIGN
-updated: 2026-11-26
+updated: 2026-11-28
 tags: [tillr, contract, loop, adapter]
 summary: "What tillr-loop provides and expects: a Go program and `loop` package with eight faces, five exit codes, and the `describe` answer the drain checks at start (ported from Python under D-UC20 with its Python script, Python test suite, sync helper and synced drain copy removed, amended under D-UC23 for `.tillr.toml` `[gate] checks_dir`, and amended under D-UC24 to invoke compiled `tillr-gate change-gate` and `tillr-gate tree-check` faces rather than `python3` runner scripts). Its provided side is held by a generated file of real argument lists; its expected side types the flags of the gate, land and item programs and tests against stand-ins."
 depends-on:
@@ -64,7 +64,7 @@ Under `D-UC20` of [the overview](../tillr-utility-contracts.md#85-the-loop-adapt
 
 | Expectation | Provider | Through | Where it is read |
 | :--- | :--- | :--- | :--- |
-| The envelope, exit codes, settings (`.tillr.toml` `[gate] checks_dir`; `D-UC23`) | [tillr](./tillr.md) | Go import | `loop.go` |
+| The envelope, exit codes, settings (`.tillr.toml` `[gate] checks_dir` via `ReadChecksDir`; `D-UC23`, `D-UC26`) | [tillr](./tillr.md) | Go import | `loop.go` |
 | `change` with `--item --lane --run --worktree --base --head --now --output` | [tillr-gate](./tillr-gate.md) | subprocess | `compose_gate` |
 | `plan` with `--registry --input --output --root` | [tillr-gate](./tillr-gate.md) | subprocess | `compose_gate` |
 | `run` with `--input --worktree --output --logs --gate --gate-arg`; exits 0, 1 and 6 kept, and 2 to 5 meaning it refused or could not run the plan | [tillr-gate](./tillr-gate.md) | subprocess | `compose_gate`, `execute` |
@@ -74,7 +74,7 @@ Under `D-UC20` of [the overview](../tillr-utility-contracts.md#85-the-loop-adapt
 | The four claim classes; the verdict `done`; the actor kind `mechanical`; that a criterion's hash is the SHA-256 of its text | [tillr-item](./tillr-item.md) | copies | the `verdict` face |
 | The argument lists of `drain-argv.json`, and `TILLR_LOOP_ADAPTER_BUILD` | [tillr-drain](./tillr-drain.md) | subprocess, environment | every face |
 | The change gate (`change-gate.py` on `HEAD` today, replaced by `tillr-gate change-gate` under `D-UC24`) and the fast tree check (`tree-check.py` on `HEAD` today, replaced by `tillr-gate tree-check` under `D-UC24`), as the default runners | [tillr-gate](./tillr-gate.md), from tillr's installation | subprocess | `gate`, `fixer-gate`, `replay`, `rolling` |
-| The check declarations under the candidate's or checkout's configured `[gate] checks_dir` directory in `.tillr.toml` (default `tools/gate/checks`; overridden on `gate` and `self-check` by `--registry`, then `TILLR_LOOP_REGISTRY`; `D-UC23`) | the operated repository, outside tillr | files | `gate`, `self-check`, `fixer-gate`, `replay`, `rolling` |
+| The check declarations under the candidate's or checkout's configured `[gate] checks_dir` directory in `.tillr.toml` (default `tools/gate/checks`, read via `settings.ReadChecksDir` ignoring unknown tables and unknown keys; overridden on `gate` and `self-check` by `--registry`, then `TILLR_LOOP_REGISTRY`; `D-UC23`, [`D-UC26`](../tillr-utility-contracts.md#811-candidate-and-check-declaration-reads-tolerate-unknown-tillrtoml-tables-and-keys)) | the operated repository, outside tillr | files | `gate`, `self-check`, `fixer-gate`, `replay`, `rolling` |
 
 It reads no store.
 
