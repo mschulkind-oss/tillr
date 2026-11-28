@@ -745,7 +745,7 @@ func (l *Loop) reportOvershoot(ctx context.Context, snap worktreebudget.Snapshot
 // outside the scheduling pass (D-SN3, Section 5.7), woken by run.exited /
 // item.ended / agent.slot-freed / resync and reconciled every StorePollInterval
 // (15s default).
-func (l *Loop) startGCActor(ctx context.Context) func() {
+func (l *Loop) startGCActor(ctx context.Context, result *LoopResult) func() {
 	actorCtx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
 
@@ -776,7 +776,7 @@ func (l *Loop) startGCActor(ctx context.Context) func() {
 				return
 			}
 			beforeSeq, _ := l.readEventHeadSeq(actorCtx)
-			if err := l.runGCStep(actorCtx); err != nil {
+			if err := l.runGCStep(actorCtx, result); err != nil {
 				l.reportActorError(actorCtx, "gc", err)
 				return
 			}
@@ -794,7 +794,11 @@ func (l *Loop) startGCActor(ctx context.Context) func() {
 	}
 }
 
-func (l *Loop) runGCStep(ctx context.Context) error {
+func (l *Loop) runGCStep(ctx context.Context, result *LoopResult) error {
+	return l.runGCStepGeneration(ctx, result, nil)
+}
+
+func (l *Loop) runGCStepGeneration(ctx context.Context, result *LoopResult, generation *string) error {
 	l.actors.GCMu.Lock()
 	defer l.actors.GCMu.Unlock()
 	l.actors.GC.Runs.Add(1)
@@ -805,11 +809,23 @@ func (l *Loop) runGCStep(ctx context.Context) error {
 	if err := l.repairStaleRunRecords(ctx); err != nil {
 		return err
 	}
-	var gen string
-	if reaped, err := l.reapDeadAndExpired(ctx, l.cfg.Now(), &gen); err != nil {
+	reapAt := l.cfg.Now().UTC()
+	var localGen string
+	reapGen := &localGen
+	if generation != nil {
+		reapGen = generation
+	}
+	beforeGen := *reapGen
+	if reaped, err := l.reapDeadAndExpired(ctx, reapAt, reapGen); err != nil {
 		return err
 	} else if reaped {
 		l.signalPassWake()
+	}
+	if generation == nil && *reapGen != "" && *reapGen != beforeGen {
+		if err := l.recordReapPassTiming(ctx, *reapGen, reapAt); err != nil {
+			return err
+		}
+		l.countGeneration(result, *reapGen)
 	}
 	if err := l.releaseIdleHeldCandidates(ctx); err != nil {
 		return err
@@ -857,6 +873,23 @@ func (l *Loop) runGCStep(ctx context.Context) error {
 	}
 	l.recoverStaleTriageClaims(ctx)
 	l.dispatchAlertTriage(ctx)
+	return nil
+}
+
+func (l *Loop) recordReapPassTiming(ctx context.Context, generation string, at time.Time) error {
+	if generation == "" || l.cfg.Store == "" {
+		return nil
+	}
+	timing := PassTiming{
+		TickID:         generation,
+		AtMS:           at.UnixMilli(),
+		EndMS:          l.cfg.Now().UTC().UnixMilli(),
+		GateBudgetMS:   l.gateBudget.Milliseconds(),
+		DecisionCounts: map[string]int{},
+	}
+	if err := recordPassTiming(context.WithoutCancel(ctx), l.cfg.Store, timing); err != nil {
+		return fmt.Errorf("recording pass %s: %w", generation, err)
+	}
 	return nil
 }
 

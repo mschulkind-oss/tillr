@@ -430,3 +430,32 @@ func TestReplayIsInvariantToClockRateAndTriggerSuppression(t *testing.T) {
 		})
 	}
 }
+
+func TestDirectReapInGCStepAndPassPlansRecordsTimingAndGenerationBounds(t *testing.T) {
+	f, l := passFixture(t)
+	at := l.cfg.Now()
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := tx.Exec(`INSERT INTO lanes (lane_id, state, run_id, leased_until) VALUES ('lane-1', ?, 'foreign-gc', ?)`, run.LaneStateLeased, at.Add(-time.Second).UnixMilli())
+		return err
+	})
+	var result LoopResult
+	if err := l.runGCStep(context.Background(), &result); err != nil {
+		t.Fatalf("runGCStep: %v", err)
+	}
+	counts := storeRows(t, f.storePath)
+	if result.Ticks != 1 || result.FirstGeneration != "1" || result.LastGeneration != "1" || counts["drain_generations"] != 1 || counts["drain_passes"] != 1 {
+		t.Fatalf("runGCStep reap lost timing or bounds: %+v / %v", result, counts)
+	}
+
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := tx.Exec(`UPDATE lanes SET state = ?, run_id = 'foreign-plan', leased_until = ? WHERE lane_id = 'lane-1'`, run.LaneStateLeased, at.Add(-time.Second).UnixMilli())
+		return err
+	})
+	if _, _, err := l.passPlans(context.Background(), at); err != nil {
+		t.Fatalf("passPlans: %v", err)
+	}
+	counts = storeRows(t, f.storePath)
+	if counts["drain_generations"] != 2 || counts["drain_passes"] != 2 {
+		t.Fatalf("direct passPlans reap lost timing: %v", counts)
+	}
+}

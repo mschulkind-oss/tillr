@@ -186,7 +186,7 @@ func (l *Loop) finishRunStep(ctx context.Context, c runCompletion, result *LoopR
 // Item handoffs can allocate a generation inside a pass that already has one.
 // Their observations need not be published in generation order.
 func (l *Loop) countGeneration(result *LoopResult, tickID string) {
-	if tickID == "" {
+	if result == nil || tickID == "" {
 		return
 	}
 	l.mu.Lock()

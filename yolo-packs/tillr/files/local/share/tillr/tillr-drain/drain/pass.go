@@ -1577,8 +1577,7 @@ func (c runCompletion) fromCoordinator() bool {
 // passPlans takes one read of the world. Application takes one write transaction per
 // item, in this same rank order. The clock is only an observation for lease checks.
 func (l *Loop) passPlans(ctx context.Context, at time.Time) ([]plannedApplication, []LaneLease, error) {
-	generation := ""
-	return l.passPlansGeneration(ctx, at, &generation)
+	return l.passPlansMode(ctx, at, nil)
 }
 
 func (l *Loop) passPlansGeneration(ctx context.Context, at time.Time, generation *string) ([]plannedApplication, []LaneLease, error) {
@@ -1621,8 +1620,19 @@ func (l *Loop) passPlansMode(ctx context.Context, at time.Time, generation *stri
 		return nil, nil, err
 	}
 	defer s.Close()
-	if _, err := l.reapDeadAndExpired(ctx, at, generation); err != nil {
+	var localGen string
+	reapGen := generation
+	if reapGen == nil {
+		reapGen = &localGen
+	}
+	beforeGen := *reapGen
+	if _, err := l.reapDeadAndExpired(ctx, at, reapGen); err != nil {
 		return nil, nil, err
+	}
+	if generation == nil && *reapGen != "" && *reapGen != beforeGen {
+		if err := l.recordReapPassTiming(ctx, *reapGen, at); err != nil {
+			return nil, nil, err
+		}
 	}
 	if err := l.releaseIdleHeldCandidates(ctx); err != nil {
 		return nil, nil, err
@@ -3096,6 +3106,7 @@ func (l *Loop) passMode(ctx context.Context, result *LoopResult) (stop string, e
 	var mainSHA string
 	var splitClosingWorked bool
 	var maintenanceDrained int
+	var inlineReapGeneration string
 	if purePass {
 		// Pure scheduling pass (D-SN1): housekeeping, document sync, trunk proof,
 		// and GC run in their own background actors without holding the pass lock.
@@ -3119,16 +3130,24 @@ func (l *Loop) passMode(ctx context.Context, result *LoopResult) (stop string, e
 		if stop != "" || err != nil {
 			return stop, err
 		}
-		if err := l.runInlineHousekeeping(ctx, result); err != nil {
+		if err := l.runInlineHousekeeping(ctx, result, &inlineReapGeneration); err != nil {
+			if inlineReapGeneration != "" {
+				_ = l.recordReapPassTiming(ctx, inlineReapGeneration, l.cfg.Now().UTC())
+				l.countGeneration(result, inlineReapGeneration)
+			}
 			return "", err
 		}
 		mainSHA = l.cachedTrunkTip()
 		if err := l.timePassPhase("check_stop_requested", func() error { return l.checkStopRequested(ctx) }); err != nil {
+			if inlineReapGeneration != "" {
+				_ = l.recordReapPassTiming(ctx, inlineReapGeneration, l.cfg.Now().UTC())
+				l.countGeneration(result, inlineReapGeneration)
+			}
 			return "", err
 		}
 	}
 	at := l.cfg.Now().UTC()
-	timing := &PassTiming{AtMS: at.UnixMilli(), GateBudgetMS: l.gateBudget.Milliseconds()}
+	timing := &PassTiming{TickID: inlineReapGeneration, AtMS: at.UnixMilli(), GateBudgetMS: l.gateBudget.Milliseconds()}
 	defer func() {
 		endAlarms := l.startPassPhase("report_alarms")
 		l.reportAlarms(ctx, at)

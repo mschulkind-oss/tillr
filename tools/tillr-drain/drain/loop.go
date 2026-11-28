@@ -1230,7 +1230,7 @@ func (l *Loop) Run(ctx context.Context) (result LoopResult, err error) {
 		if !l.nonLanding {
 			stopTrunkProof = l.startTrunkProofActor(ctx, &result)
 		}
-		stopGC = l.startGCActor(ctx)
+		stopGC = l.startGCActor(ctx, &result)
 		stopStage = l.startStageCoordinator(ctx, &result)
 		stopLaunch = l.startLaunchCoordinator(ctx, &result)
 		stopExamine = l.startExamineCoordinator(ctx, &result)
@@ -5465,7 +5465,7 @@ func (l *Loop) seedActorCaches(ctx context.Context, result *LoopResult) error {
 	if err := l.runSyncStep(ctx, result, true); err != nil {
 		return err
 	}
-	if err := l.runGCStep(ctx); err != nil {
+	if err := l.runGCStep(ctx, result); err != nil {
 		return err
 	}
 	return nil
@@ -5474,8 +5474,8 @@ func (l *Loop) seedActorCaches(ctx context.Context, result *LoopResult) error {
 // runInlineHousekeeping runs the three background actors' work inline when
 // background actors are disabled (the pollOnly test seam or direct passMode
 // unit tests).
-func (l *Loop) runInlineHousekeeping(ctx context.Context, result *LoopResult) error {
-	if err := l.runGCStep(ctx); err != nil {
+func (l *Loop) runInlineHousekeeping(ctx context.Context, result *LoopResult, generation *string) error {
+	if err := l.runGCStepGeneration(ctx, result, generation); err != nil {
 		return err
 	}
 	if !l.nonLanding {
@@ -5502,7 +5502,7 @@ func (l *Loop) settleActorsBeforeDrained(ctx context.Context, result *LoopResult
 	}
 	beforeRolling := l.rollingRuns(result)
 
-	if err := l.runGCStep(ctx); err != nil {
+	if err := l.runGCStep(ctx, result); err != nil {
 		return false, err
 	}
 	if !l.nonLanding {

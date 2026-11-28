@@ -111,7 +111,7 @@ func TestBackgroundActorsSyncTrunkProofAndGC(t *testing.T) {
 	defer stopSync()
 	stopTrunk := l.startTrunkProofActor(ctx, result)
 	defer stopTrunk()
-	stopGC := l.startGCActor(ctx)
+	stopGC := l.startGCActor(ctx, result)
 	defer stopGC()
 
 	// Advance trunk on disk and wake all three actors.
