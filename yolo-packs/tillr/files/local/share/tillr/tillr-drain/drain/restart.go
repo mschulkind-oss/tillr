@@ -65,11 +65,12 @@ func (l *Loop) publishDrainBuild(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	carriedRestart := os.Getenv(restart.RequestEnv)
 	fact := restart.BuildFact{
 		Role: restart.RoleDrain, Revision: l.build.Revision, Time: l.build.Time,
 		Modified: l.build.Modified, Digest: l.build.Digest, Executable: l.build.Executable,
 		PID: os.Getpid(), At: now,
-		RestartRequest: os.Getenv(restart.RequestEnv),
+		RestartRequest: carriedRestart,
 		SessionID:      sessionID,
 		LoopOwner:      here,
 	}
@@ -91,7 +92,7 @@ func (l *Loop) publishDrainBuild(ctx context.Context) error {
 				fact.RestartRequest = pendingReq.ID
 			}
 		}
-		if fact.RestartRequest == "" {
+		if carriedRestart == "" {
 			r := tx.Reader()
 			var seq int64
 			var kind string
@@ -102,16 +103,18 @@ func (l *Loop) publishDrainBuild(ctx context.Context) error {
 			).Scan(&seq, &kind, &payload)
 			switch {
 			case err == nil && kind == StopRequestedKind:
-				var stop struct {
-					ID string `json:"id"`
-				}
-				if err := json.Unmarshal(payload, &stop); err != nil {
-					return err
-				}
-				if stop.ID != "" {
-					fact.StopRequest = stop.ID
-				} else {
-					fact.StopRequest = "stop-drain"
+				if fact.RestartRequest == "" {
+					var stop struct {
+						ID string `json:"id"`
+					}
+					if err := json.Unmarshal(payload, &stop); err != nil {
+						return err
+					}
+					if stop.ID != "" {
+						fact.StopRequest = stop.ID
+					} else {
+						fact.StopRequest = "stop-drain"
+					}
 				}
 			case err == nil:
 				var prevBuild restart.BuildFact
@@ -135,11 +138,15 @@ func (l *Loop) publishDrainBuild(ctx context.Context) error {
 				).Scan(&prevSessionID, &stopRequested, &ownerRaw, &nextPassAt, &endedAt)
 				switch {
 				case errors.Is(sErr, sql.ErrNoRows):
-					fact.Initial = true
+					if fact.RestartRequest == "" {
+						fact.Initial = true
+					}
 				case sErr != nil:
 					return sErr
 				case stopRequested > 0:
-					fact.StopRequest = "drain_sessions"
+					if fact.RestartRequest == "" {
+						fact.StopRequest = "drain_sessions"
+					}
 				default:
 					var prevOwner *presence.Owner
 					if ownerRaw.Valid && ownerRaw.String != "" {

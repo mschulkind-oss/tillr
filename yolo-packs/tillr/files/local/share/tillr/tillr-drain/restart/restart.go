@@ -676,8 +676,8 @@ type BuildFact struct {
 	SessionID string `json:"session_id,omitempty"`
 	// LoopOwner identifies the process and process domain of the loop that started.
 	LoopOwner *presence.Owner `json:"loop_owner,omitempty"`
-	// SessionRelaunch is true when this drain start follows a dead prior foreign-domain
-	// loop that ended without a recorded loop fault, stop request, or restart request.
+	// SessionRelaunch is true when this cold drain start follows a dead prior foreign-domain
+	// loop that ended without a recorded loop fault, stop request, or in-place restart request.
 	SessionRelaunch bool `json:"session_relaunch,omitempty"`
 	// PriorDomain is the prior loop's process domain when SessionRelaunch is true.
 	PriorDomain string `json:"prior_domain,omitempty"`

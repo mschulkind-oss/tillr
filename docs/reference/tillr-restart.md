@@ -86,10 +86,11 @@ through three append-only event kinds and no table of its own:
   unconsumed `drain.stop-requested` ID or `"drain_sessions"` pre-event fallback),
   `initial` (`true` on the first drain start in a store with no prior drain
   build or session), `session_id`, `loop_owner` (`{pid, start, domain, uid}`),
-  `session_relaunch` (`true` when started in a new process domain after a dead
+  `session_relaunch` (`true` on a cold start in a new process domain after a dead
   prior foreign-domain loop with no prior `drain.loop-ended` `stop == "fault"`,
-  no `restart_request`, and no `stop_request`), and `prior_domain` (the prior
-  loop's process domain when `session_relaunch` is `true`).
+  no carried in-place `restart_request`, and no `stop_request`, including when a
+  pending `drain.restart-request` from `tillr-drain keep` is also recorded), and
+  `prior_domain` (the prior loop's process domain when `session_relaunch` is `true`).
 
 ### Resolving and comparing the candidate binary
 

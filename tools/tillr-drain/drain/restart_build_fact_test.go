@@ -334,6 +334,41 @@ func TestDrainBuildStartedSessionRelaunchProvenance(t *testing.T) {
 		}
 	})
 
+	t.Run("dead foreign domain with pending restart request", func(t *testing.T) {
+		h := newRestartHarness(t, []byte("drain build"), nil)
+		prev := foreignOwner(t)
+		identity, err := processStoreIdentity(h.f.storePath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pf, err := openLoopPresence(identity, prev)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := pf.Close(); err != nil {
+			t.Fatal(err)
+		}
+		publishPrior(t, h.f, "prior-foreign-keep-start", &prev)
+		req, err := restart.FileWithReason(ctx, h.f.storePath, restart.RoleDrain, "operator", "operator start (tillr-drain keep)", stopClock)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if err := h.l.adoptRestart(ctx); err != nil {
+			t.Fatal(err)
+		}
+		got := readLatestDrainBuildFields(t, h.f.storePath)
+		if got.restartType.String != "text" || got.restartVal.String != req.ID {
+			t.Fatalf("restart_request = %+v, want %q", got, req.ID)
+		}
+		if got.relaunchType.String != "true" || got.priorVal.String != prev.Domain {
+			t.Fatalf("dead foreign domain with pending restart request = %+v, want session_relaunch=true prior_domain=%q", got, prev.Domain)
+		}
+		if got.stopType.Valid || got.initialType.Valid {
+			t.Fatalf("dead foreign domain with pending restart request must omit stop/initial, got %+v", got)
+		}
+	})
+
 	t.Run("dead foreign domain across reboot", func(t *testing.T) {
 		h := newRestartHarness(t, []byte("drain build"), nil)
 		prev := foreignOwner(t)

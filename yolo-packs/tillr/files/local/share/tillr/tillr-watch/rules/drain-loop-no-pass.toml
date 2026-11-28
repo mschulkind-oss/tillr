@@ -7,12 +7,13 @@ scope = "core"
 severity = "warning"
 
 [rule.reads]
-events = ["drain.loop-pass"]
+events = ["drain.loop-pass", "drain.build-started"]
 
 [rule.when]
 group_by = "global"
 pattern = "duration_without_event"
 after = 'event.kind == "drain.loop-pass"'
+clear_when = 'event.kind == "drain.build-started" and event.role == "drain" and event.session_relaunch == true'
 threshold_duration = "5m"
 window = "24h"
 
