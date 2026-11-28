@@ -117,7 +117,7 @@ func waitingFace(args []string) (record.Envelope, int) {
 			err = e
 		} else {
 			err = s.ReadTx(ctx, func(r *store.Reader) error {
-				quotas, e := waitingBackendQuotas(r, now)
+				quotas, e := waitingBackendQuotasWithRoot(r, now, *root)
 				if e != nil {
 					return e
 				}
@@ -856,7 +856,7 @@ func assembleWaitingAt(r *store.Reader, questions vantage.QuestionSource, storeP
 	if err != nil {
 		return nil, err
 	}
-	quotas, err := waitingBackendQuotas(r, now)
+	quotas, err := waitingBackendQuotasWithRoot(r, now, waitingRoot(storePath, questions))
 	if err != nil {
 		return nil, err
 	}
@@ -899,6 +899,16 @@ func assembleWaitingAt(r *store.Reader, questions vantage.QuestionSource, storeP
 
 // Window rows are optional on old stores, and disappear at (not after) reset.
 // The waiting face reads the durable hold; it never guesses from a run's failure.
+func waitingRoot(storePath string, questions vantage.QuestionSource) string {
+	if vq, ok := questions.(*vantage.VantageQuestions); ok && vq != nil && vq.Root != "" {
+		return vq.Root
+	}
+	if storePath != "" && filepath.Base(filepath.Dir(storePath)) == ".tillr" {
+		return filepath.Dir(filepath.Dir(storePath))
+	}
+	return ""
+}
+
 func waitingBackendWindows(r *store.Reader, now time.Time) ([]waitingRow, error) {
 	rows, err := r.Query(`SELECT backend, kind, reset_at FROM backend_windows WHERE reset_at > ? ORDER BY backend`, now.UnixMilli())
 	if isMissingTable(err) {

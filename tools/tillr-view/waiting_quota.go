@@ -10,6 +10,10 @@ import (
 )
 
 func waitingBackendQuotas(r *store.Reader, now time.Time) ([]waitingRow, error) {
+	return waitingBackendQuotasWithRoot(r, now, "")
+}
+
+func waitingBackendQuotasWithRoot(r *store.Reader, now time.Time, root string) ([]waitingRow, error) {
 	statuses, err := quota.ReadStatuses(r)
 	if err != nil {
 		return nil, err
@@ -21,6 +25,37 @@ func waitingBackendQuotas(r *store.Reader, now time.Time) ([]waitingRow, error) 
 	refusal := map[string]waitingRow{}
 	for _, row := range legacy {
 		refusal[row.ItemID] = row
+	}
+	summary, activeBackends, _ := readProfileState(root)
+	anyActiveClosed := false
+	if len(activeBackends) > 0 {
+		for _, q := range statuses {
+			if !activeBackends[q.Backend] {
+				continue
+			}
+			if _, ok := refusal["backend:"+q.Backend]; ok {
+				anyActiveClosed = true
+				break
+			}
+			for _, w := range q.Windows {
+				if w.Fraction >= 1-q.Reserve {
+					anyActiveClosed = true
+					break
+				}
+			}
+			if anyActiveClosed {
+				break
+			}
+		}
+		if !anyActiveClosed {
+			for id := range refusal {
+				name := strings.TrimPrefix(id, "backend:")
+				if activeBackends[name] {
+					anyActiveClosed = true
+					break
+				}
+			}
+		}
 	}
 	out := []waitingRow{}
 	for _, q := range statuses {
@@ -63,7 +98,12 @@ func waitingBackendQuotas(r *store.Reader, now time.Time) ([]waitingRow, error) 
 			} else {
 				parts = append(parts, "reopens "+reopen.UTC().Format(time.RFC3339))
 			}
-			class, mover = "alarm", "operator; wait for the reset and a fresh quota reading"
+			if len(activeBackends) > 0 && !activeBackends[q.Backend] && !anyActiveClosed {
+				class = "waits on work"
+				mover = inactiveProfileQuotaMover(summary, q.Backend, reopen)
+			} else {
+				class, mover = "alarm", "operator; wait for the reset and a fresh quota reading"
+			}
 		default:
 			parts = append(parts, "open now")
 		}
@@ -84,6 +124,38 @@ func waitingBackendQuotas(r *store.Reader, now time.Time) ([]waitingRow, error) 
 		return nil, err
 	}
 	return append(out, paused...), nil
+}
+
+func inactiveProfileQuotaMover(summary *profileSummary, backend string, reopen time.Time) string {
+	activeName := ""
+	var resetStr, reopenMaxStr string
+	if summary != nil {
+		activeName = summary.Profile
+		for _, sp := range summary.SkippedProfiles {
+			if sp.Backend == backend {
+				if sp.ResetAt != nil {
+					resetStr = sp.ResetAt.UTC().Format(time.RFC3339)
+				}
+				if sp.ReopenThreshold > 0 {
+					reopenMaxStr = fmt.Sprintf("%g", sp.ReopenThreshold)
+				}
+				break
+			}
+		}
+	}
+	if resetStr == "" && !reopen.IsZero() {
+		resetStr = reopen.UTC().Format(time.RFC3339)
+	}
+	switch {
+	case activeName != "" && resetStr != "" && reopenMaxStr != "":
+		return fmt.Sprintf("the loop; switched to %s, switches back after %s when <= %s", activeName, resetStr, reopenMaxStr)
+	case activeName != "" && resetStr != "":
+		return fmt.Sprintf("the loop; switched to %s, switches back after %s", activeName, resetStr)
+	case activeName != "":
+		return fmt.Sprintf("the loop; profile %s is in force", activeName)
+	default:
+		return "the loop; an open profile is in force"
+	}
 }
 
 func waitingQuotaPauses(r *store.Reader, backends map[string]waitingRow) ([]waitingRow, error) {

@@ -82,7 +82,8 @@ type statusPayload struct {
 	// null rather than a second arithmetic.
 	Counts *boardCounts `json:"counts"`
 	// Only a board report from a store carries publication state.
-	Push *pushSummary `json:"push,omitempty"`
+	Push    *pushSummary    `json:"push,omitempty"`
+	Profile *profileSummary `json:"profile,omitempty"`
 }
 
 // gateSummary is the gate's measurement as a report reads it: the last tick's gate wall

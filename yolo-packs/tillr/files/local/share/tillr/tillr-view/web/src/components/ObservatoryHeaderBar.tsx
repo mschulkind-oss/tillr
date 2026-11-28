@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { localTime } from "../models/board";
 // The board's header: the store's identity, the counts an operator reads first, and the one
 // line saying what is moving this screen. Every number here comes from the snapshot's
@@ -22,7 +23,7 @@ import { durationText } from "../models/now";
 import { formatSnapshotLaneSummary } from "../models/lanes";
 import { FALLBACK_POLL_MS } from "../models/queries";
 import type { BoardCounts, BoardFilter, BoardView } from "../models/board";
-import type { ApiEnvelope, LaneView, PushSummary, RunningWorkSummary, SnapshotData } from "../models/types";
+import type { ApiEnvelope, LaneView, ProfileSummary, PushSummary, RunningWorkSummary, SnapshotData } from "../models/types";
 import { BackendAlarms } from "./BackendAlarms";
 
 export interface ObservatoryHeaderBarProps {
@@ -129,6 +130,98 @@ export function PushPill({ push }: { push?: PushSummary }) {
   return <span className={hold ? "push-pill push-pill--held" : "push-pill"} title={title}>
     {counts} unpublished{hold ? ` · ${hold}` : ""}
   </span>;
+}
+
+function formatUntilUTC(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const hh = String(d.getUTCHours()).padStart(2, "0");
+  const mm = String(d.getUTCMinutes()).padStart(2, "0");
+  return ` until ${hh}:${mm}Z`;
+}
+
+/** Shows the active seat profile (and fallback status when a preferred profile is bypassed). */
+export function ProfilePill({ profile }: { profile?: ProfileSummary | null }) {
+  const [open, setOpen] = useState(false);
+  if (!profile || (!profile.profile && !profile.profiles?.length)) return null;
+
+  const profiles = profile.profiles?.length ? profile.profiles : profile.profile ? [profile.profile] : [];
+  const active = profile.profile || profiles[profile.profile_index] || profiles[0] || "";
+  const isFallback = profile.profile_index > 0;
+  const preferred = profiles[0] || profile.switched_from || "";
+  const preferredSkipped = profile.skipped_profiles?.find((sp) => sp.profile === preferred) ?? profile.skipped_profiles?.[0];
+  const until = isFallback ? formatUntilUTC(preferredSkipped?.reset_at) : "";
+  const badgeLabel = isFallback && preferred ? `${active} · fallback from ${preferred}${until}` : active;
+
+  return (
+    <span className={isFallback ? "profile-pill profile-pill--fallback" : "profile-pill"}>
+      <button
+        type="button"
+        className="profile-pill__btn"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+        title={profile.why || `Seat profile: ${active}`}
+      >
+        {badgeLabel}
+      </button>
+      {open ? (
+        <div className="profile-pill__popover" role="dialog" aria-label="Seat profile details">
+          <div className="profile-pill__section">
+            <strong>Profiles</strong>
+            <ol className="profile-pill__list">
+              {profiles.map((name, i) => {
+                const inForce = i === profile.profile_index || (profiles.length === 1 && name === active);
+                return (
+                  <li key={name}>
+                    <span>{name}</span>
+                    {inForce ? <span className="profile-pill__active"> (in force)</span> : null}
+                  </li>
+                );
+              })}
+            </ol>
+          </div>
+          {profile.source ? (
+            <div className="profile-pill__meta">
+              <span>Source: {profile.source}</span>
+            </div>
+          ) : null}
+          {profile.why ? (
+            <div className="profile-pill__meta">
+              <span>Reason: {profile.why}</span>
+            </div>
+          ) : null}
+          {profile.switched_at ? (
+            <div className="profile-pill__meta">
+              <span>Switched at: {profile.switched_at}</span>
+            </div>
+          ) : null}
+          {profile.skipped_profiles?.length ? (
+            <div className="profile-pill__section">
+              <strong>Bypassed profiles</strong>
+              <ul className="profile-pill__skipped">
+                {profile.skipped_profiles.map((sp) => (
+                  <li key={`${sp.profile}:${sp.backend}`}>
+                    <div>
+                      <strong>{sp.profile}</strong> ({sp.backend})
+                    </div>
+                    <div>
+                      {sp.windows?.length
+                        ? sp.windows.map((w) => `${w.kind} ${w.fraction}`).join(", ")
+                        : "no windows"}{" "}
+                      · reserve {sp.reserve}
+                      {sp.reopen_threshold != null ? ` · reopen <= ${sp.reopen_threshold}` : ""}
+                      {sp.reset_at ? ` · resets ${sp.reset_at}` : ""}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </span>
+  );
 }
 
 /** RunningWorkPill is the header's always-visible running-work state: how many active
@@ -764,6 +857,7 @@ export function ObservatoryHeaderBar({
         <div className="head-meta__row">
           <LiveChip live={live} paused={paused} />
           <LoopBand drain={drain} />
+          <ProfilePill profile={drain.profile} />
           <RunningWorkPill runningWork={snapshot.data.running_work} lanes={snapshot.data.lanes} configured={drain.session?.lanes} />
           <PushPill push={snapshot.data.push} />
           <PauseControl

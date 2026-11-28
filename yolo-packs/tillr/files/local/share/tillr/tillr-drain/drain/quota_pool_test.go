@@ -303,3 +303,30 @@ func TestNewLoopRejectsConflictingQuotaGroupsAcrossProfiles(t *testing.T) {
 		t.Fatalf("NewLoop exit code = %d, want 2 (%v)", ExitCode(err), err)
 	}
 }
+
+func TestProfileStatusSuffixIncludesActiveAndFallbackReset(t *testing.T) {
+	resetAt := time.Date(2026, 11, 27, 20, 30, 0, 0, time.UTC)
+	l := &Loop{
+		policyState: PolicyState{
+			Profile:      "claude-sub",
+			Profiles:     []string{"claude-sub", "copilot-gemini"},
+			ProfileIndex: 0,
+		},
+	}
+	if got := l.profileStatusSuffix(); got != " profile=claude-sub" {
+		t.Fatalf("preferred profileStatusSuffix = %q, want %q", got, " profile=claude-sub")
+	}
+
+	l.policyState = PolicyState{
+		Profile:      "copilot-gemini",
+		Profiles:     []string{"claude-sub", "copilot-gemini"},
+		ProfileIndex: 1,
+		SkippedProfiles: []SkippedProfileQuota{
+			{Profile: "claude-sub", Backend: "claude-sonnet", ResetAt: &resetAt},
+		},
+	}
+	want := " profile=copilot-gemini (fallback from claude-sub; resets 2026-11-27T20:30:00Z)"
+	if got := l.profileStatusSuffix(); got != want {
+		t.Fatalf("fallback profileStatusSuffix = %q, want %q", got, want)
+	}
+}

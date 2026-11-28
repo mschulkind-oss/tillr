@@ -69,6 +69,24 @@ func statusText(p statusPayload) string {
 	if line := p.Push.text(); line != "" {
 		fmt.Fprintln(&b, line)
 	}
+	if p.Profile != nil {
+		var parts []string
+		if p.Profile.Profile != "" {
+			parts = append(parts, p.Profile.Profile)
+		}
+		if len(p.Profile.Profiles) > 0 {
+			parts = append(parts, fmt.Sprintf("(%d/%d of [%s])", p.Profile.ProfileIndex+1, len(p.Profile.Profiles), strings.Join(p.Profile.Profiles, ", ")))
+		}
+		if p.Profile.Source != "" {
+			parts = append(parts, "source="+p.Profile.Source)
+		}
+		if p.Profile.Why != "" {
+			parts = append(parts, p.Profile.Why)
+		}
+		if len(parts) > 0 {
+			fmt.Fprintf(&b, "profile: %s\n", strings.Join(parts, " "))
+		}
+	}
 	if p.HeavyFault != "" {
 		fmt.Fprintf(&b, "heavy status unavailable: %s\n", p.HeavyFault)
 	}

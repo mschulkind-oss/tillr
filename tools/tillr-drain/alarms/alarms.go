@@ -267,6 +267,13 @@ func quotaAlarms(r *store.Reader, now time.Time, policy *Policy) ([]Alarm, error
 	if err != nil {
 		return nil, err
 	}
+	if policy != nil {
+		for name := range active {
+			if _, ok := policy.Backends[name]; !ok {
+				delete(active, name)
+			}
+		}
+	}
 	configured := map[string]Backend{}
 	if policy != nil {
 		configured = policy.Backends
@@ -332,6 +339,25 @@ func quotaAlarms(r *store.Reader, now time.Time, policy *Policy) ([]Alarm, error
 			sinceText = easternTime(since)
 		}
 		active[name] = Alarm{Kind: Window, Backend: name, Since: sinceText, Cause: cause, Clears: clears, Command: quotaMove}
+	}
+	if policy != nil {
+		for name, q := range byBackend {
+			if _, ok := policy.Backends[name]; ok || q.Error == "" {
+				continue
+			}
+			sinceText := "not recorded"
+			if !q.ObservedAt.IsZero() {
+				sinceText = easternTime(q.ObservedAt)
+			}
+			active[name] = Alarm{
+				Kind:    Window,
+				Backend: name,
+				Since:   sinceText,
+				Cause:   "quota probe failed: " + q.Error,
+				Clears:  "a fresh successful quota reading below the reserve limit",
+				Command: quotaMove,
+			}
+		}
 	}
 	out := make([]Alarm, 0, len(active))
 	for _, a := range active {

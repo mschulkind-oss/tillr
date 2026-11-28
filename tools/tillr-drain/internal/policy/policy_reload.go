@@ -22,20 +22,34 @@ type StartOption struct {
 	Detail string `json:"detail,omitempty"`
 }
 
+// SkippedProfileQuota records why a higher-ranked profile in the list is currently bypassed.
+type SkippedProfileQuota struct {
+	Profile         string        `json:"profile"`
+	Backend         string        `json:"backend"`
+	Windows         []QuotaWindow `json:"windows,omitempty"`
+	Reserve         float64       `json:"reserve"`
+	ReopenThreshold float64       `json:"reopen_threshold,omitempty"`
+	ResetAt         *time.Time    `json:"reset_at,omitempty"`
+}
+
 // PolicyState is the last policy accepted by a loop, not a fresh interpretation
 // of the file on disk. Content retains seat lists in their original JSON shape.
 type PolicyState struct {
-	Ref          string        `json:"ref"`
-	Source       string        `json:"source,omitempty"`
-	Profile      string        `json:"profile,omitempty"`
-	Profiles     []string      `json:"profiles,omitempty"`
-	ProfileIndex int           `json:"profile_index"`
-	Hash         string        `json:"hash"`
-	DiskHash     string        `json:"disk_hash"`
-	Content      string        `json:"content"`
-	Refusal      string        `json:"refusal,omitempty"`
-	StartOptions []StartOption `json:"start_options,omitempty"`
-	At           time.Time     `json:"at"`
+	Ref             string                `json:"ref"`
+	Source          string                `json:"source,omitempty"`
+	Profile         string                `json:"profile,omitempty"`
+	Profiles        []string              `json:"profiles,omitempty"`
+	ProfileIndex    int                   `json:"profile_index"`
+	Why             string                `json:"why,omitempty"`
+	SwitchedFrom    string                `json:"switched_from,omitempty"`
+	SwitchedAt      *time.Time            `json:"switched_at,omitempty"`
+	SkippedProfiles []SkippedProfileQuota `json:"skipped_profiles,omitempty"`
+	Hash            string                `json:"hash"`
+	DiskHash        string                `json:"disk_hash"`
+	Content         string                `json:"content"`
+	Refusal         string                `json:"refusal,omitempty"`
+	StartOptions    []StartOption         `json:"start_options,omitempty"`
+	At              time.Time             `json:"at"`
 }
 
 type PolicyChange struct {

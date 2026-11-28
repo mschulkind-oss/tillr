@@ -1025,12 +1025,19 @@ func NewLoop(cfg LoopConfig) (*Loop, error) {
 		if activeProfile == "" && len(cfg.PolicyProfiles) > 0 {
 			activeProfile = cfg.PolicyProfiles[0]
 		}
+		why := ""
+		if len(cfg.PolicyProfiles) > 1 {
+			why = fmt.Sprintf("preferred profile (1/%d); all quota windows open", len(cfg.PolicyProfiles))
+		} else if activeProfile != "" {
+			why = "preferred profile; all quota windows open"
+		}
 		l.policyState = PolicyState{
 			Ref:          cfg.PolicyRef,
 			Source:       cfg.PolicySource,
 			Profile:      activeProfile,
 			Profiles:     append([]string(nil), cfg.PolicyProfiles...),
 			ProfileIndex: 0,
+			Why:          why,
 			Hash:         hash,
 			DiskHash:     hash,
 			Content:      string(raw),
@@ -1214,6 +1221,9 @@ func (l *Loop) Run(ctx context.Context) (result LoopResult, err error) {
 	}
 	if len(l.policyState.StartOptions) > 0 {
 		l.reportf("%s\n", FormatStartOptionsLine(l.policyState.StartOptions))
+	}
+	if line := l.ProfileStartLine(); line != "" {
+		l.reportf("%s\n", line)
 	}
 	// Cost is observation only. An unavailable measurement is explicit, but
 	// cannot withhold work that the planner would otherwise dispatch.
@@ -1788,7 +1798,7 @@ func (l *Loop) planNothing(ctx context.Context, holds []Decision, leases []LaneL
 		detail := fmt.Sprintf("a full tick planned nothing dispatchable: %s", held)
 		if !l.cfg.ExitWhenDrained {
 			if l.waitingDetail != detail {
-				l.reportf("loop: a full tick planned nothing dispatchable: %s; waiting for a trigger\n", waitingHolds(holds))
+				l.reportf("loop: a full tick planned nothing dispatchable: %s; waiting for a trigger%s\n", waitingHolds(holds), l.profileStatusSuffix())
 			}
 			l.waitingDetail = detail
 			result.Detail = detail
@@ -1815,7 +1825,7 @@ func (l *Loop) planNothing(ctx context.Context, holds []Decision, leases []LaneL
 			return StopLanesLeased, nil
 		}
 	}
-	l.reportf("loop: %s; waiting for a lease expiry or new store fact before re-planning\n", held)
+	l.reportf("loop: %s; waiting for a lease expiry or new store fact before re-planning%s\n", held, l.profileStatusSuffix())
 	return l.waitForTrigger(ctx, leases, at, result)
 }
 
@@ -1850,10 +1860,93 @@ func (l *Loop) reportRestartWaiting(gateWaiting, conflictWaiting []Decision, res
 		if len(gateWaiting) == 0 && len(conflictWaiting) > 0 {
 			waitFor = "waiting for the restart answer or a trunk move"
 		}
-		l.reportf("loop: %s; %s\n", strings.Join(lineParts, "; "), waitFor)
+		l.reportf("loop: %s; %s%s\n", strings.Join(lineParts, "; "), waitFor, l.profileStatusSuffix())
 	}
 	l.waitingDetail = detail
 	result.Detail = detail
+}
+
+// FormatProfileStartLine formats the active profile, ordered profile list, source,
+// and reason for loop startup and --check output.
+func FormatProfileStartLine(state PolicyState) string {
+	if state.Profile == "" && len(state.Profiles) == 0 {
+		return ""
+	}
+	active := state.Profile
+	profiles := state.Profiles
+	if len(profiles) == 0 && active != "" {
+		profiles = []string{active}
+	}
+	idx := state.ProfileIndex
+	if idx < 0 || idx >= len(profiles) {
+		idx = 0
+	}
+	if active == "" && len(profiles) > 0 {
+		active = profiles[idx]
+	}
+	var meta []string
+	if len(profiles) > 0 {
+		meta = append(meta, fmt.Sprintf("%d/%d of [%s]", idx+1, len(profiles), strings.Join(profiles, ", ")))
+	}
+	if state.Source != "" {
+		meta = append(meta, "source "+state.Source)
+	}
+	line := fmt.Sprintf("loop: profile %s", active)
+	if len(meta) > 0 {
+		line += " (" + strings.Join(meta, ", ") + ")"
+	}
+	if state.Why != "" {
+		line += ": " + state.Why
+	}
+	return line
+}
+
+// ProfileStartLine returns the formatted profile startup line for this loop, or "".
+func (l *Loop) ProfileStartLine() string {
+	l.policyMu.RLock()
+	state := l.policyState
+	l.policyMu.RUnlock()
+	return FormatProfileStartLine(state)
+}
+
+func (l *Loop) profileStatusSuffix() string {
+	l.policyMu.RLock()
+	state := l.policyState
+	l.policyMu.RUnlock()
+	if state.Profile == "" && len(state.Profiles) == 0 {
+		return ""
+	}
+	active := state.Profile
+	if active == "" && state.ProfileIndex >= 0 && state.ProfileIndex < len(state.Profiles) {
+		active = state.Profiles[state.ProfileIndex]
+	}
+	if active == "" {
+		return ""
+	}
+	suffix := " profile=" + active
+	if state.ProfileIndex > 0 && len(state.Profiles) > 0 {
+		preferred := state.Profiles[0]
+		var earliest *time.Time
+		for i := range state.SkippedProfiles {
+			sp := &state.SkippedProfiles[i]
+			if sp.ResetAt == nil {
+				continue
+			}
+			if sp.Profile == preferred {
+				earliest = sp.ResetAt
+				break
+			}
+			if earliest == nil || sp.ResetAt.Before(*earliest) {
+				earliest = sp.ResetAt
+			}
+		}
+		if earliest != nil {
+			suffix += fmt.Sprintf(" (fallback from %s; resets %s)", preferred, earliest.UTC().Format(time.RFC3339))
+		} else {
+			suffix += fmt.Sprintf(" (fallback from %s)", preferred)
+		}
+	}
+	return suffix
 }
 
 func holdText(hold Decision) string {

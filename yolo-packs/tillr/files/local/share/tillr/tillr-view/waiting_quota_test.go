@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -115,6 +116,121 @@ func TestWaitingQuotaShowsOpenReserveAndAllWindows(t *testing.T) {
 			t.Errorf("idle=%+v", rows)
 		}
 		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWaitingBackendQuotasWithRootInactiveVsAllClosedAndProbeError(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, ".tillr", "state.db")
+	s, err := store.InitFixture(context.Background(), dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	at := time.Date(2026, 11, 27, 18, 0, 0, 0, time.UTC)
+	reset := at.Add(2 * time.Hour)
+	closedWin := `[{"kind":"five_hour","fraction":0.85,"reset_at":"` + reset.Format(time.RFC3339) + `"}]`
+	openWin := `[{"kind":"five_hour","fraction":0.10,"reset_at":"` + reset.Format(time.RFC3339) + `"}]`
+
+	if err := s.WriteTx(context.Background(), func(tx *store.Tx) error {
+		if _, err := tx.Exec(quota.DDL); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`INSERT INTO backend_quota VALUES ('claude','["probe-claude"]',?,0.2,?,'')`, at.UnixMilli(), closedWin); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`INSERT INTO backend_quota VALUES ('copilot','["probe-copilot"]',?,0.2,?,'')`, at.UnixMilli(), openWin); err != nil {
+			return err
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Active profile is copilot (open); claude (inactive profile) is closed -> waits on work, NOT alarm.
+	writeTestLoopPolicyState(t, root, map[string]any{
+		"profile":       "copilot-gemini",
+		"profiles":      []string{"claude-sub", "copilot-gemini"},
+		"profile_index": 1,
+		"source":        "toml",
+		"skipped_profiles": []map[string]any{
+			{
+				"profile":          "claude-sub",
+				"backend":          "claude",
+				"reserve":          0.2,
+				"reopen_threshold": 0.7,
+				"reset_at":         reset.Format(time.RFC3339),
+			},
+		},
+		"content": `{"default_backend":"copilot","seats":{"build":"copilot"},"backends":{"copilot":{"adapter":"true","model":"m","effort":"low"}}}`,
+	})
+	if err := s.ReadTx(context.Background(), func(r *store.Reader) error {
+		rows, err := waitingBackendQuotasWithRoot(r, at, root)
+		if err != nil {
+			return err
+		}
+		byID := map[string]waitingRow{}
+		for _, row := range rows {
+			byID[row.ItemID] = row
+		}
+		claudeRow := byID["backend:claude"]
+		if claudeRow.Class != "waits on work" {
+			t.Fatalf("inactive closed profile class = %q, want %q (row=%+v)", claudeRow.Class, "waits on work", claudeRow)
+		}
+		if !strings.Contains(claudeRow.Mover, "switched to copilot-gemini") || !strings.Contains(claudeRow.Mover, "<= 0.7") {
+			t.Fatalf("inactive closed profile mover = %q", claudeRow.Mover)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// All profiles closed (copilot also closed) -> claude and copilot both alarm.
+	if err := s.WriteTx(context.Background(), func(tx *store.Tx) error {
+		_, err := tx.Exec(`UPDATE backend_quota SET windows=? WHERE backend='copilot'`, closedWin)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ReadTx(context.Background(), func(r *store.Reader) error {
+		rows, err := waitingBackendQuotasWithRoot(r, at, root)
+		if err != nil {
+			return err
+		}
+		for _, row := range rows {
+			if row.Class != "alarm" {
+				t.Fatalf("all profiles closed: %s class = %q, want alarm", row.ItemID, row.Class)
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Copilot open again, but claude has a probe error -> claude MUST still alarm.
+	if err := s.WriteTx(context.Background(), func(tx *store.Tx) error {
+		if _, err := tx.Exec(`UPDATE backend_quota SET windows=? WHERE backend='copilot'`, openWin); err != nil {
+			return err
+		}
+		_, err := tx.Exec(`UPDATE backend_quota SET windows='[]', error='auth expired' WHERE backend='claude'`)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ReadTx(context.Background(), func(r *store.Reader) error {
+		rows, err := waitingBackendQuotasWithRoot(r, at, root)
+		if err != nil {
+			return err
+		}
+		for _, row := range rows {
+			if row.ItemID == "backend:claude" && row.Class != "alarm" {
+				t.Fatalf("probe error on inactive profile class = %q, want alarm", row.Class)
+			}
+		}
+		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}

@@ -372,6 +372,26 @@ export interface RestartAnswer {
   at: string;
 }
 
+export interface SkippedProfileQuota {
+  profile: string;
+  backend: string;
+  windows?: { kind: string; fraction: number; reset_at: string | null }[];
+  reserve: number;
+  reopen_threshold?: number;
+  reset_at?: string | null;
+}
+
+export interface ProfileSummary {
+  profile?: string;
+  profiles?: string[];
+  profile_index: number;
+  source?: string;
+  why?: string;
+  switched_from?: string;
+  switched_at?: string | null;
+  skipped_profiles?: SkippedProfileQuota[];
+}
+
 export interface DrainSummary {
   /** The latest answered restart request of each role, keyed `drain` and `view`. A role
    * never asked has no key, and a server older than the field sends none. */
@@ -379,6 +399,7 @@ export interface DrainSummary {
   active: boolean;
   stop?: StopExplanation | null;
   repeated_stop?: RepeatedStop | null;
+  profile?: ProfileSummary | null;
   heartbeat_interval_ms?: number;
   session?: {
     session_id: string;

@@ -753,3 +753,49 @@ func TestProfileListPrecedenceRefusalsAndValidation(t *testing.T) {
 		}
 	})
 }
+
+func TestLoopProfileStartLineAndWaitingStatusLine(t *testing.T) {
+	prefLine := drain.FormatProfileStartLine(drain.PolicyState{
+		Profile:      "claude-sub",
+		Profiles:     []string{"claude-sub", "copilot-gemini"},
+		ProfileIndex: 0,
+		Source:       "toml",
+		Why:          "preferred profile (1/2); all quota windows open",
+	})
+	wantPref := "loop: profile claude-sub (1/2 of [claude-sub, copilot-gemini], source toml): preferred profile (1/2); all quota windows open"
+	if prefLine != wantPref {
+		t.Fatalf("FormatProfileStartLine = %q, want %q", prefLine, wantPref)
+	}
+
+	// Verify --check emits the profile start line on stderr.
+	root, storePath, tmpl, runBin, itemBin, passStub, configDir, clearEnv := setupLoopOptionTestRepo(t)
+	defer clearEnv()
+	t.Setenv("TILLR_CONFIG_DIR", configDir)
+	tomlProf, err := os.ReadFile(filepath.Join(configDir, "backend-policy.tomlprof.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(configDir, "backend-policy.alpha.json"), string(tomlProf))
+	writeFile(t, filepath.Join(configDir, "backend-policy.beta.json"), string(tomlProf))
+
+	code, out := invoke(t,
+		"loop",
+		"--root", root,
+		"--store", storePath,
+		"--run-bin", runBin,
+		"--item-bin", itemBin,
+		"--brief-template", tmpl,
+		"--gate", passStub,
+		"--land", passStub,
+		"--verdict", passStub,
+		"--profiles", "alpha,beta",
+		"--check",
+	)
+	if code != 0 {
+		t.Fatalf("loop --check exited %d:\n%s", code, out)
+	}
+	wantCheck := "loop: profile alpha (1/2 of [alpha, beta], source option): preferred profile (1/2); all quota windows open"
+	if !strings.Contains(string(out), wantCheck) {
+		t.Fatalf("loop --check output missing %q:\n%s", wantCheck, out)
+	}
+}

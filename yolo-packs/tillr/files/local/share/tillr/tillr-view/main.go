@@ -211,6 +211,9 @@ func statusFaceFormat(args []string, asText *bool) (record.Envelope, int) {
 			}
 		}
 	}
+	if prof, _, err := readProfileState(*root); err == nil && prof != nil {
+		payload.Profile = prof
+	}
 	return envelope("view.status", payload), code
 }
 

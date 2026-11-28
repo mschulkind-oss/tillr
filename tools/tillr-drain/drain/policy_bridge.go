@@ -15,6 +15,7 @@ type (
 	Backend                   = policy.Backend
 	Policy                    = policy.Policy
 	PolicyState               = policy.PolicyState
+	SkippedProfileQuota       = policy.SkippedProfileQuota
 	StartOption               = policy.StartOption
 	policyChange              = policy.PolicyChange
 	seatEscalation            = policy.SeatEscalation

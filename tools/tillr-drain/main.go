@@ -1459,6 +1459,9 @@ func loopFace(args []string) int {
 			fmt.Fprintln(os.Stdout, drain.SchemaRollCheckLine)
 		}
 		fmt.Fprintln(os.Stderr, repositorySettings.StartupLine())
+		if line := loop.ProfileStartLine(); line != "" {
+			fmt.Fprintln(os.Stderr, line)
+		}
 		return record.ExitOK
 	}
 	// Signals stop supervision only. Detached run faces retain their own lifetime;

@@ -754,6 +754,7 @@ type drainSummary struct {
 	LastStopReason      *string                   `json:"last_stop_reason"`
 	Stop                *stopExplanation          `json:"stop"`
 	RepeatedStop        *repeatedStop             `json:"repeated_stop,omitempty"`
+	Profile             *profileSummary           `json:"profile,omitempty"`
 	HeartbeatIntervalMS int64                     `json:"heartbeat_interval_ms"`
 	StopNote            string                    `json:"stop_note"`
 	LastDecision        *dispatchView             `json:"last_decision"`
@@ -1342,6 +1343,9 @@ func (s *server) snapshotBuild(r *store.Reader, req *http.Request, session *loop
 		HeartbeatIntervalMS: HeartbeatIntervalMS,
 		Build:               loopBuild,
 		BuildNote:           buildNote,
+	}
+	if prof, _, err := readProfileState(s.root); err == nil && prof != nil {
+		out.Drain.Profile = prof
 	}
 	for _, role := range []string{restart.RoleDrain, restart.RoleView} {
 		state, err := restart.ReadState(r, role)
