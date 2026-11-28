@@ -407,6 +407,26 @@ func readText(t *testing.T, path string) string {
 	return string(raw)
 }
 
+// assertCoordinatorGenerations checks that a loop running with standalone stage, gate, and
+// land coordinators recorded monotonic generation bounds spanning at least minTicks ticks.
+func assertCoordinatorGenerations(t *testing.T, result drain.LoopResult, minTicks int) {
+	t.Helper()
+	if result.Ticks < minTicks {
+		t.Fatalf("the loop recorded %d generation(s), want at least %d (%s)", result.Ticks, minTicks, result.Detail)
+	}
+	first, err := strconv.ParseInt(result.FirstGeneration, 10, 64)
+	if err != nil || first < 1 {
+		t.Fatalf("FirstGeneration = %q, want positive integer generation", result.FirstGeneration)
+	}
+	last, err := strconv.ParseInt(result.LastGeneration, 10, 64)
+	if err != nil || last < first {
+		t.Fatalf("generation bounds [%q..%q] are not monotonic", result.FirstGeneration, result.LastGeneration)
+	}
+	if span := last - first + 1; span < int64(result.Ticks) {
+		t.Fatalf("generation span [%d..%d] (%d) is smaller than result.Ticks (%d)", first, last, span, result.Ticks)
+	}
+}
+
 // Two consecutive ticks dispatch and record: the first tick's item is run, gated, landed and
 // given a verdict, and the second tick's item is a different one — the item that already
 // ran holds, which is A-NORETRY read through `runs.item_id`.
@@ -425,11 +445,12 @@ func TestTwoConsecutiveTicksDispatchAndRecord(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the loop failed: %v", err)
 	}
-	// Each item takes one pass to dispatch and one pass to settle, gate and land;
+	// Standalone stage, gate, and land coordinators allocate their own store generations;
 	// no count limits the work, and the freed lane is reused for the second item.
-	if result.Stop != drain.StopQueueDrained || result.Ticks != 4 {
-		t.Fatalf("the loop stopped %q after %d pass(es), want %q after 4", result.Stop, result.Ticks, drain.StopQueueDrained)
+	if result.Stop != drain.StopQueueDrained {
+		t.Fatalf("the loop stopped %q after %d generation(s), want %q", result.Stop, result.Ticks, drain.StopQueueDrained)
 	}
+	assertCoordinatorGenerations(t, result, 4)
 	if result.Dispatched != 2 || result.Landed != 2 {
 		t.Fatalf("the loop dispatched %d and landed %d, want 2 and 2", result.Dispatched, result.Landed)
 	}
@@ -503,10 +524,11 @@ func TestTheLoopMeasuresWhatEveryRunSpentAndRunsOn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the loop failed: %v", err)
 	}
-	if result.Stop != drain.StopQueueDrained || result.Ticks != 4 || result.Landed != 2 {
-		t.Fatalf("the loop stopped %q after %d tick(s) and landed %d, want %q after 4 and 2: %s",
+	if result.Stop != drain.StopQueueDrained || result.Landed != 2 {
+		t.Fatalf("the loop stopped %q after %d generation(s) and landed %d, want %q and 2: %s",
 			result.Stop, result.Ticks, result.Landed, drain.StopQueueDrained, result.Detail)
 	}
+	assertCoordinatorGenerations(t, result, 4)
 	if result.Tokens != 2_000_000 || result.SpendUSD != 6 {
 		t.Fatalf("the loop measured %d tokens and $%f, want 2000000 and $6 read from the runs' records",
 			result.Tokens, result.SpendUSD)
@@ -548,10 +570,11 @@ func TestTheLoopPrintsOneSpendLinePerRunAndComparesNoCeiling(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the loop failed: %v", err)
 	}
-	if result.Stop != drain.StopQueueDrained || result.Ticks != 4 {
-		t.Fatalf("the loop stopped %q (%s) after %d pass(es), want %q after 4",
-			result.Stop, result.Detail, result.Ticks, drain.StopQueueDrained)
+	if result.Stop != drain.StopQueueDrained || result.Landed != 2 {
+		t.Fatalf("the loop stopped %q (%s) after %d generation(s) and landed %d, want %q and 2",
+			result.Stop, result.Detail, result.Ticks, result.Landed, drain.StopQueueDrained)
 	}
+	assertCoordinatorGenerations(t, result, 4)
 	if result.Tokens != 2_000_000 || result.SpendUSD != 6 {
 		t.Fatalf("the loop measured %d tokens and $%f, want 2000000 and $6", result.Tokens, result.SpendUSD)
 	}
@@ -694,9 +717,10 @@ func TestACandidateFailureDoesNotStopTheLoopAndDoesNotFailOver(t *testing.T) {
 	// about one candidate, never a reason to stop. Each refusal goes back to its worker
 	// with the evidence once; the second, identical refusal is a repeat, which waits on the
 	// owner because the fixture's policy names no design seat (the ruling of 2026-11-17).
-	if result.Stop != drain.StopQueueDrained || result.Ticks != 8 || !strings.Contains(result.Detail, "item_041 ("+drain.ReasonConflictOwner+")") {
-		t.Fatalf("a candidate failure stopped the loop after %d pass(es): %q (%s)", result.Ticks, result.Stop, result.Detail)
+	if result.Stop != drain.StopQueueDrained || !strings.Contains(result.Detail, "item_041 ("+drain.ReasonConflictOwner+")") {
+		t.Fatalf("a candidate failure stopped the loop after %d generation(s): %q (%s)", result.Ticks, result.Stop, result.Detail)
 	}
+	assertCoordinatorGenerations(t, result, 8)
 	if result.Rejected != 4 || result.Landed != 0 {
 		t.Fatalf("the loop rejected %d and landed %d, want 4 and 0", result.Rejected, result.Landed)
 	}
@@ -947,10 +971,11 @@ func TestTheLoopHasNoTickBudget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the loop failed: %v", err)
 	}
-	if result.Stop != drain.StopQueueDrained || result.Ticks != 4 || result.Dispatched != 2 || result.Landed != 2 {
-		t.Fatalf("the loop stopped %q after %d tick(s), %d dispatch(es) and %d landing(s), want %q after 4, 2 and 2: %s",
+	if result.Stop != drain.StopQueueDrained || result.Dispatched != 2 || result.Landed != 2 {
+		t.Fatalf("the loop stopped %q after %d generation(s), %d dispatch(es) and %d landing(s), want %q with 2 and 2: %s",
 			result.Stop, result.Ticks, result.Dispatched, result.Landed, drain.StopQueueDrained, result.Detail)
 	}
+	assertCoordinatorGenerations(t, result, 4)
 }
 
 // The loop's own lane creation names the holder of a lane's branch: a lane directory moved
@@ -1552,12 +1577,12 @@ func TestALandedCandidateMovesItsItemToLanded(t *testing.T) {
 	if got := itemStateOf(t, f.store, "item_041"); got != "landed" {
 		t.Fatalf("the landed item is %q in the store, want landed", got)
 	}
-	// The second tick planned nothing, because the only item had landed: the loop stopped
-	// cleanly after one tick rather than re-dispatching what it had just landed.
-	if result.Stop != drain.StopQueueDrained || result.Ticks != 2 || result.Dispatched != 1 {
-		t.Fatalf("the loop stopped %q after %d tick(s) and %d dispatch(es), want %q after two and one: %s",
+	// The loop stopped cleanly once the only item landed rather than re-dispatching it.
+	if result.Stop != drain.StopQueueDrained || result.Dispatched != 1 {
+		t.Fatalf("the loop stopped %q after %d generation(s) and %d dispatch(es), want %q and 1: %s",
 			result.Stop, result.Ticks, result.Dispatched, drain.StopQueueDrained, result.Detail)
 	}
+	assertCoordinatorGenerations(t, result, 2)
 	if runs := lines(t, f.count); countMatching(runs, "adapter") != 1 {
 		t.Fatalf("the adapter ran %d time(s) for one landed candidate, want 1: %v", countMatching(runs, "adapter"), runs)
 	}
@@ -1632,12 +1657,13 @@ printf 'RESULT: done\n'
 		t.Fatalf("the loop stopped %q with %d landed, %d rejected and %d candidate(s), want %q with 0, 4 and 4: %s",
 			result.Stop, result.Landed, result.Rejected, result.Candidates, drain.StopQueueDrained, result.Detail)
 	}
+	assertCoordinatorGenerations(t, result, 8)
 	if result.RepeatedRefusal == nil {
 		t.Fatalf("a drain that refused every candidate reported no repeated refusal: %s", report.String())
 	}
 	got := result.RepeatedRefusal
-	if got.Candidates != 4 || got.Rejected != 4 || got.Steps[drain.RefusalFence] != 4 {
-		t.Fatalf("the repeated refusal is %+v, want 4 candidates and 4 refusals at the fence", got)
+	if got.Candidates != 4 || got.Rejected != 4 || got.Steps[drain.RefusalFence] != 4 || got.Ticks != result.Ticks {
+		t.Fatalf("the repeated refusal is %+v, want 4 candidates, 4 refusals at the fence, and %d tick(s)", got, result.Ticks)
 	}
 	if strings.Join(got.Items, ",") != "item_041,item_042" {
 		t.Fatalf("the repeated refusal names items %v, want both in the order they were refused", got.Items)
@@ -1646,7 +1672,7 @@ printf 'RESULT: done\n'
 	for _, want := range []string{
 		"every one of its 4 candidate(s) was refused",
 		"fence=4",
-		"window: 8 tick(s)",
+		fmt.Sprintf("window: %d tick(s)", result.Ticks),
 		"items left in the queue: item_041, item_042",
 	} {
 		if !strings.Contains(line, want) {
