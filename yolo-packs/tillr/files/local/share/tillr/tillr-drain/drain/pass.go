@@ -3219,7 +3219,11 @@ func (l *Loop) passMode(ctx context.Context, result *LoopResult) (stop string, e
 			}
 		}
 	}
+	var coordEpoch uint64
 	plan := func(ctx context.Context, at time.Time, generation *string) ([]plannedApplication, []LaneLease, error) {
+		l.mu.Lock()
+		coordEpoch = l.coordinatorCompletionEpochLocked()
+		l.mu.Unlock()
 		endPlan := l.startPassPhase("plan")
 		plans, leases, err := l.passPlansMode(ctx, at, generation)
 		endPlan()
@@ -3418,6 +3422,11 @@ plans:
 				continue
 			}
 		}
+		if (d.Action == ActionDispatch || d.Action == ActionRetry) && l.stageFaultBackoffReady() {
+			// A retracted staging fault is waiting for idle backoff in runPasses;
+			// return so the loop backs off before re-dispatching.
+			return "", nil
+		}
 		endApply := l.startPassPhase("apply_plans")
 		cancelled, changed, err := l.applyReadyPlan(ctx, p, &mainSHA, at, timing, &laneWatch{watched, epochs}, result)
 		endApply()
@@ -3495,8 +3504,13 @@ plans:
 	}
 	l.mu.Lock()
 	stageLaunchBusy := len(l.stageLaunch.Stage.Runs) > 0 || len(l.stageLaunch.Launch.Runs) > 0
+	coordCompleted := l.coordinatorCompletionEpochLocked() != coordEpoch
 	l.mu.Unlock()
 	if !purePass && l.hasSplitClosingResults() {
+		l.waitingDetail = ""
+		return "", nil
+	}
+	if coordCompleted {
 		l.waitingDetail = ""
 		return "", nil
 	}
@@ -3537,6 +3551,14 @@ plans:
 	}
 	if l.heavyInFlight() {
 		return l.waitForTrigger(ctx, leases, at, result)
+	}
+	l.mu.Lock()
+	coordChanged := l.coordinatorCompletionEpochLocked() != coordEpoch ||
+		len(l.stageLaunch.Stage.Runs) > 0 || len(l.stageLaunch.Launch.Runs) > 0
+	l.mu.Unlock()
+	if coordChanged {
+		l.waitingDetail = ""
+		return "", nil
 	}
 	return l.planNothing(ctx, holds, leases, at, result)
 }

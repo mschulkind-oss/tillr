@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"testing"
 	"time"
@@ -270,5 +271,134 @@ func TestStagingFailureAfterStartViewObservesClaimStillBacksOffAndRetries(t *tes
 		if !strings.Contains(log, want) {
 			t.Fatalf("report missing %q:\n%s", want, log)
 		}
+	}
+}
+
+func TestConsumeStageFaultBackoffWaitsForCoordinatorRetraction(t *testing.T) {
+	f := newRefusalLoopFixture(t, "item-b")
+	l, _ := stageFaultLoop(t, f, &recordingSteps{})
+	l.mu.Lock()
+	l.stageLaunch.Ensure()
+	l.stageLaunch.Stage.MarkStart("item-b", "run-item-b-a1")
+	l.stageLaunch.RecordFault("run-item-b-a1")
+	l.infraStreak = 1
+	l.mu.Unlock()
+
+	if l.consumeStageFaultBackoff(0, 0) {
+		t.Fatal("consumeStageFaultBackoff returned true while faulting run was still tracked by stage coordinator")
+	}
+	l.mu.Lock()
+	stillRecorded := l.stageLaunch.HasFaults()
+	l.stageLaunch.Launch.MarkStart("item-a", "run-item-a-a1")
+	l.stageLaunch.Stage.MarkDone("item-b", "run-item-b-a1")
+	l.mu.Unlock()
+	if !stillRecorded {
+		t.Fatal("consumeStageFaultBackoff cleared Faults while faulting run was still retracting")
+	}
+
+	if l.consumeStageFaultBackoff(0, 0) {
+		t.Fatal("consumeStageFaultBackoff returned true while another run was active in launch coordinator")
+	}
+
+	l.mu.Lock()
+	l.stageLaunch.Launch.MarkDone("item-a", "run-item-a-a1")
+	l.stageLaunch.RecordFault("run-item-b-a1")
+	l.mu.Unlock()
+
+	if !l.consumeStageFaultBackoff(0, 0) {
+		t.Fatal("consumeStageFaultBackoff returned false after retraction finished and loop became idle")
+	}
+	l.mu.Lock()
+	hasFaults := l.stageLaunch.HasFaults()
+	inBackoff := l.stageLaunch.Backoff
+	l.mu.Unlock()
+	if hasFaults || !inBackoff {
+		t.Fatalf("after consume: hasFaults=%v backoff=%v, want false and true", hasFaults, inBackoff)
+	}
+}
+
+func TestPassReplansInsteadOfLanesLeasedWhenCoordinatorCompletesMidPass(t *testing.T) {
+	f := newRefusalLoopFixture(t, "item-b")
+	l, _ := stageFaultLoop(t, f, &recordingSteps{})
+	l.cfg.Lanes = []string{"lane-1"}
+	l.cfg.ExitWhenDrained = true
+	if err := l.holdStageFailed(context.Background(), Decision{
+		ItemID:     "item-b",
+		LaneID:     "lane-1",
+		RunRequest: &run.Request{ItemID: "item-b", RunID: "run-item-b-a1", LaneID: "lane-1"},
+	}, "stage", errors.New("staging failure repeated unchanged: fork checkout")); err != nil {
+		t.Fatalf("holdStageFailed: %v", err)
+	}
+	s, err := store.Open(context.Background(), f.storePath, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.WriteTx(context.Background(), func(tx *store.Tx) error {
+		_, err := tx.Exec(`UPDATE lanes SET state = ?, run_id = 'run-item-b-a1', leased_until = NULL WHERE lane_id = 'lane-1'`, run.LaneStateLeased)
+		return err
+	}); err != nil {
+		s.Close()
+		t.Fatal(err)
+	}
+	s.Close()
+
+	l.mu.Lock()
+	l.stageLaunch.Ensure()
+	l.stageLaunch.Stage.MarkStart("item-b", "run-item-b-a1")
+	l.mu.Unlock()
+
+	// Complete the coordinator's lane release + MarkDone right as plan() ends,
+	// after passPlansMode has snapshotted the still-leased lane and before
+	// pass() checks stageLaunchBusy / planNothing.
+	sawPlan := false
+	retracted := false
+	baseNow := l.cfg.Now
+	l.cfg.Now = func() time.Time {
+		if !sawPlan && strings.Contains(string(debug.Stack()), "passPlansMode") {
+			sawPlan = true
+		}
+		return baseNow()
+	}
+	l.passTimer = newLoopPassTimer(func() time.Time {
+		if sawPlan && !retracted {
+			retracted = true
+			st, openErr := store.Open(context.Background(), f.storePath, true)
+			if openErr != nil {
+				t.Errorf("open store to release lane: %v", openErr)
+			} else {
+				if txErr := st.WriteTx(context.Background(), func(tx *store.Tx) error {
+					_, execErr := tx.Exec(`UPDATE lanes SET state = ?, run_id = NULL, leased_until = NULL WHERE lane_id = 'lane-1'`, run.LaneStateIdle)
+					return execErr
+				}); txErr != nil {
+					t.Errorf("release lane: %v", txErr)
+				}
+				st.Close()
+			}
+			l.mu.Lock()
+			l.stageLaunch.Stage.MarkDone("item-b", "run-item-b-a1")
+			l.mu.Unlock()
+		}
+		return baseNow()
+	})
+
+	var res LoopResult
+	stop, err := l.pass(context.Background(), &res)
+	if err != nil {
+		t.Fatalf("first pass: %v", err)
+	}
+	if !retracted {
+		t.Fatal("test hook did not fire after plan phase")
+	}
+	if stop != "" {
+		t.Fatalf("first pass stop = %q (detail=%q), want empty string to re-plan after mid-pass coordinator completion", stop, res.Detail)
+	}
+
+	l.passTimer = nil
+	stop, err = l.pass(context.Background(), &res)
+	if err != nil {
+		t.Fatalf("second pass: %v", err)
+	}
+	if stop != StopQueueDrained {
+		t.Fatalf("second pass stop = %q (detail=%q), want %q", stop, res.Detail, StopQueueDrained)
 	}
 }

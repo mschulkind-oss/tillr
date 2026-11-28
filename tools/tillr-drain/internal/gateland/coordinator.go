@@ -13,11 +13,12 @@ import (
 // coordinator (either Step 4 gate or Step 5 land). Callers guard mutations
 // under the loop mutex.
 type LaneState struct {
-	Wake   chan struct{}
-	Active bool
-	Runs   map[string]bool
-	Items  map[string]int
-	Timer  func(time.Duration) (<-chan time.Time, func())
+	Wake        chan struct{}
+	Active      bool
+	Runs        map[string]bool
+	Items       map[string]int
+	Completions uint64
+	Timer       func(time.Duration) (<-chan time.Time, func())
 }
 
 // Ensure initializes nil channels and maps on a zero-valued LaneState.
@@ -40,7 +41,9 @@ func (s *LaneState) MarkStart(itemID, runID string) {
 	s.Items[itemID]++
 }
 
-// MarkDone clears (itemID, runID) from this coordinator's in-flight tracking.
+// MarkDone clears (itemID, runID) from this coordinator's in-flight tracking
+// and advances Completions so a pass can detect snapshots taken before the
+// coordinator finished.
 func (s *LaneState) MarkDone(itemID, runID string) {
 	delete(s.Runs, runID)
 	if n := s.Items[itemID]; n <= 1 {
@@ -48,6 +51,7 @@ func (s *LaneState) MarkDone(itemID, runID string) {
 	} else {
 		s.Items[itemID] = n - 1
 	}
+	s.Completions++
 }
 
 // State groups both Step 4 (Gate) and Step 5 (Land) coordinator states so

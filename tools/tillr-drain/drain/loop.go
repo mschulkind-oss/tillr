@@ -1337,6 +1337,11 @@ func (l *Loop) runPasses(ctx context.Context, result *LoopResult) error {
 			result.Detail = "the loop was asked to stop"
 			return nil
 		}
+		if err, stopped := l.maybeStageFaultBackoff(ctx, 0, 0, result); err != nil {
+			return err
+		} else if stopped {
+			return nil
+		}
 		pt := newLoopPassTimer(l.cfg.Now)
 		l.passTimer = pt
 		endCPU := pt.StartPhase("record_process_cpu")
@@ -1344,7 +1349,6 @@ func (l *Loop) runPasses(ctx context.Context, result *LoopResult) error {
 		endCPU()
 		l.mu.Lock()
 		dispatched := result.Dispatched
-		l.stageLaunch.ClearFaults()
 		l.mu.Unlock()
 		passStart := time.Now()
 		done, err := l.passMode(ctx, result)
@@ -1401,59 +1405,46 @@ func (l *Loop) runPasses(ctx context.Context, result *LoopResult) error {
 		// count, because it must never ration work: when a tick dispatched anything, or when
 		// the pile answered "nothing dispatchable", the loop has a real answer and does not
 		// wait at all.
-		l.mu.Lock()
-		if !l.stageLaunch.HasFaults() {
-			l.mu.Unlock()
-			continue
-		}
-		// Do not count the failed staging claim itself as a live worker. Let
-		// staging finish retracting it before deciding whether the loop is idle.
-		retracting := false
-		for id := range l.stageLaunch.Faults {
-			if l.active[id] {
-				retracting = true
-				break
-			}
-		}
-		if retracting {
-			l.mu.Unlock()
-			continue
-		}
-		backOff := result.Dispatched == dispatched && l.infraStreak > 0 && len(l.active) == 0 && len(l.examiningRuns) == 0 && !l.gateLand.AnyRunning()
-		l.stageLaunch.ClearFaults()
-		l.stageLaunch.Backoff = backOff
-		l.mu.Unlock()
-		if !backOff {
-			continue
-		}
-		backOffStart := time.Now()
-		waited, err := l.backOff(ctx)
-		l.mu.Lock()
-		l.stageLaunch.Backoff = false
-		l.mu.Unlock()
-		if err != nil && ctx.Err() == nil {
-			if store.IsBusy(err) {
-				l.reportf("loop: store busy during backoff; will retry: %v\n", err)
-				l.recordBusyWrite("backoff", time.Since(backOffStart), l.cfg.Now())
-				delay := l.cfg.BackoffBase
-				if delay <= 0 {
-					delay = time.Second
-				}
-				if !waitFor(ctx, delay) {
-					result.Stop = StopOperatorStop
-					result.Detail = "the loop was asked to stop"
-					return nil
-				}
-				continue
-			}
+		if err, stopped := l.maybeStageFaultBackoff(ctx, result.Dispatched, dispatched, result); err != nil {
 			return err
-		}
-		if !waited {
-			result.Stop = StopOperatorStop
-			result.Detail = "the loop was asked to stop while waiting out an infrastructure failure"
+		} else if stopped {
 			return nil
 		}
 	}
+}
+
+func (l *Loop) maybeStageFaultBackoff(ctx context.Context, dispatchedNow, dispatchedBefore int, result *LoopResult) (error, bool) {
+	if !l.consumeStageFaultBackoff(dispatchedNow, dispatchedBefore) {
+		return nil, false
+	}
+	backOffStart := time.Now()
+	waited, err := l.backOff(ctx)
+	l.mu.Lock()
+	l.stageLaunch.Backoff = false
+	l.mu.Unlock()
+	if err != nil && ctx.Err() == nil {
+		if store.IsBusy(err) {
+			l.reportf("loop: store busy during backoff; will retry: %v\n", err)
+			l.recordBusyWrite("backoff", time.Since(backOffStart), l.cfg.Now())
+			delay := l.cfg.BackoffBase
+			if delay <= 0 {
+				delay = time.Second
+			}
+			if !waitFor(ctx, delay) {
+				result.Stop = StopOperatorStop
+				result.Detail = "the loop was asked to stop"
+				return nil, true
+			}
+			return nil, false
+		}
+		return err, false
+	}
+	if !waited {
+		result.Stop = StopOperatorStop
+		result.Detail = "the loop was asked to stop while waiting out an infrastructure failure"
+		return nil, true
+	}
+	return nil, false
 }
 
 // startDefinition reads the store before any Git work. Old stores resolve to
@@ -1719,6 +1710,55 @@ func faultResult(result LoopResult, err error) (LoopResult, error) {
 // stops then rather than sleeping out a wait an operator no longer wants. Every failure was
 // already reported when it happened; this line says how long the loop is waiting, so a
 // quiet log reads as a waiting loop rather than a hung one.
+func (l *Loop) stageFaultBackoffReadyLocked() bool {
+	if !l.stageLaunch.HasFaults() {
+		return false
+	}
+	for id := range l.stageLaunch.Faults {
+		if l.active[id] || l.stageLaunch.HasRun(id) {
+			return false
+		}
+	}
+	return l.infraStreak > 0 &&
+		len(l.active) == 0 && len(l.examiningRuns) == 0 &&
+		!l.gateLand.AnyRunning() && l.stageLaunch.RunCount() == 0
+}
+
+func (l *Loop) stageFaultBackoffReady() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.stageFaultBackoffReadyLocked()
+}
+
+// consumeStageFaultBackoff reports whether the loop should enter idle backoff
+// for a recorded staging fault. It waits while any faulting claim is still
+// retracting (in l.active or in the stage/launch coordinators) and suppresses
+// idle backoff while any worker, examiner, gate/land, or stage/launch run is
+// still active.
+func (l *Loop) consumeStageFaultBackoff(dispatchedNow, dispatchedBefore int) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if !l.stageLaunch.HasFaults() {
+		return false
+	}
+	for id := range l.stageLaunch.Faults {
+		if l.active[id] || l.stageLaunch.HasRun(id) {
+			return false
+		}
+	}
+	backOff := dispatchedNow == dispatchedBefore && l.stageFaultBackoffReadyLocked()
+	l.stageLaunch.ClearFaults()
+	l.stageLaunch.Backoff = backOff
+	return backOff
+}
+
+func (l *Loop) coordinatorCompletionEpochLocked() uint64 {
+	return l.stageLaunch.Stage.Completions +
+		l.stageLaunch.Launch.Completions +
+		l.gateLand.Gate.Completions +
+		l.gateLand.Land.Completions
+}
+
 func (l *Loop) infrastructureStreak() int {
 	l.mu.Lock()
 	defer l.mu.Unlock()

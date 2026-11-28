@@ -29,14 +29,15 @@ func TestStateTrackingAndWake(t *testing.T) {
 	}
 
 	st.Gate.MarkDone("i1", "r1")
-	if st.HasRun("r1") || st.HasItem("i1") || !st.AnyRunning() {
-		t.Fatalf("after Gate.MarkDone: hasRun=%v hasItem=%v running=%v",
-			st.HasRun("r1"), st.HasItem("i1"), st.AnyRunning())
+	if st.HasRun("r1") || st.HasItem("i1") || !st.AnyRunning() || st.Gate.Completions != 1 {
+		t.Fatalf("after Gate.MarkDone: hasRun=%v hasItem=%v running=%v completions=%d",
+			st.HasRun("r1"), st.HasItem("i1"), st.AnyRunning(), st.Gate.Completions)
 	}
 
 	st.Land.MarkDone("i2", "r2")
-	if st.AnyRunning() || st.RunCount() != 0 {
-		t.Fatalf("after Land.MarkDone: running=%v count=%d", st.AnyRunning(), st.RunCount())
+	if st.AnyRunning() || st.RunCount() != 0 || st.Land.Completions != 1 {
+		t.Fatalf("after Land.MarkDone: running=%v count=%d completions=%d",
+			st.AnyRunning(), st.RunCount(), st.Land.Completions)
 	}
 
 	SignalWake(nil) // no-op

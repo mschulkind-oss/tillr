@@ -281,6 +281,7 @@ func (l *Loop) runCoordinatedLaunch(ctx context.Context, itemID, runID string, w
 		l.mu.Lock()
 		l.stageLaunch.Launch.MarkDone(itemID, runID)
 		l.mu.Unlock()
+		l.signalPassWake()
 	}()
 
 	launchCtx, startHandoff := l.beginStartHandoff(ctx, work.Decision)
