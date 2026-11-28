@@ -766,10 +766,7 @@ func (l *Loop) startGCActor(ctx context.Context) func() {
 		if wait <= 0 {
 			wait = DefaultFallbackPollInterval
 		}
-		gateland.RunLoop(actorCtx, wait, timer, func() <-chan struct{} {
-			if !l.notifyEnabled() {
-				return nil
-			}
+		gateland.RunLoop(actorCtx, wait, l.coordinatorFallbackTimer(timer), func() <-chan struct{} {
 			return l.actors.GCWakeChan()
 		}, func() {
 			if actorCtx.Err() != nil || l.isRestartReplaced() {

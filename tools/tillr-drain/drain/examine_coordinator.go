@@ -66,9 +66,7 @@ func (l *Loop) clearBracketActive(runID string) {
 	l.mu.Lock()
 	delete(l.activeBrackets, runID)
 	l.mu.Unlock()
-	if l.notifyEnabled() {
-		l.signalExamineWake()
-	}
+	l.signalExamineWake()
 }
 
 // startExamineCoordinator runs Step 3 (worker examination) outside the scheduling
@@ -107,22 +105,20 @@ func (l *Loop) runExamineCoordinator(ctx context.Context, result *LoopResult) {
 		wait = DefaultFallbackPollInterval
 	}
 
+	timerFn := l.coordinatorFallbackTimer(l.examineTimer)
 	for ctx.Err() == nil {
 		var timerC <-chan time.Time
 		var stopTimer func()
-		if l.examineTimer != nil {
-			timerC, stopTimer = l.examineTimer(wait)
+		if timerFn != nil {
+			timerC, stopTimer = timerFn(wait)
 		} else {
 			timer := time.NewTimer(wait)
 			timerC, stopTimer = timer.C, func() { timer.Stop() }
 		}
 
-		var wake <-chan struct{}
-		if l.notifyEnabled() {
-			l.mu.Lock()
-			wake = l.examineWake
-			l.mu.Unlock()
-		}
+		l.mu.Lock()
+		wake := l.examineWake
+		l.mu.Unlock()
 
 		select {
 		case <-ctx.Done():
@@ -289,7 +285,12 @@ func (l *Loop) findExaminableRuns(ctx context.Context) ([]examinableRun, error) 
 
 func (l *Loop) runCoordinatedExamination(ctx context.Context, itemID, runID string, _ *LoopResult) {
 	defer l.examinations.Done()
-	defer func() {
+	cleared := false
+	clearExamining := func() {
+		if cleared {
+			return
+		}
+		cleared = true
 		l.mu.Lock()
 		delete(l.examiningRuns, runID)
 		if n := l.examiningItems[itemID]; n <= 1 {
@@ -298,10 +299,11 @@ func (l *Loop) runCoordinatedExamination(ctx context.Context, itemID, runID stri
 			l.examiningItems[itemID] = n - 1
 		}
 		l.mu.Unlock()
-		if l.notifyEnabled() && l.isGateCoordinatorActive() {
+		if l.isGateCoordinatorActive() {
 			l.signalGateWake()
 		}
-	}()
+	}
+	defer clearExamining()
 
 	handoffStart := time.Now()
 	at := l.cfg.Now().UTC()
@@ -310,6 +312,7 @@ func (l *Loop) runCoordinatedExamination(ctx context.Context, itemID, runID stri
 		if errors.Is(err, errRestartPending) || ctx.Err() != nil {
 			return
 		}
+		clearExamining()
 		l.sendCompletion(ctx, runCompletion{
 			id:                     runID,
 			itemID:                 itemID,
@@ -333,5 +336,6 @@ func (l *Loop) runCoordinatedExamination(ctx context.Context, itemID, runID stri
 	timing.DecisionCounts = map[string]int{ActionSettle: 1}
 	timing.EndMS = l.cfg.Now().UnixMilli()
 	examined.fromExamineCoordinator = true
+	clearExamining()
 	l.sendCompletion(ctx, examined)
 }

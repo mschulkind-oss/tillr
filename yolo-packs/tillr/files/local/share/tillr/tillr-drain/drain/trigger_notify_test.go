@@ -708,17 +708,22 @@ func runParityScenario(t *testing.T, withNotify bool) paritySnapshot {
 	} else {
 		l.triggerTimer = func(d time.Duration) (<-chan time.Time, func()) {
 			ch := make(chan time.Time, 1)
+			stopCh := make(chan struct{})
+			var stopOnce sync.Once
 			signalIdle()
 			go func() {
-				<-stepFallback
-				clockMu.Lock()
-				now = now.Add(d)
-				tNow := now
-				clockMu.Unlock()
-				clockStepped <- d
-				ch <- tNow
+				select {
+				case <-stepFallback:
+					clockMu.Lock()
+					now = now.Add(d)
+					tNow := now
+					clockMu.Unlock()
+					clockStepped <- d
+					ch <- tNow
+				case <-stopCh:
+				}
 			}()
-			return ch, func() {}
+			return ch, func() { stopOnce.Do(func() { close(stopCh) }) }
 		}
 	}
 
@@ -889,5 +894,90 @@ func TestItemRequestToLoopWakeLatency(t *testing.T) {
 		fromRequestStart, fromRequestReturn, DefaultFallbackPollInterval)
 	if fromRequestStart >= DefaultFallbackPollInterval {
 		t.Fatalf("wake took %s (>= fallback %s)", fromRequestStart, DefaultFallbackPollInterval)
+	}
+}
+
+func TestWaitForTriggerTimerFansOutCoordinatorFallbackWakes(t *testing.T) {
+	_, l := passFixture(t, "item-a")
+	l.cfg.NoNotify = true
+	l.cfg.StorePollInterval = DefaultFallbackPollInterval
+
+	if got := l.coordinatorFallbackTimer(nil); got != nil {
+		t.Fatal("coordinatorFallbackTimer(nil) should be nil when triggerTimer is unset")
+	}
+
+	tick := make(chan time.Time, 1)
+	l.triggerTimer = func(d time.Duration) (<-chan time.Time, func()) {
+		if d != DefaultFallbackPollInterval {
+			t.Errorf("triggerTimer wait = %s, want %s", d, DefaultFallbackPollInterval)
+		}
+		return tick, func() {}
+	}
+	if got := l.coordinatorFallbackTimer(nil); got == nil {
+		t.Fatal("coordinatorFallbackTimer(nil) should return non-nil stepped-clock guard when triggerTimer is set")
+	}
+	customCalled := false
+	custom := func(time.Duration) (<-chan time.Time, func()) {
+		customCalled = true
+		return make(chan time.Time), func() {}
+	}
+	gotCustom := l.coordinatorFallbackTimer(custom)
+	_, _ = gotCustom(time.Second)
+	if !customCalled {
+		t.Fatal("coordinatorFallbackTimer(custom) did not preserve explicit per-coordinator timer")
+	}
+
+	l.mu.Lock()
+	l.stageLaunch.Ensure()
+	l.ensureExamineStateLocked()
+	l.gateLand.Gate.Ensure()
+	l.gateLand.Land.Ensure()
+	l.actors.Ensure()
+	l.mu.Unlock()
+
+	var result LoopResult
+	done := make(chan error, 1)
+	go func() {
+		stop, err := l.waitForTrigger(context.Background(), nil, l.cfg.Now(), &result)
+		if err != nil {
+			done <- err
+			return
+		}
+		if stop != "" {
+			done <- errors.New("unexpected stop: " + stop)
+			return
+		}
+		done <- nil
+	}()
+
+	tick <- l.cfg.Now().Add(DefaultFallbackPollInterval)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("waitForTrigger: %v", err)
+		}
+	case <-time.After(hangGuard):
+		t.Fatal("waitForTrigger did not wake on triggerTimer tick")
+	}
+
+	checks := []struct {
+		name string
+		ch   <-chan struct{}
+	}{
+		{"stage", l.stageLaunch.Stage.Wake},
+		{"launch", l.stageLaunch.Launch.Wake},
+		{"examine", l.examineWake},
+		{"gate", l.gateLand.Gate.Wake},
+		{"land", l.gateLand.Land.Wake},
+		{"sync", l.actors.SyncWakeChan()},
+		{"trunk-proof", l.actors.TrunkProofWakeChan()},
+		{"gc", l.actors.GCWakeChan()},
+	}
+	for _, tc := range checks {
+		select {
+		case <-tc.ch:
+		default:
+			t.Errorf("%s coordinator wake channel was not signaled on fallback timer tick", tc.name)
+		}
 	}
 }

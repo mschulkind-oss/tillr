@@ -173,11 +173,8 @@ func (l *Loop) startLandCoordinator(ctx context.Context, result *LoopResult) fun
 		gateland.RunLoop(
 			coordCtx,
 			wait,
-			l.gateLand.Land.Timer,
+			l.coordinatorFallbackTimer(l.gateLand.Land.Timer),
 			func() <-chan struct{} {
-				if !l.notifyEnabled() {
-					return nil
-				}
 				l.mu.Lock()
 				ch := l.gateLand.Land.Wake
 				l.mu.Unlock()
@@ -461,11 +458,17 @@ func (l *Loop) claimCandidateLand(ctx context.Context, itemID, runID string, at 
 
 func (l *Loop) runCoordinatedLand(ctx context.Context, itemID, runID string, _ *LoopResult) bool {
 	defer l.examinations.Done()
-	defer func() {
+	cleared := false
+	clearLand := func() {
+		if cleared {
+			return
+		}
+		cleared = true
 		l.mu.Lock()
 		l.gateLand.Land.MarkDone(itemID, runID)
 		l.mu.Unlock()
-	}()
+	}
+	defer clearLand()
 
 	handoffStart := time.Now()
 	at := l.cfg.Now().UTC()
@@ -474,6 +477,7 @@ func (l *Loop) runCoordinatedLand(ctx context.Context, itemID, runID string, _ *
 		if errors.Is(err, errRestartPending) || ctx.Err() != nil {
 			return false
 		}
+		clearLand()
 		l.sendCompletion(ctx, runCompletion{
 			id:                  runID,
 			itemID:              itemID,
@@ -497,6 +501,7 @@ func (l *Loop) runCoordinatedLand(ctx context.Context, itemID, runID string, _ *
 	timing.DecisionCounts = map[string]int{ActionJudge: 1}
 	timing.EndMS = l.cfg.Now().UnixMilli()
 	comp.fromLandCoordinator = true
+	clearLand()
 	l.sendCompletion(ctx, comp)
 	return true
 }

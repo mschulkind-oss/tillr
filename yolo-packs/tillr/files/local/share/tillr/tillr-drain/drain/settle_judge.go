@@ -411,11 +411,8 @@ func (l *Loop) startGateCoordinator(ctx context.Context, result *LoopResult) fun
 		gateland.RunLoop(
 			coordCtx,
 			wait,
-			l.gateLand.Gate.Timer,
+			l.coordinatorFallbackTimer(l.gateLand.Gate.Timer),
 			func() <-chan struct{} {
-				if !l.notifyEnabled() {
-					return nil
-				}
 				l.mu.Lock()
 				ch := l.gateLand.Gate.Wake
 				l.mu.Unlock()
@@ -673,14 +670,20 @@ func (l *Loop) claimCandidateGate(ctx context.Context, itemID, runID string, at 
 
 func (l *Loop) runCoordinatedGate(ctx context.Context, itemID, runID string, _ *LoopResult) {
 	defer l.examinations.Done()
-	defer func() {
+	cleared := false
+	clearGate := func() {
+		if cleared {
+			return
+		}
+		cleared = true
 		l.mu.Lock()
 		l.gateLand.Gate.MarkDone(itemID, runID)
 		l.mu.Unlock()
-		if l.notifyEnabled() && l.isLandCoordinatorActive() {
+		if l.isLandCoordinatorActive() {
 			l.signalLandWake()
 		}
-	}()
+	}
+	defer clearGate()
 
 	handoffStart := time.Now()
 	at := l.cfg.Now().UTC()
@@ -689,6 +692,7 @@ func (l *Loop) runCoordinatedGate(ctx context.Context, itemID, runID string, _ *
 		if errors.Is(err, errRestartPending) || ctx.Err() != nil {
 			return
 		}
+		clearGate()
 		l.sendCompletion(ctx, runCompletion{
 			id:                  runID,
 			itemID:              itemID,
@@ -712,6 +716,7 @@ func (l *Loop) runCoordinatedGate(ctx context.Context, itemID, runID string, _ *
 	timing.DecisionCounts = map[string]int{ActionJudge: 1}
 	timing.EndMS = l.cfg.Now().UnixMilli()
 	comp.fromGateCoordinator = true
+	clearGate()
 	l.sendCompletion(ctx, comp)
 }
 

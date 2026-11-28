@@ -300,6 +300,33 @@ func resolveNotifyBin(configured string) (string, error) {
 	return exec.LookPath("tillr")
 }
 
+func (l *Loop) coordinatorFallbackTimer(specific func(time.Duration) (<-chan time.Time, func())) func(time.Duration) (<-chan time.Time, func()) {
+	if specific != nil {
+		return specific
+	}
+	if l.triggerTimer != nil {
+		// When a test injects triggerTimer, waitForTrigger owns the stepped
+		// fallback clock and fans out fallback wakes to every coordinator on
+		// each timer tick so coordinators do not spin independent wall-clock
+		// timers or compete for the test's stepped-clock channel.
+		return func(time.Duration) (<-chan time.Time, func()) {
+			return make(chan time.Time), func() {}
+		}
+	}
+	return nil
+}
+
+func (l *Loop) signalAllCoordinatorFallbackWakes() {
+	l.signalStageWake()
+	l.signalLaunchWake()
+	l.signalExamineWake()
+	l.signalGateWake()
+	l.signalLandWake()
+	l.signalSyncWake()
+	l.signalTrunkProofWake()
+	l.signalGCWake()
+}
+
 func (l *Loop) waitForTrigger(ctx context.Context, leases []LaneLease, at time.Time, result *LoopResult) (string, error) {
 	defer l.startPassPhase("wait_for_trigger")()
 	if err := l.checkStopRequested(ctx); err != nil {
@@ -332,12 +359,11 @@ func (l *Loop) waitForTrigger(ctx context.Context, leases []LaneLease, at time.T
 	defer stopTimer()
 
 	var notifyWake <-chan struct{}
-	var passWake <-chan struct{}
+	passWake := l.actors.PassWakeChan()
 	if l.notifyEnabled() {
 		l.mu.Lock()
 		tn := l.triggerNotify
 		l.mu.Unlock()
-		passWake = l.actors.PassWakeChan()
 		if tn == nil {
 			stopLocal := l.startTriggerNotify(ctx)
 			defer stopLocal()
@@ -372,6 +398,7 @@ func (l *Loop) waitForTrigger(ctx context.Context, leases []LaneLease, at time.T
 		// wake notifyWake prematurely (any external wake remains buffered on
 		// tn.wake for the next waitForTrigger).
 		notifyWake = nil
+		passWake = nil
 		return false, "", nil
 	}
 	for {
@@ -435,6 +462,7 @@ func (l *Loop) waitForTrigger(ctx context.Context, leases []LaneLease, at time.T
 			}
 			return "", nil
 		case <-timerC:
+			l.signalAllCoordinatorFallbackWakes()
 			if err := l.checkStopRequested(ctx); err != nil {
 				if stoppedByOperator(ctx, err) {
 					result.Detail = "the loop was asked to stop while waiting for a trigger"

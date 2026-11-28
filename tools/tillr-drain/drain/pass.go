@@ -3229,13 +3229,11 @@ plans:
 		}
 		if d.Action == ActionJudge && l.coordinatorOwnsJudge(p.work) {
 			coordinatorPending = true
-			if l.notifyEnabled() {
-				if l.isGateCoordinatorActive() && isCandidateGateEligible(p.work, "") {
-					l.signalGateWake()
-				}
-				if l.isLandCoordinatorActive() && isCandidateLandEligible(p.work, "") {
-					l.signalLandWake()
-				}
+			if l.isGateCoordinatorActive() && isCandidateGateEligible(p.work, "") {
+				l.signalGateWake()
+			}
+			if l.isLandCoordinatorActive() && isCandidateLandEligible(p.work, "") {
+				l.signalLandWake()
 			}
 			continue
 		}
@@ -3500,9 +3498,7 @@ func (l *Loop) applyReadyPlan(ctx context.Context, p plannedApplication, mainSHA
 			d = work.Decision
 		}
 		if l.isStageCoordinatorActive() {
-			if l.notifyEnabled() {
-				l.signalStageWake()
-			}
+			l.signalStageWake()
 			return false, false, nil
 		}
 		cancelled, stageErr := l.stageAndLaunchInline(ctx, d, base, at, watch, result)
@@ -3547,7 +3543,12 @@ func (l *Loop) launchExamination(ctx context.Context, d Decision, work *pendingW
 	go func() {
 		defer cancel()
 		defer l.examinations.Done()
-		defer func() {
+		cleared := false
+		clearExamining := func() {
+			if cleared {
+				return
+			}
+			cleared = true
 			l.mu.Lock()
 			delete(l.examiningRuns, d.RunRequest.RunID)
 			if n := l.examiningItems[d.ItemID]; n <= 1 {
@@ -3556,8 +3557,11 @@ func (l *Loop) launchExamination(ctx context.Context, d Decision, work *pendingW
 				l.examiningItems[d.ItemID] = n - 1
 			}
 			l.mu.Unlock()
-		}()
-		l.sendCompletion(ctx, l.examineClaimed(runCtx, d, work, at, &timing, watched))
+		}
+		defer clearExamining()
+		comp := l.examineClaimed(runCtx, d, work, at, &timing, watched)
+		clearExamining()
+		l.sendCompletion(ctx, comp)
 	}()
 }
 

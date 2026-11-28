@@ -315,10 +315,7 @@ func (l *Loop) startSyncActor(ctx context.Context, result *LoopResult) func() {
 		if wait <= 0 {
 			wait = DefaultFallbackPollInterval
 		}
-		gateland.RunLoop(actorCtx, wait, timer, func() <-chan struct{} {
-			if !l.notifyEnabled() {
-				return nil
-			}
+		gateland.RunLoop(actorCtx, wait, l.coordinatorFallbackTimer(timer), func() <-chan struct{} {
 			return l.actors.SyncWakeChan()
 		}, func() {
 			if actorCtx.Err() != nil || l.isRestartReplaced() {

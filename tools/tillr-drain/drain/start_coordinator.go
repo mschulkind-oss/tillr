@@ -72,10 +72,7 @@ func (l *Loop) runLaunchCoordinator(ctx context.Context, result *LoopResult) {
 	if wait <= 0 {
 		wait = DefaultFallbackPollInterval
 	}
-	gateland.RunLoop(ctx, wait, l.stageLaunch.Launch.Timer, func() <-chan struct{} {
-		if !l.notifyEnabled() {
-			return nil
-		}
+	gateland.RunLoop(ctx, wait, l.coordinatorFallbackTimer(l.stageLaunch.Launch.Timer), func() <-chan struct{} {
 		l.mu.Lock()
 		ch := l.stageLaunch.Launch.Wake
 		l.mu.Unlock()
