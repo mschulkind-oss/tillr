@@ -1752,18 +1752,20 @@ func (l *Loop) retractingStageFaultsLocked() map[string]bool {
 }
 
 // retractedStageFaultBackoffReady reports whether idle backoff is ready for a staging
-// fault that was still retracting when the pass began (one of retracting). Faults the
-// pass's own dispatches record are not in that set, so they never stop the rest of the
-// batch: each is staged, counted, and the backoff waits until the pass ends.
-func (l *Loop) retractedStageFaultBackoffReady(retracting map[string]bool) bool {
-	if len(retracting) == 0 {
-		return false
-	}
+// fault an earlier pass's claim recorded. That is a fault still retracting when the pass
+// began (one of retracting), or, while the stage coordinator stages claims outside the
+// pass, any recorded fault whose run this pass did not claim (not one of claimed): the
+// coordinator can record and retract an earlier claim's fault after runPasses checked for
+// one and before this pass took its snapshot, or after the snapshot and before plan, and
+// a retry dispatched then is a second attempt with no backoff before it. Faults the
+// pass's own dispatches record are its claims, so they never stop the rest of the batch:
+// each is staged, counted, and the backoff waits until the pass ends.
+func (l *Loop) retractedStageFaultBackoffReady(retracting, claimed map[string]bool) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	carried := false
-	for id := range retracting {
-		if _, ok := l.stageLaunch.Faults[id]; ok {
+	for id := range l.stageLaunch.Faults {
+		if retracting[id] || (l.stageLaunch.Stage.Active && !claimed[id]) {
 			carried = true
 			break
 		}

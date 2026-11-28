@@ -8,8 +8,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"runtime/debug"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -403,9 +405,10 @@ func TestPassReplansInsteadOfLanesLeasedWhenCoordinatorCompletesMidPass(t *testi
 	}
 }
 
-// The mid-pass dispatch pause is for a staging fault an earlier pass's claim was still
-// retracting when this pass began. A fault the pass's own batch records is not that: the
-// rest of the batch still stages and counts, and the backoff waits for the pass to end.
+// The mid-pass dispatch pause is for a staging fault an earlier pass's claim recorded: one
+// still retracting when this pass began, or, under the stage coordinator, one for a run
+// this pass did not claim. A fault the pass's own batch records is not that: the rest of
+// the batch still stages and counts, and the backoff waits for the pass to end.
 func TestMidPassStageFaultPauseOnlyForFaultsRetractingAtPassStart(t *testing.T) {
 	f := newRefusalLoopFixture(t, "item-b")
 	l, _ := stageFaultLoop(t, f, &recordingSteps{})
@@ -419,13 +422,13 @@ func TestMidPassStageFaultPauseOnlyForFaultsRetractingAtPassStart(t *testing.T) 
 	if !retracting["run-item-b-a1"] || len(retracting) != 1 {
 		t.Fatalf("retracting at pass start = %v, want only run-item-b-a1", retracting)
 	}
-	if l.retractedStageFaultBackoffReady(retracting) {
+	if l.retractedStageFaultBackoffReady(retracting, nil) {
 		t.Fatal("paused while the carried fault's claim was still retracting")
 	}
 	l.mu.Lock()
 	l.stageLaunch.Stage.MarkDone("item-b", "run-item-b-a1")
 	l.mu.Unlock()
-	if !l.retractedStageFaultBackoffReady(retracting) {
+	if !l.retractedStageFaultBackoffReady(retracting, nil) {
 		t.Fatal("did not pause once the carried fault's retraction finished and the loop was idle")
 	}
 
@@ -439,7 +442,179 @@ func TestMidPassStageFaultPauseOnlyForFaultsRetractingAtPassStart(t *testing.T) 
 	if !idle {
 		t.Fatal("control: the loop should be idle with a recorded fault")
 	}
-	if l.retractedStageFaultBackoffReady(atStart) {
+	if l.retractedStageFaultBackoffReady(atStart, nil) {
 		t.Fatal("a fault the pass's own batch recorded stopped the rest of the batch")
+	}
+
+	// While the stage coordinator stages claims outside the pass, a fault for a run this
+	// pass did not claim was an earlier pass's claim, recorded and retracted after the pass
+	// took its snapshot; one for a run this pass claimed is its own batch's.
+	l.mu.Lock()
+	l.stageLaunch.Stage.Active = true
+	l.mu.Unlock()
+	if !l.retractedStageFaultBackoffReady(atStart, nil) {
+		t.Fatal("did not pause for an earlier claim's fault the coordinator recorded after the pass began")
+	}
+	if l.retractedStageFaultBackoffReady(atStart, map[string]bool{"run-item-a-a1": true}) {
+		t.Fatal("a fault for a run this pass claimed stopped the rest of the batch under the coordinator")
+	}
+}
+
+type gatedFailingStager struct {
+	mu      sync.Mutex
+	calls   int
+	entered chan struct{}
+	release chan struct{}
+	errText string
+}
+
+func (s *gatedFailingStager) Stage(ctx context.Context, _ StageSpec) error {
+	s.mu.Lock()
+	s.calls++
+	first := s.calls == 1
+	s.mu.Unlock()
+	if first {
+		close(s.entered)
+		select {
+		case <-s.release:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return errors.New(s.errText)
+}
+
+type cancelOnLineReport struct {
+	mu       sync.Mutex
+	buf      bytes.Buffer
+	cancelOn string
+	cancel   context.CancelFunc
+}
+
+func (r *cancelOnLineReport) Write(p []byte) (int, error) {
+	r.mu.Lock()
+	r.buf.Write(p)
+	hit := strings.Contains(string(p), r.cancelOn)
+	r.mu.Unlock()
+	if hit {
+		r.cancel()
+	}
+	return len(p), nil
+}
+
+func (r *cancelOnLineReport) String() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.buf.String()
+}
+
+func callerHasFrame(needle string) bool {
+	var pcs [16]uintptr
+	n := runtime.Callers(2, pcs[:])
+	frames := runtime.CallersFrames(pcs[:n])
+	for {
+		frame, more := frames.Next()
+		if strings.Contains(frame.Function, needle) {
+			return true
+		}
+		if !more {
+			return false
+		}
+	}
+}
+
+// A staging infrastructure failure that completes between passes (after the prior pass's
+// HasFaults check and before the next pass dispatches) or mid-pass before plan/apply must
+// still run the first-streak backoff before the item can be dispatched a second time.
+// Otherwise the second attempt hits the repeated-unchanged stage-failed hold and skips the
+// first backoff delay.
+func TestIdleStageFaultBeforeNextPassStillBacksOffFirst(t *testing.T) {
+	cases := []struct {
+		name  string
+		match func() bool
+	}{
+		{
+			name: "between_passes",
+			match: func() bool {
+				return callerHasFrame("(*Loop).recordProcessCPUIfDue")
+			},
+		},
+		{
+			name: "mid_pass_before_plan",
+			match: func() bool {
+				return callerHasFrame("(*Loop).passPlansMode")
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newRefusalLoopFixture(t, "item-b")
+			t.Setenv("TILLR_LOOP_STORE", "")
+			holdWALKeeper(t, f.storePath)
+
+			stager := &gatedFailingStager{
+				entered: make(chan struct{}),
+				release: make(chan struct{}),
+				errText: "the brief could not be rendered",
+			}
+			l := f.loop(t, &recordingSteps{}, stager)
+			l.cfg.Lanes = []string{"lane-1"}
+			l.cfg.QuestionsCmd = []string{"sh", "-c", `printf '%s' '{"index":{"documents":[]}}'`}
+			l.cfg.BackoffBase = 20 * time.Millisecond
+
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			report := &cancelOnLineReport{
+				cancelOn: "nothing dispatched; waiting 20ms before the next attempt",
+				cancel:   cancel,
+			}
+			l.cfg.Report = report
+
+			baseNow := l.cfg.Now
+			var releasedOnce sync.Once
+			l.cfg.Now = func() time.Time {
+				select {
+				case <-stager.entered:
+					if tc.match() && !callerHasFrame("(*Loop).cancelStaging") {
+						releasedOnce.Do(func() {
+							close(stager.release)
+							deadline := time.Now().Add(hangGuard)
+							for time.Now().Before(deadline) {
+								l.mu.Lock()
+								done := l.stageLaunch.HasFaults() && len(l.stageLaunch.Stage.Runs) == 0
+								l.mu.Unlock()
+								if done {
+									return
+								}
+								select {
+								case <-ctx.Done():
+									return
+								case <-time.After(time.Millisecond):
+								}
+							}
+						})
+					}
+				default:
+				}
+				return baseNow()
+			}
+
+			res, err := l.Run(ctx)
+			if err != nil {
+				t.Fatalf("loop failed: %v\n%s", err, report.String())
+			}
+			if res.Stop != StopOperatorStop {
+				t.Fatalf("loop stopped %q (%s), want %q\n%s", res.Stop, res.Detail, StopOperatorStop, report.String())
+			}
+			if !strings.Contains(res.Detail, "waiting out an infrastructure failure") {
+				t.Fatalf("stop detail = %q, want interrupted infrastructure backoff", res.Detail)
+			}
+			stager.mu.Lock()
+			calls := stager.calls
+			stager.mu.Unlock()
+			if calls != 1 {
+				t.Fatalf("stager calls = %d, want 1 before first backoff\n%s", calls, report.String())
+			}
+		})
 	}
 }
