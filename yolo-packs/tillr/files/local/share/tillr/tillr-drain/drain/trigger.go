@@ -156,6 +156,7 @@ func (l *Loop) runTriggerNotifyLoop(ctx context.Context, initialSub *notify.Subs
 			case notify.TopicTrunkMoved:
 				l.signalLandWake()
 				l.signalTrunkProofWake()
+				l.signalSyncWake()
 				signalWake(tn.wake)
 			case notify.TopicProofGreen:
 				l.signalLandWake()

@@ -530,7 +530,7 @@ func (l *Loop) refreshSyncPlannerCaches(ctx context.Context) (bool, error) {
 	var preloaded *VantageQuestions
 	tip := l.cachedTrunkTip()
 	if tip == "" {
-		tip = l.syncedSHA
+		tip = l.syncedTrunkSHA()
 	}
 	if tip != "" {
 		if saved, ok := LoadSavedQuestionsIndex(l.cfg.Root, tip, l.cfg.QuestionsCmd, true); ok {

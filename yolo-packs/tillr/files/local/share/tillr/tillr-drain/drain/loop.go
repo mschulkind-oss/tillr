@@ -1463,6 +1463,12 @@ func (l *Loop) stageLandingLanes(ctx context.Context) error {
 	return l.registerLanePools(ctx)
 }
 
+func (l *Loop) syncedTrunkSHA() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.syncedSHA
+}
+
 // refreshDocuments syncs before planning at a new trunk commit and retains the lazy
 // question reader for all passes at that commit. A concurrent landing during the sync
 // invalidates that read: retry at the new tip rather than label mixed inputs as synced.
@@ -1485,7 +1491,7 @@ func (l *Loop) refreshDocuments(ctx context.Context, result *LoopResult) (string
 		if err != nil {
 			return "", err
 		}
-		if sha == l.syncedSHA && clearSeq == l.syncClearSeq {
+		if sha == l.syncedTrunkSHA() && clearSeq == l.syncClearSeq {
 			if err := l.settleOwnerAnswers(ctx, sha); err != nil {
 				return "", err
 			}
@@ -1501,7 +1507,9 @@ func (l *Loop) refreshDocuments(ctx context.Context, result *LoopResult) (string
 		if after != sha {
 			continue
 		}
+		l.mu.Lock()
 		l.syncedSHA = sha
+		l.mu.Unlock()
 		l.syncClearSeq = clearSeq
 		l.waitingDetail = ""
 		l.resetPassQuestions(ctx)
@@ -1516,7 +1524,7 @@ func (l *Loop) refreshDocuments(ctx context.Context, result *LoopResult) (string
 
 // The pass's question source is loop-owned and pinned to its synced SHA.
 func (l *Loop) resetPassQuestions(ctx context.Context) {
-	q := newSavedQuestions(l.cfg.Root, l.syncedSHA, l.cfg.QuestionsCmd, ctx)
+	q := newSavedQuestions(l.cfg.Root, l.syncedTrunkSHA(), l.cfg.QuestionsCmd, ctx)
 	l.mu.Lock()
 	l.questions = q
 	l.mu.Unlock()
@@ -1740,6 +1748,10 @@ func (l *Loop) planNothing(ctx context.Context, holds []Decision, leases []LaneL
 			result.Detail = detail
 			l.idleState = l.captureIdleState(ctx, holds, at)
 			if l.idleState == nil && l.trunkMovedSinceSync(ctx) {
+				if l.actorsActive() {
+					l.signalSyncWake()
+					return l.waitForTrigger(ctx, leases, at, result)
+				}
 				return "", nil
 			}
 			return l.waitForTrigger(ctx, leases, at, result)

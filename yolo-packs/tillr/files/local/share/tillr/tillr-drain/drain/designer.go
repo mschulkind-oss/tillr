@@ -256,7 +256,7 @@ func (l *Loop) retireDesigners(ctx context.Context) error {
 	retired := []string{}
 	// refreshDocuments pins the trunk commit this pass read. Never consult the moving
 	// ref here: a concurrent landing may have advanced it after that observation.
-	trunkSHA := l.syncedSHA
+	trunkSHA := l.syncedTrunkSHA()
 	for _, doc := range docs {
 		if _, err := os.Stat(filepath.Join(l.cfg.Root, doc)); os.IsNotExist(err) {
 			// A landing rewrites the document in place, and git unlinks a file before it

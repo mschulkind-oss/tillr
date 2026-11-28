@@ -400,6 +400,58 @@ func TestIdleCaptureRejectsTrunkMoveSinceDocumentSync(t *testing.T) {
 	}
 }
 
+func TestPlanNothingWithActiveActorsWakesSyncAndWaitsWhenTrunkMoved(t *testing.T) {
+	f, l := passFixture(t, "held-a")
+	l.cfg.ExitWhenDrained = false
+	l.cfg.NoNotify = true
+	l.cfg.StorePollInterval = DefaultFallbackPollInterval
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := tx.Exec(`UPDATE items SET state = ?`, StateBlocked)
+		return err
+	})
+	var result LoopResult
+	ctx := context.Background()
+	synced, err := l.refreshDocuments(ctx, &result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l.actors.Ensure()
+	l.actors.Active.Store(true)
+	t.Cleanup(func() { l.actors.Active.Store(false) })
+
+	runGit(t, f.root, "commit", "--allow-empty", "-qm", "commit after sync")
+	moved := runGit(t, f.root, "rev-parse", TrunkRef)
+	if moved == synced {
+		t.Fatalf("expected trunk to advance beyond %s", synced)
+	}
+	l.actors.SetCachedTrunk(bgactors.TrunkCache{Tip: moved, Valid: true})
+	var triggerWaited, syncWokenBeforeWait bool
+	l.triggerTimer = func(d time.Duration) (<-chan time.Time, func()) {
+		triggerWaited = true
+		select {
+		case <-l.actors.SyncWakeChan():
+			syncWokenBeforeWait = true
+		default:
+		}
+		ch := make(chan time.Time, 1)
+		ch <- l.cfg.Now()
+		return ch, func() {}
+	}
+	stop, err := l.planNothing(ctx, []Decision{{ItemID: "held-a", Action: ActionHold, Reason: ReasonBlocked}}, nil, l.cfg.Now(), &result)
+	if err != nil || stop != "" {
+		t.Fatalf("planNothing: stop=%q err=%v", stop, err)
+	}
+	if l.idleState != nil {
+		t.Fatalf("captured idle state for unsynced trunk %s (synced %s)", moved, synced)
+	}
+	if !triggerWaited {
+		t.Fatal("planNothing returned without waiting while actorsActive; passMode will spin without inline sync")
+	}
+	if !syncWokenBeforeWait {
+		t.Fatal("planNothing did not wake sync actor before waiting when trunk moved since sync")
+	}
+}
+
 func TestIdleUnchangedIgnoresTelemetryAndWakesOnTrunkOrDocsChange(t *testing.T) {
 	f, l := passFixture(t, "held-a")
 	l.cfg.ExitWhenDrained = false
