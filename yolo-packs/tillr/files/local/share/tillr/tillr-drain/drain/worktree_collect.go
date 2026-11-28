@@ -94,8 +94,11 @@ func (l *Loop) collectIdleWorktrees(ctx context.Context) (worktreebudget.Snapsho
 		}, nil
 	}
 
+	endWait := startPassStep(ctx, "collect_lock_wait")
 	l.endedLaneMu.Lock()
+	endWait()
 	defer l.endedLaneMu.Unlock()
+	defer startPassStep(ctx, "collect_walk")()
 
 	inUse := map[string]bool{}
 	activeRunIDs := map[string]bool{}
@@ -799,6 +802,17 @@ func (l *Loop) runGCStep(ctx context.Context, result *LoopResult) error {
 }
 
 func (l *Loop) runGCStepGeneration(ctx context.Context, result *LoopResult, generation *string) error {
+	return l.runGCStepMode(ctx, result, generation, true)
+}
+
+// runGCMaintenanceStep runs GC store/lane maintenance without ended-item
+// collection or item-directory walks, so startup seeding and pre-dispatch
+// inline housekeeping do not block dispatch behind a collection backlog.
+func (l *Loop) runGCMaintenanceStep(ctx context.Context, result *LoopResult, generation *string) error {
+	return l.runGCStepMode(ctx, result, generation, false)
+}
+
+func (l *Loop) runGCStepMode(ctx context.Context, result *LoopResult, generation *string, collectWorktrees bool) error {
 	l.actors.GCMu.Lock()
 	defer l.actors.GCMu.Unlock()
 	l.actors.GC.Runs.Add(1)
@@ -859,21 +873,33 @@ func (l *Loop) runGCStepGeneration(ctx context.Context, result *LoopResult, gene
 		return err
 	}
 	if !l.nonLanding {
-		if err := l.reclaimEndedItemLanes(ctx); err != nil {
-			l.reportf("loop: ended-item lane cleanup failed: %v\n", err)
-		}
-		if l.cfg.ItemWorktrees {
-			if snap, err := l.collectIdleWorktrees(ctx); err == nil {
-				l.actors.SetCachedWorktreeSnapshot(snap)
-			} else {
-				l.reportf("loop: idle worktree collection failed: %v\n", err)
-			}
+		if collectWorktrees {
+			l.runWorktreeCollection(ctx)
 		}
 		l.reportRefSweepFailure(l.pruneRunRefs(ctx))
 	}
 	l.recoverStaleTriageClaims(ctx)
 	l.dispatchAlertTriage(ctx)
 	return nil
+}
+
+// runWorktreeCollection reclaims ended item lanes and enforces worktree bounds
+// without a time limit or count cap. Callers run this off the dispatch path
+// (in the background GC actor, or after dispatch in inline mode).
+func (l *Loop) runWorktreeCollection(ctx context.Context) {
+	if l.nonLanding {
+		return
+	}
+	if err := l.reclaimEndedItemLanes(ctx); err != nil {
+		l.reportf("loop: ended-item lane cleanup failed: %v\n", err)
+	}
+	if l.cfg.ItemWorktrees {
+		if snap, err := l.collectIdleWorktrees(ctx); err == nil {
+			l.actors.SetCachedWorktreeSnapshot(snap)
+		} else {
+			l.reportf("loop: idle worktree collection failed: %v\n", err)
+		}
+	}
 }
 
 func (l *Loop) recordReapPassTiming(ctx context.Context, generation string, at time.Time) error {

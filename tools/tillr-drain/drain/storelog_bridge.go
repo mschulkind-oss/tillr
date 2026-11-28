@@ -218,6 +218,12 @@ func (l *Loop) recordLoopEnded(result LoopResult) {
 // Forwarding wrappers for loop_pass.go.
 func newLoopPassTimer(now func() time.Time) *loopPassTimer { return storelog.NewLoopPassTimer(now) }
 func (l *Loop) startPassPhase(name string) func()          { return l.passTimer.StartPhase(name) }
+func withPassStepTimer(ctx context.Context, pt *loopPassTimer) context.Context {
+	return storelog.WithPassStepTimer(ctx, pt)
+}
+func startPassStep(ctx context.Context, name string) func() {
+	return storelog.StartPassStep(ctx, name)
+}
 
 func (l *Loop) timePassPhase(name string, fn func() error) error {
 	end := l.startPassPhase(name)

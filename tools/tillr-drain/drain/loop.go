@@ -5465,7 +5465,7 @@ func (l *Loop) seedActorCaches(ctx context.Context, result *LoopResult) error {
 	if err := l.runSyncStep(ctx, result, true); err != nil {
 		return err
 	}
-	if err := l.runGCStep(ctx, result); err != nil {
+	if err := l.runGCMaintenanceStep(ctx, result, nil); err != nil {
 		return err
 	}
 	return nil
@@ -5473,9 +5473,10 @@ func (l *Loop) seedActorCaches(ctx context.Context, result *LoopResult) error {
 
 // runInlineHousekeeping runs the three background actors' work inline when
 // background actors are disabled (the pollOnly test seam or direct passMode
-// unit tests).
+// unit tests). Ended-item and idle-worktree collection runs after dispatch in
+// passMode so a collection backlog never holds up ready work.
 func (l *Loop) runInlineHousekeeping(ctx context.Context, result *LoopResult, generation *string) error {
-	if err := l.runGCStepGeneration(ctx, result, generation); err != nil {
+	if err := l.runGCMaintenanceStep(ctx, result, generation); err != nil {
 		return err
 	}
 	if !l.nonLanding {

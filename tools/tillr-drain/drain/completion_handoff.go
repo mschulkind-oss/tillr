@@ -50,17 +50,21 @@ func (l *Loop) drainCompletions(ctx context.Context, result *LoopResult) (string
 func (l *Loop) drainCompletionsCount(ctx context.Context, result *LoopResult) (int, string, error) {
 	// Drain only the completions already queued at entry so newly arriving
 	// completions wait for the next pass instead of postponing planning.
+	ctx = withPassStepTimer(ctx, l.passTimer)
 	limit := len(l.completions)
 	if limit == 0 {
 		select {
 		case c := <-l.completions:
-			if stop, err := l.finishRunStep(ctx, c, result); stop != "" || err != nil {
+			endStep := startPassStep(ctx, "finish_run_step")
+			stop, err := l.finishRunStep(ctx, c, result)
+			endStep()
+			if stop != "" || err != nil {
 				return 1, stop, err
 			}
 			if l.cfg.ItemWorktrees && !l.nonLanding && !l.pollOnly {
-				if _, colErr := l.collectIdleWorktrees(ctx); colErr != nil {
-					l.reportf("loop: idle worktree collection after node end failed: %v\n", colErr)
-				}
+				endSignal := startPassStep(ctx, "signal_gc_collect")
+				l.signalGCWake()
+				endSignal()
 			}
 			return 1, "", nil
 		default:
@@ -72,7 +76,10 @@ func (l *Loop) drainCompletionsCount(ctx context.Context, result *LoopResult) (i
 		select {
 		case c := <-l.completions:
 			drained++
-			if stop, err := l.finishRunStep(ctx, c, result); stop != "" || err != nil {
+			endStep := startPassStep(ctx, "finish_run_step")
+			stop, err := l.finishRunStep(ctx, c, result)
+			endStep()
+			if stop != "" || err != nil {
 				return drained, stop, err
 			}
 		default:
@@ -81,9 +88,9 @@ func (l *Loop) drainCompletionsCount(ctx context.Context, result *LoopResult) (i
 	}
 done:
 	if drained > 0 && l.cfg.ItemWorktrees && !l.nonLanding && !l.pollOnly {
-		if _, colErr := l.collectIdleWorktrees(ctx); colErr != nil {
-			l.reportf("loop: idle worktree collection after node end failed: %v\n", colErr)
-		}
+		endSignal := startPassStep(ctx, "signal_gc_collect")
+		l.signalGCWake()
+		endSignal()
 	}
 	return drained, "", nil
 }
@@ -93,7 +100,10 @@ done:
 // on the same lane. Fresh starts belong to the coordinator; the pass still reaps
 // and does queue-wide maintenance.
 func (l *Loop) finishRunStep(ctx context.Context, c runCompletion, result *LoopResult) (stop string, err error) {
-	if stop, err = l.takeCompletion(c, result); stop != "" || err != nil {
+	endTake := startPassStep(ctx, "take_completion")
+	stop, err = l.takeCompletion(c, result)
+	endTake()
+	if stop != "" || err != nil {
 		return stop, err
 	}
 	if l.pollOnly || c.itemID == "" || c.outcome.err != nil || c.outcome.stop != "" || c.laneRefusal != nil {

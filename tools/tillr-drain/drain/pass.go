@@ -1664,11 +1664,7 @@ func (l *Loop) passPlansMode(ctx context.Context, at time.Time, generation *stri
 		}
 		var wtSnap *worktreebudget.Snapshot
 		if l.cfg.ItemWorktrees && !l.nonLanding {
-			if snap, colErr := l.collectIdleWorktrees(ctx); colErr == nil {
-				wtSnap = &snap
-			} else {
-				l.reportf("loop: idle worktree collection before claim failed: %v\n", colErr)
-			}
+			wtSnap = l.cachedWorktreeSnapshot()
 		}
 		err := s.ReadTx(ctx, func(r *store.Reader) error {
 			return l.readPassPlans(ctx, r, at, "", refs, &plans, &leases, wtSnap)
@@ -3444,6 +3440,11 @@ plans:
 	}
 	if err := l.timePassPhase("write_holds", func() error { return l.writeHolds(ctx, holdWrites) }); err != nil {
 		return "", err
+	}
+	if !purePass {
+		endCollect := l.startPassPhase("collect_worktrees")
+		l.runWorktreeCollection(ctx)
+		endCollect()
 	}
 	if timing.Applied > 0 || timing.TickID != "" {
 		l.waitingDetail = ""

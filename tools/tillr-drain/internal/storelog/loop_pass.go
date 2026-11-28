@@ -3,6 +3,7 @@ package storelog
 import (
 	"context"
 	"encoding/json"
+	"sync"
 	"time"
 
 	"github.com/mschulkind-oss/tillr-drain/internal/drainmodel"
@@ -30,6 +31,10 @@ type LoopPassFact struct {
 	SessionID string           `json:"session_id"`
 	WallMS    int64            `json:"wall_ms"`
 	PhasesMS  map[string]int64 `json:"phases_ms"`
+	// CompletionStepsMS names the steps inside the drain_completions phase. It is
+	// separate from PhasesMS and is not part of the sum invariant: the steps
+	// subdivide a phase, and a step run outside the pass goroutine may overlap.
+	CompletionStepsMS map[string]int64 `json:"completion_steps_ms,omitempty"`
 }
 
 // LoopPassInterval is the minimum spacing between recorded LoopPassKind events.
@@ -40,6 +45,8 @@ type LoopPassTimer struct {
 	now    func() time.Time
 	start  time.Time
 	phases map[string]time.Duration
+	mu     sync.Mutex // guards steps; a step may end on another goroutine
+	steps  map[string]time.Duration
 }
 
 // NewLoopPassTimer constructs a LoopPassTimer anchored at now().
@@ -67,6 +74,61 @@ func (t *LoopPassTimer) StartPhase(name string) func() {
 		}
 		t.phases[name] += d
 	}
+}
+
+// StartStep begins timing a named step inside a phase and returns a closure that
+// ends it. Steps are reported by Steps, apart from the phases.
+func (t *LoopPassTimer) StartStep(name string) func() {
+	if t == nil {
+		return func() {}
+	}
+	begin := t.now()
+	return func() {
+		d := t.now().Sub(begin)
+		if d < 0 {
+			d = 0
+		}
+		t.mu.Lock()
+		defer t.mu.Unlock()
+		if t.steps == nil {
+			t.steps = map[string]time.Duration{}
+		}
+		t.steps[name] += d
+	}
+}
+
+// Steps returns per-step wall times in milliseconds, or nil when none was timed.
+func (t *LoopPassTimer) Steps() map[string]int64 {
+	if t == nil {
+		return nil
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if len(t.steps) == 0 {
+		return nil
+	}
+	out := make(map[string]int64, len(t.steps))
+	for name, d := range t.steps {
+		out[name] = d.Milliseconds()
+	}
+	return out
+}
+
+type passStepTimerKey struct{}
+
+// WithPassStepTimer carries the pass timer to code that may run off the pass
+// goroutine, so it need not read the loop's passTimer directly.
+func WithPassStepTimer(ctx context.Context, pt *LoopPassTimer) context.Context {
+	if pt == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, passStepTimerKey{}, pt)
+}
+
+// StartPassStep times a named step inside a phase; a no-op without a carried timer.
+func StartPassStep(ctx context.Context, name string) func() {
+	pt, _ := ctx.Value(passStepTimerKey{}).(*LoopPassTimer)
+	return pt.StartStep(name)
 }
 
 // Finish returns the pass completion timestamp, total wall time in milliseconds, and
@@ -147,6 +209,8 @@ func RecordLoopPass(ctx context.Context, p LoopPassParams) (time.Time, bool) {
 		SessionID: id,
 		WallMS:    wallMS,
 		PhasesMS:  phasesMS,
+
+		CompletionStepsMS: p.Timer.Steps(),
 	})
 	if err != nil {
 		if ctx.Err() == nil && p.Reportf != nil {
