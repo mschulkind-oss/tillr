@@ -247,6 +247,8 @@ type Candidate struct {
 	WorkerSession      *WorkerSession    `json:"worker_session,omitempty"`
 	InheritedDrift     []forkObservation `json:"inherited_drift,omitempty"`
 	deferGateJudgment  bool              // an ordinary phase's result may not be the final gate verdict
+	reenabled          []string          // disabled-list entries the candidate removes; each runs once after the gate
+	reenabledErr       error             // the disabled list could not be read at base or head
 	gatedForLand       bool              // set by verifyOnly when candidateGatedKind committed and handed off to Step 5
 	skipFastGateTiming bool              // relandings are outside ordinary fast-gate timing
 	// Request is the run.request that produced this candidate. It is held so a
@@ -4168,7 +4170,8 @@ func (l *Loop) verifyStep(ctx context.Context, prepared *Candidate, result *Loop
 	l.gatesInFlight++
 	l.mu.Unlock()
 	candidate.gateCount = l.gateCount
-	candidate.deferGateJudgment = IsTrunkFixer(candidate.ItemID)
+	candidate.reenabled, candidate.reenabledErr = l.reenabledSelectors(ctx, candidate)
+	candidate.deferGateJudgment = IsTrunkFixer(candidate.ItemID) || candidate.reenablesTests()
 	finishPreGate()
 	endGate := timeHandoffPhase(ctx, "candidate_gate")
 	var gate GateOutcome
@@ -4378,7 +4381,7 @@ func (l *Loop) verifyStep(ctx context.Context, prepared *Candidate, result *Loop
 		}
 		if outcome == GatePassedInherited {
 			gate.Outcome = GatePassedInherited
-			if !IsTrunkFixer(candidate.ItemID) {
+			if !IsTrunkFixer(candidate.ItemID) && !candidate.reenablesTests() {
 				if err := gate.finishJudgment(); err != nil {
 					return "", false, err
 				}
@@ -4453,6 +4456,12 @@ func (l *Loop) verifyStep(ctx context.Context, prepared *Candidate, result *Loop
 	}
 	// Both ordinary passes and disjoint inherited passes must prove the named repairs.
 	// A refusal or hold above never invokes the named checks.
+	if candidate.reenablesTests() {
+		accepted, err := l.settleRepairGate(ctx, &candidate, &gate, result)
+		if err != nil || !accepted {
+			return "", false, err
+		}
+	}
 	if IsTrunkFixer(candidate.ItemID) {
 		accepted, err := l.settleFixerGate(ctx, &candidate, &gate, result)
 		if err != nil || !accepted {
