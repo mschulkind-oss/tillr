@@ -112,6 +112,7 @@ func (l *Loop) compactDesigner(ctx context.Context, d Decision) error {
 // replay it as though no work happened. Error-only assistant messages are not answers.
 func failedDesignerResume(d Decision, rec run.Record) (bool, error) {
 	workerTurn := d.RunRequest != nil && d.RunRequest.SessionTurn && d.WorkerSessionReason == "resumed-worker"
+	infraTurn := workerTurn && d.InfrastructureFrom != ""
 	designTurn := d.DesignContinuationFrom != "" && d.RunRequest != nil && d.RunRequest.SessionTurn
 	// A quota continuation resumes the session staged for the attempt. A run paused
 	// before its harness took a first turn has that id but no conversation behind it,
@@ -124,11 +125,15 @@ func failedDesignerResume(d Decision, rec run.Record) (bool, error) {
 		return false, nil
 	}
 	sessionID := d.DesignerSessionID
-	if quotaTurn {
+	if quotaTurn || infraTurn {
 		sessionID = ""
 		for _, ref := range rec.ArtifactRefs {
 			if ref.Kind == "lane-root" {
-				id, err := run.ReadSessionID(ref.Ref)
+				dir := ref.Ref
+				if infraTurn && d.RunRequest != nil && d.RunRequest.ReadOnlyGroup != "" {
+					dir = run.NodeDir(ref.Ref, rec.RunID)
+				}
+				id, err := run.ReadSessionID(dir)
 				if err != nil {
 					return false, err
 				}
@@ -139,7 +144,7 @@ func failedDesignerResume(d Decision, rec run.Record) (bool, error) {
 			return false, nil
 		}
 	}
-	explicit := designTurn || quotaTurn
+	explicit := designTurn || quotaTurn || infraTurn
 	sawLog, missingSession := false, explicit && missingDesignSessionDiagnostic(rec.StderrTail, sessionID)
 	for _, ref := range rec.ArtifactRefs {
 		if ref.Kind != "log" {
@@ -345,6 +350,7 @@ func (l *Loop) replaceFailedDesigner(ctx context.Context, old Decision, rec run.
 	next.Reason = "resume-failed"
 	next.DesignerReason = "resume-failed"
 	next.DesignerSessionID = ""
+	next.InfrastructureFrom = ""
 	if old.RunRequest.SessionTurn && old.DesignContinuationFrom == "" {
 		next.WorkerSessionReason = "resume-failed"
 	}
