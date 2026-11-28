@@ -31,7 +31,7 @@ vantage:
 
 **Start at** [§4](#4-who-reads-each-new-alert-inside-tillr) to [§6](#6-what-must-be-handed-upward-to-whom-and-how).
 
-**Needs your ruling:** None.
+**Needs your ruling:** None (every open question is ruled; `D-AT1` to `D-AT12` in the [Decision Ledger](#decision-ledger) are designer's decisions, which the owner may overturn).
 
 **Reads with:** [the alert investigation and outcome workflow](./tillr-watch-alert-workflow.md) (the single-instance `ack` and `settle`, the investigation record, the closed outcome set and the item-linked silences this seat calls), [the general agent watch design](./general-agent-watch.md) (the engine and per-owner delivery cursors), [the tillr-watch design](./tillr-watch.md) (whose deferred seat routing, [OQ-TW4](./tillr-watch.md#OQ-TW4), this carries out under the no-remedy rule of [OQ-TW2](./tillr-watch.md#OQ-TW2)), and [operator decisions inside tillr](./operator-decisions-inside-tillr.md) (what stays reserved for the owner).
 
@@ -173,7 +173,7 @@ Every run ends by recording one of three outcomes (`D-AT7`), written into the sh
 | **`linked`** | The existing item's id, `outcome_kind`, a `finding` that proves the item covers this instance | Same as `filed`. | No, unless a repeat flood also escalates ([§6.1](#61-handed-to-the-operating-session-escalate_to--operator-session)) |
 | **`escalated`** | `escalate_to` (`operator-session` or `owner`), `finding`, `action_needed` (or `question` and `options` for the owner); an item id and `outcome_kind` whenever a concrete defect was identified | `triage_state = 'escalated'`; settled if an item is attached, otherwise investigated and still unsettled; appends `watch.alert.escalated`. | Yes |
 
-A benign operation that fires a rule shows the rule lacks the predicate to tell the benign case apart. Triage links or files a `fix-rule` item for it; it never dismisses the alert in prose.
+A benign operation that fires a rule shows the rule lacks the predicate to tell the benign case apart. Triage links or files a `fix-rule` item for it; it never dismisses the alert in prose. When a defect's fix lives outside the local store (for example, a commit in upstream `tillr` for a repository running from the installed pack), triage escalates to `operator-session` with its finding rather than inventing a local item, and the operating session settles the episode via `tillr watch settle --outcome external-fix` ([`D-AW14`](./tillr-watch-alert-workflow.md#D-AW14)).
 
 ---
 
@@ -189,6 +189,7 @@ The seat settles only clear, high-confidence single-instance matches and escalat
 4. **A live blockage.** A closed core backend, an unexpected second loop process, a proof or revert that nothing inside `tillr` is advancing, or a run or lock holder still wedging a lane or the store. Triage files or links the defect first and escalates the live details.
 5. **A hold addressed to the operator.** If `drain-obstacle-hold` names `mover == "operator"`, triage gathers the context and escalates it.
 6. **Triage itself failed.** If the run exits non-zero, times out, records no valid outcome, or the `scout` backend is closed, `tillr-drain` clears the claim, records `triage_outcome = "triage-failed"`, and escalates immediately with the original bundle and the run's error. There is no retry and no silent drop.
+7. **A fix outside the local store ([`D-AW14`](./tillr-watch-alert-workflow.md#D-AW14)).** When the root cause belongs to another repository (such as upstream `tillr` in a consumer repository running from the installed pack) so no local queue item should be filed, triage escalates with its investigation finding, and the operating session settles the episode via `tillr watch settle <alert-id> --by <actor> --outcome external-fix (--repo <repo> --commit <commit> | --ref <text>) --reason <text>`, clearing `escalated_to` and `active_triage_run_id`, marking `triage_state = 'settled'`, and stopping unsettled reminders.
 
 ### 6.2 Handed to the owner (`escalate_to = "owner"`)
 
