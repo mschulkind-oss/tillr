@@ -295,20 +295,29 @@ func TestConflictReturnsToWorkerThreeTimesOnItsBranch(t *testing.T) {
 		if p.decision.Action != ActionDispatch || p.decision.WorkerSessionReason != "resumed-worker" || !p.decision.RunRequest.SessionTurn {
 			t.Fatalf("return %d: %+v", i, p.decision)
 		}
+		if p.decision.Returned == nil || p.decision.Returned.Cause != RefusalConflict {
+			t.Fatalf("return %d missing conflict cause: %+v", i, p.decision.Returned)
+		}
 		if !strings.Contains(p.decision.RunRequest.ResumePrompt, path) {
 			t.Fatalf("missing path %s: %s", path, p.decision.RunRequest.ResumePrompt)
 		}
-		if got := runGit(t, target, "rev-parse", "HEAD"); got != head {
-			t.Fatalf("branch reset: %s != %s", got, head)
+		wantHead := head
+		if i > 0 {
+			// A returned RefusalConflict turn stages on a trunk-reset checkout
+			// (spec.Continue == false) while continuing the worker's conversation.
+			wantHead = base
+		}
+		if got := runGit(t, target, "rev-parse", "HEAD"); got != wantHead {
+			t.Fatalf("return %d checkout = %s, want %s", i, got, wantHead)
 		}
 	}
-	// The third returned dispatch is staged too, not just planned.
+	// The third returned dispatch is staged too, reset to trunk while resuming the conversation.
 	d := applyReturnedTurn(t, l, p, base)
 	if !strings.Contains(d.RunRequest.ResumePrompt, "conflict-2.txt") {
 		t.Fatal(d.RunRequest.ResumePrompt)
 	}
-	if got := runGit(t, target, "rev-parse", "HEAD"); got != head {
-		t.Fatalf("staging reset branch: %s", got)
+	if got := runGit(t, target, "rev-parse", "HEAD"); got != base {
+		t.Fatalf("staging did not reset checkout to trunk %s: got %s", base, got)
 	}
 }
 

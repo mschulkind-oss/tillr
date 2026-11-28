@@ -8,8 +8,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mschulkind-oss/tillr-drain/drain"
+	"github.com/mschulkind-oss/tillr/store"
 )
 
 type failingRepairStager struct {
@@ -20,7 +22,7 @@ type failingRepairStager struct {
 }
 
 func (s *failingRepairStager) Stage(ctx context.Context, spec drain.StageSpec) error {
-	if spec.Conflict != nil {
+	if spec.Returned != nil && spec.Returned.Cause == drain.RefusalConflict {
 		s.calls++
 		for _, name := range []string{"started-2", "started-3"} {
 			if _, err := os.Stat(filepath.Join(s.signals, name)); err != nil {
@@ -35,6 +37,32 @@ func (s *failingRepairStager) Stage(ctx context.Context, spec drain.StageSpec) e
 		}
 	}
 	return s.passStager.Stage(ctx, spec)
+}
+
+func clearStageFailedFault(t *testing.T, storePath, itemID string, at time.Time) {
+	t.Helper()
+	ctx := context.Background()
+	s, err := store.Open(ctx, storePath, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err := s.WriteTx(ctx, func(tx *store.Tx) error {
+		faults, err := drain.ReadItemFaults(tx.Reader())
+		if err != nil {
+			return err
+		}
+		f, ok := faults[itemID]
+		if !ok {
+			return fmt.Errorf("item %s has no active fault", itemID)
+		}
+		if f.Reason != drain.ReasonStageFailed {
+			return fmt.Errorf("item %s fault reason = %q, want %q", itemID, f.Reason, drain.ReasonStageFailed)
+		}
+		return drain.ClearItemFault(tx, itemID, f.Seq, at.UTC())
+	}); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestRepairStagingFailureSurvivesRestartWithoutCancelingSiblings(t *testing.T) {
@@ -85,9 +113,10 @@ esac
 	if err != nil {
 		t.Fatalf("repair failure canceled loop and siblings: %+v / %v", result, err)
 	}
-	if result.Landed != 2 || stage.calls != 1 {
-		t.Fatalf("siblings did not finish or repair repeated: %+v, calls=%d", result, stage.calls)
+	if result.Landed != 2 || result.ConflictFixes != 0 || stage.calls < 1 {
+		t.Fatalf("siblings did not finish or returned conflict run was not staged: %+v, calls=%d", result, stage.calls)
 	}
+	callsAfterHold := stage.calls
 	for _, id := range []string{"item_042", "item_043"} {
 		if state := itemStateOf(t, f.store, id); state != "landed" {
 			t.Fatalf("%s: %s", id, state)
@@ -106,38 +135,36 @@ esac
 				candidate = c
 			}
 		}
-		if e.Kind == "drain.repair-held" {
+		if e.Kind == "drain.item-fault" && e.ObjectID != nil && *e.ObjectID == "item_041" {
 			heldEvents++
 			cause = string(e.Payload)
 		}
 	}
-	if heldEvents != 1 || candidate.HeadSHA == "" || !strings.Contains(cause, "literal brace pair") || !strings.Contains(cause, "CONFLICT") || !strings.Contains(cause, moved) {
-		t.Fatalf("candidate/failure lost: %+v / %s", candidate, cause)
+	if heldEvents != 1 || candidate.HeadSHA == "" || !strings.Contains(cause, drain.ReasonStageFailed) || !strings.Contains(cause, "literal brace pair") {
+		t.Fatalf("candidate/failure lost: %+v / %s (heldEvents=%d)", candidate, cause, heldEvents)
 	}
 	if got := git(t, f.root, "rev-parse", "refs/tillr/runs/"+candidate.RunID); got != candidate.HeadSHA {
 		t.Fatalf("candidate not retained: %s", got)
 	}
-	// Another landing advances trunk, but cannot fix an unchanged staging cause.
+	// Another landing advances trunk, but cannot clear a stage-failed hold on its own.
 	newer := git(t, f.root, "commit-tree", moved+"^{tree}", "-p", moved, "-m", "later trunk fixture")
 	git(t, f.root, "update-ref", "refs/heads/main", newer)
 	for i := 0; i < 2; i++ {
 		result, err = f.newLoopWith(t, 3, steps, stage, os.Stderr).Run(context.Background())
-		if err != nil || result.Dispatched != 0 || stage.calls != 1 || !strings.Contains(result.Detail, "conflict-repair-staging-failed") {
-			t.Fatalf("restart repeated unchanged failure: %+v / %v calls=%d", result, err, stage.calls)
+		if err != nil || result.Dispatched != 0 || stage.calls != callsAfterHold || !strings.Contains(result.Detail, drain.ReasonStageFailed) {
+			t.Fatalf("restart repeated unchanged failure: %+v / %v calls=%d (want %d)", result, err, stage.calls, callsAfterHold)
 		}
 	}
-	// A changed backend policy is a concrete staging input, unlike rank/time/trunk.
+	// Correct the staging cause and clear the stage-failed hold: item_041 recovers and lands.
 	stage.corrected = true
-	backend := f.policy.Backends["fixture"]
-	backend.Model = "corrected-model"
-	f.policy.Backends["fixture"] = backend
+	clearStageFailedFault(t, f.store, "item_041", steps.Now())
 	result, err = f.newLoopWith(t, 3, steps, stage, os.Stderr).Run(context.Background())
-	if err != nil || result.Landed != 1 || stage.calls != 2 || itemStateOf(t, f.store, "item_041") != "landed" {
+	if err != nil || result.Landed != 1 || result.ConflictFixes != 0 || stage.calls != callsAfterHold+1 || itemStateOf(t, f.store, "item_041") != "landed" {
 		t.Fatalf("corrected repair did not recover: %+v / %v calls=%d", result, err, stage.calls)
 	}
 	retained := 0
 	for _, e := range eventsOf(t, f.store) {
-		if e.Kind == "drain.repair-held" {
+		if e.Kind == "drain.item-fault" && e.ObjectID != nil && *e.ObjectID == "item_041" {
 			retained++
 			if string(e.Payload) != cause {
 				t.Fatal("original failure evidence was changed")

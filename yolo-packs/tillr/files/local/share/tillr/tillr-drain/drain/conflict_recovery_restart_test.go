@@ -20,7 +20,7 @@ func TestInterruptedRecoveredRepairSettlesExistingCommitWithoutColdRestart(t *te
 	}
 	marker := filepath.Join(signals, "repair-committed")
 	adapter := stub(t, "adapter", fmt.Sprintf(`case "$TILLR_RUN_ID" in
- *-cfix)
+ *-a2)
   if [ -f %q ]; then echo duplicate-cold-repair; printf 'RESULT: done\n'; exit 0; fi
   echo repair-only-marker
   echo repaired > base.txt
@@ -42,12 +42,13 @@ esac
 	stage := &failingRepairStager{passStager: passStager{laneRoot: f.laneRoot, fence: []string{"base.txt"}}, signals: signals}
 	steps := f.steps(t, always(t, "gate", 0), land, always(t, "verdict", 0))
 	first, err := f.newLoopWith(t, 1, steps, stage, os.Stderr).Run(context.Background())
-	if err != nil || stage.calls != 1 {
+	if err != nil || first.ConflictFixes != 0 || stage.calls < 1 || !strings.Contains(first.Detail, drain.ReasonStageFailed) {
 		t.Fatalf("initial hold: %+v / %v calls=%d", first, err, stage.calls)
 	}
+	callsAfterHold := stage.calls
 	stage.corrected = true
+	clearStageFailedFault(t, f.store, "item_041", steps.Now())
 	backend := f.policy.Backends["fixture"]
-	backend.Model = "corrected-model"
 	backend.TimeoutSeconds = 0
 	f.policy.Backends["fixture"] = backend
 	ctx, cancel := context.WithCancel(context.Background())
@@ -82,12 +83,12 @@ esac
 	if err != nil || stopped.Stop != drain.StopOperatorStop {
 		t.Fatalf("operator stop: %+v / %v", stopped, err)
 	}
-	logPath := filepath.Join(f.laneRoot, "lane-1", "run-item_041-a1-cfix.log")
+	logPath := filepath.Join(f.laneRoot, "lane-1", "run-item_041-a2.log")
 	before := readText(t, logPath)
 	writeFile(t, marker+".release", "finish")
 	restarted, restartErr := f.newLoopWith(t, 1, steps, stage, os.Stderr).Run(context.Background())
-	if restartErr != nil || restarted.Dispatched != 0 || restarted.Landed != 1 || stage.calls != 2 {
-		t.Fatalf("restarted a successfully staged repair: %+v / %v calls=%d", restarted, restartErr, stage.calls)
+	if restartErr != nil || restarted.Dispatched != 0 || restarted.Landed != 1 || restarted.ConflictFixes != 0 || stage.calls != callsAfterHold+1 {
+		t.Fatalf("restarted a successfully staged repair: %+v / %v calls=%d (want %d)", restarted, restartErr, stage.calls, callsAfterHold+1)
 	}
 	after := readText(t, logPath)
 	if !strings.HasPrefix(after, before) || !strings.Contains(after, "repair-only-marker") || strings.Contains(after, "duplicate-cold-repair") {
@@ -96,20 +97,19 @@ esac
 	found := false
 	owned := false
 	for _, e := range eventsOf(t, f.store) {
-		if e.Kind == "drain.started" && e.ObjectID != nil && *e.ObjectID == "run-item_041-a1-cfix" {
+		if e.Kind == "drain.started" && e.ObjectID != nil && *e.ObjectID == "run-item_041-a2" {
 			var work struct {
-				Decision    drain.Decision `json:"decision"`
-				ParentRunID string         `json:"parent_run_id"`
+				Decision drain.Decision `json:"decision"`
 			}
 			if err := json.Unmarshal(e.Payload, &work); err != nil {
 				t.Fatal(err)
 			}
-			if work.Decision.DecisionID == "" || work.Decision.PassID == "" || work.ParentRunID != "run-item_041-a1" {
-				t.Fatalf("repair ownership has no distinct decision/pass/parent: %+v", work)
+			if work.Decision.DecisionID == "" || work.Decision.PassID == "" || work.Decision.Returned == nil || work.Decision.Returned.Cause != drain.RefusalConflict {
+				t.Fatalf("returned conflict ownership missing decision/pass/cause: %+v", work)
 			}
 			owned = true
 		}
-		if e.Kind == "drain.candidate" && strings.Contains(string(e.Payload), "run-item_041-a1-cfix") && strings.Contains(string(e.Payload), head) {
+		if e.Kind == "drain.candidate" && strings.Contains(string(e.Payload), "run-item_041-a2") && strings.Contains(string(e.Payload), head) {
 			found = true
 		}
 	}

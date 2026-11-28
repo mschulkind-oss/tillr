@@ -139,23 +139,28 @@ esac
 
 	// Expected dispatches:
 	// 0: attempt 1 stage 1 (plan)
-	// 1: attempt 1 stage 2 (build) -> squash-conflict on moved trunk
-	// 2: -cfix on build -> squash-conflict on unmoved trunk
-	// 3: returned run: no session continues, so the workflow starts again at stage 1 (plan)
-	// 4: returned run, stage 2 (build) -> squash-conflict (second identical conflict -> restart!)
-	// 5: fresh restart stage 1 (plan)
-	// 6: fresh restart stage 2 (build) -> squash-conflict -> conflict-owner park!
-	if len(stage.specs) != 7 {
-		t.Fatalf("staged %d run(s), want 7 (plan, build, cfix, returned plan, returned build, restart-plan, restart-build): %s", len(stage.specs), result.Detail)
+	// 1: attempt 1 stage 2 (build) -> squash-conflict on moved trunk (returned as RefusalConflict)
+	// 2: returned run: no session continues, so the workflow starts again at stage 1 (plan)
+	// 3: returned run, stage 2 (build) -> squash-conflict (second identical conflict -> restart!)
+	// 4: fresh restart stage 1 (plan)
+	// 5: fresh restart stage 2 (build) -> squash-conflict -> conflict-owner park!
+	if result.ConflictFixes != 0 {
+		t.Fatalf("ConflictFixes = %d, want 0 (routed as returned resume node): %s", result.ConflictFixes, result.Detail)
 	}
-	restartPlan := stage.specs[5]
+	if len(stage.specs) != 6 {
+		t.Fatalf("staged %d run(s), want 6 (plan, build, returned plan, returned build, restart-plan, restart-build): %s", len(stage.specs), result.Detail)
+	}
+	if stage.specs[2].Returned == nil || stage.specs[2].Returned.Cause != drain.RefusalConflict {
+		t.Fatalf("returned run did not carry RefusalConflict: %+v", stage.specs[2].Returned)
+	}
+	restartPlan := stage.specs[4]
 	if restartPlan.Node == nil || restartPlan.Node.ID != "plan" || restartPlan.Node.Seat != "plan" {
 		t.Fatalf("restarted run did not start at first stage (plan): %+v", restartPlan.Node)
 	}
 	if restartPlan.Conflict != nil || strings.HasSuffix(restartPlan.RunID, drain.ConflictFixSuffix) {
 		t.Fatalf("restarted run was staged as conflict-fix: %+v", restartPlan)
 	}
-	restartBrief := stage.briefs[5]
+	restartBrief := stage.briefs[4]
 	if !strings.Contains(restartBrief, "docs/work.md#work") {
 		t.Fatalf("restarted brief missing body_ref:\n%s", restartBrief)
 	}

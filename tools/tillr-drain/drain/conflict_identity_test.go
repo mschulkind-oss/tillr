@@ -31,14 +31,17 @@ if [ "$n" -eq 2 ]; then exit 2; fi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Dispatched != 2 || !strings.Contains(result.Detail, "item_041 ("+drain.ReasonBackendClosed+": first:") {
-		t.Fatalf("expected original and failed fix, then a hold on first: %+v", result)
+	if result.Dispatched != 2 || result.ConflictFixes != 0 || !strings.Contains(result.Detail, "item_041 ("+drain.ReasonBackendClosed+": first:") {
+		t.Fatalf("expected original and failed returned conflict run, then a hold on first: %+v", result)
+	}
+	if len(stage.specs) != 2 || stage.specs[1].Returned == nil || stage.specs[1].Returned.Cause != drain.RefusalConflict {
+		t.Fatalf("expected second staged run to be a returned conflict run: %+v", stage.specs)
 	}
 	original := itemRun{RunID: "run-item_041-a1", Backend: "first"}
-	fix := itemRun{RunID: original.RunID + drain.ConflictFixSuffix, Backend: "first"}
+	returned := itemRun{RunID: "run-item_041-a2", Backend: "first"}
 	before := runsForItem(t, f.store, "item_041")
-	if len(before) != 2 || before[0] != original || before[1] != fix {
-		t.Fatalf("expected distinct original and fix runs: %+v", before)
+	if len(before) != 2 || before[0] != original || before[1] != returned {
+		t.Fatalf("expected distinct original and returned conflict runs: %+v", before)
 	}
 
 	if err := drain.ProbeBackend(context.Background(), f.store, f.root, "first", []string{"/bin/true"}); err != nil {
@@ -48,12 +51,12 @@ if [ "$n" -eq 2 ]; then exit 2; fi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Dispatched != 1 || result.Landed != 1 {
+	if result.Dispatched != 1 || result.Landed != 1 || result.ConflictFixes != 0 {
 		t.Fatalf("expected one recovered dispatch and landing: %+v", result)
 	}
 	runs := runsForItem(t, f.store, "item_041")
 	retry := itemRun{RunID: "run-item_041-a3", Backend: "first"}
-	if len(runs) != 3 || runs[0] != original || runs[1] != fix || runs[2] != retry {
+	if len(runs) != 3 || runs[0] != original || runs[1] != returned || runs[2] != retry {
 		t.Fatalf("retry did not get its own run on the recovered backend: %+v", runs)
 	}
 }

@@ -35,9 +35,10 @@ func doneFencedWorkflowItemRecord(itemID, state, workflow string, paths ...strin
 }
 
 // TestConflictFixRunSurvivesInPlaceLoopRestart restarts a real loop process in place
-// while a conflict-repair (-cfix) run is live for a two-node (plan -> build) workflow
-// item. The -cfix run must stay alive across the restart, produce no run.finish with
-// end_cause lease-reclaimed and no new attempt, and be settled and landed by the new loop.
+// while a returned conflict build run (-a2-n2) is live for a two-node (plan -> build)
+// workflow item. The returned conflict run must stay alive across the restart, produce
+// no run.finish with end_cause lease-reclaimed and no third attempt, and be settled and
+// landed by the new loop.
 func TestConflictFixRunSurvivesInPlaceLoopRestart(t *testing.T) {
 	dir := scratch(t, "cfix-restart-live")
 	cfixPIDFile := filepath.Join(dir, "cfix.pid")
@@ -48,7 +49,7 @@ func TestConflictFixRunSurvivesInPlaceLoopRestart(t *testing.T) {
 
 	adapter := stub(t, "adapter", fmt.Sprintf(`set -eu
 case "$TILLR_RUN_ID" in
- *-cfix)
+ *-a2-n2)
   echo "$$" > %q
   trap 'echo term >> %q; exit 143' TERM
   while [ ! -f %q ]; do sleep 0.02; done
@@ -196,7 +197,7 @@ exit 0
 		return strings.Contains(s.output(t), "loop: landed item_041")
 	})
 
-	// Verify no run.finish with end_cause=lease-reclaimed, no drain.orphaned, and no new attempt.
+	// Verify no run.finish with end_cause=lease-reclaimed, no drain.orphaned, and no third attempt.
 	for _, e := range eventsOf(t, f.store) {
 		if e.Kind == "run.finish" && strings.Contains(string(e.Payload), "lease-reclaimed") {
 			t.Fatalf("unexpected lease-reclaimed run.finish: %s\n%s", e.Payload, s.output(t))
@@ -204,20 +205,20 @@ exit 0
 		if e.Kind == "drain.orphaned" {
 			t.Fatalf("unexpected drain.orphaned: %s\n%s", e.Payload, s.output(t))
 		}
-		if e.Kind == "run.allocate" && strings.Contains(string(e.Payload), "run-item_041-a2") {
-			t.Fatalf("unexpected new attempt run.allocate: %s\n%s", e.Payload, s.output(t))
+		if e.Kind == "run.allocate" && strings.Contains(string(e.Payload), "run-item_041-a3") {
+			t.Fatalf("unexpected third attempt run.allocate: %s\n%s", e.Payload, s.output(t))
 		}
 	}
 	if planRuns := lines(t, planCountFile); len(planRuns) != 1 {
-		t.Fatalf("plan runs = %v, want 1 (no new attempt)\n%s", planRuns, s.output(t))
+		t.Fatalf("plan runs = %v, want 1 (reused across returned conflict, no third attempt)\n%s", planRuns, s.output(t))
 	}
 }
 
-// TestConflictFixEndedAtRestartResumesConflictRepairNotFirstNode simulates a -cfix
-// run ending at an in-place restart (reaped with run.finish timed-out/lease-reclaimed
-// and drain.orphaned) for a two-node (plan -> build) workflow item. The successor loop
-// must resume conflict repair on the built candidate rather than starting a brand-new
-// attempt at the plan node.
+// TestConflictFixEndedAtRestartResumesConflictRepairNotFirstNode simulates a returned
+// conflict build run (-a2-n2) ending at an in-place restart (reaped with run.finish
+// timed-out/lease-reclaimed and drain.orphaned) for a two-node (plan -> build) workflow
+// item. The successor loop must resume the interrupted conflict build node rather than
+// starting a brand-new attempt at the plan node.
 func TestConflictFixEndedAtRestartResumesConflictRepairNotFirstNode(t *testing.T) {
 	dir := scratch(t, "cfix-restart-ended")
 	cfixCountFile := filepath.Join(dir, "cfix.count")
@@ -226,7 +227,7 @@ func TestConflictFixEndedAtRestartResumesConflictRepairNotFirstNode(t *testing.T
 
 	adapter := stub(t, "adapter", fmt.Sprintf(`set -eu
 case "$TILLR_RUN_ID" in
- *-cfix)
+ *-a2-n2*)
   echo "$TILLR_RUN_ID" >> %q
   echo repaired > base.txt
   git add base.txt
@@ -274,7 +275,7 @@ esac
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
 [ "${1:-}" = "--help" ] && exit 1
 case "$*" in
- *--run*-cfix*)
+ *--run*-a2-n2*)
   printf '%%s\n' '%[3]s'
   exit 0 ;;
  *)
@@ -363,33 +364,33 @@ esac
 		t.Fatalf("expected vanished %s to be reaped (sawReaped=%v, sawOrphaned=%v)\n%s", lostCfixID, sawReaped, sawOrphaned, out2.String())
 	}
 
-	// Verify plan and build each ran only ONCE, and a resumed -cfix run landed the item.
+	// Verify plan and initial build each ran only ONCE, and the resumed returned conflict build run landed the item.
 	if planRuns := lines(t, planCountFile); len(planRuns) != 1 {
-		t.Fatalf("plan runs = %v, want exactly 1 (must resume conflict repair, not restart at plan)\n%s", planRuns, out2.String())
+		t.Fatalf("plan runs = %v, want exactly 1 (must resume interrupted build node, not restart at plan)\n%s", planRuns, out2.String())
 	}
 	if buildRuns := lines(t, buildCountFile); len(buildRuns) != 1 {
-		t.Fatalf("build runs = %v, want exactly 1 (must reuse built candidate)\n%s", buildRuns, out2.String())
+		t.Fatalf("build runs = %v, want exactly 1 (initial attempt)\n%s", buildRuns, out2.String())
 	}
 	if cfixRuns := lines(t, cfixCountFile); len(cfixRuns) != 1 {
-		t.Fatalf("resumed cfix runs = %v, want 1\n%s", cfixRuns, out2.String())
+		t.Fatalf("resumed conflict build runs = %v, want 1\n%s", cfixRuns, out2.String())
 	}
 	if !strings.Contains(out2.String(), "loop: landed item_042") {
 		t.Fatalf("item_042 did not land after resumed conflict repair\n%s", out2.String())
 	}
-	// Mark item_042 landed in store is stubbed by always(item,0), so verify no new attempt was allocated.
+	// Mark item_042 landed in store is stubbed by always(item,0), so verify no third attempt was allocated.
 	db, err := store.OpenRead(context.Background(), f.store)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	var a2Count int
+	var a3Count int
 	if err := db.ReadTx(context.Background(), func(r *store.Reader) error {
-		return r.QueryRow(`SELECT COUNT(*) FROM runs WHERE run_id LIKE 'run-item_042-a2%'`).Scan(&a2Count)
+		return r.QueryRow(`SELECT COUNT(*) FROM runs WHERE run_id LIKE 'run-item_042-a3%'`).Scan(&a3Count)
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if a2Count != 0 {
-		t.Fatalf("unexpected second attempt runs (%d) for item_042\n%s", a2Count, out2.String())
+	if a3Count != 0 {
+		t.Fatalf("unexpected third attempt runs (%d) for item_042\n%s", a3Count, out2.String())
 	}
 }
 
@@ -400,7 +401,7 @@ type interceptCfixSteps struct {
 }
 
 func (s *interceptCfixSteps) Run(ctx context.Context, req run.Request) (run.Record, string, error) {
-	if !s.hit && strings.HasSuffix(req.RunID, drain.ConflictFixSuffix) {
+	if !s.hit && strings.HasSuffix(req.RunID, "-a2-n2") {
 		s.hit = true
 		s.onFirstCfix(req.RunID)
 		return run.Record{}, "", context.Canceled

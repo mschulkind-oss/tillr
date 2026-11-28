@@ -261,7 +261,7 @@ type failingItemWorktreeRepairStager struct {
 }
 
 func (s *failingItemWorktreeRepairStager) Stage(ctx context.Context, spec drain.StageSpec) error {
-	if spec.Conflict != nil {
+	if spec.Returned != nil && spec.Returned.Cause == drain.RefusalConflict {
 		s.calls++
 		for _, name := range []string{"started-item_042", "started-item_043"} {
 			if _, err := os.Stat(filepath.Join(s.signals, name)); err != nil {
@@ -334,9 +334,10 @@ esac
 	if err != nil {
 		t.Fatalf("repair failure canceled loop and siblings: %+v / %v", result, err)
 	}
-	if result.Landed != 2 || stage.calls != 1 {
-		t.Fatalf("siblings did not finish or repair repeated: %+v, calls=%d", result, stage.calls)
+	if result.Landed != 2 || result.ConflictFixes != 0 || stage.calls < 1 {
+		t.Fatalf("siblings did not finish or returned conflict run was not staged: %+v, calls=%d", result, stage.calls)
 	}
+	callsAfterHold := stage.calls
 	for _, id := range []string{"item_042", "item_043"} {
 		if state := itemStateOf(t, f.store, id); state != "landed" {
 			t.Fatalf("%s: %s", id, state)
@@ -346,20 +347,18 @@ esac
 			t.Fatalf("%s runs=%+v, want 1 run in lane %q", id, runs, id)
 		}
 	}
-	// Restart with unchanged inputs: failure must still be known and not re-staged.
+	// Restart with unchanged inputs: stage-failed hold persists and does not re-stage.
 	newer := git(t, f.root, "commit-tree", moved+"^{tree}", "-p", moved, "-m", "later trunk fixture")
 	git(t, f.root, "update-ref", "refs/heads/main", newer)
 	result, err = newItemWorktreesLoop(t, f, 3, steps, stage, os.Stderr, steps.Now).Run(context.Background())
-	if err != nil || result.Dispatched != 0 || stage.calls != 1 || !strings.Contains(result.Detail, "conflict-repair-staging-failed") {
-		t.Fatalf("restart repeated unchanged failure: %+v / %v calls=%d", result, err, stage.calls)
+	if err != nil || result.Dispatched != 0 || stage.calls != callsAfterHold || !strings.Contains(result.Detail, drain.ReasonStageFailed) {
+		t.Fatalf("restart repeated unchanged failure: %+v / %v calls=%d (want %d)", result, err, stage.calls, callsAfterHold)
 	}
-	// Correct the staging input and restart: item_041 recovers in its item directory.
+	// Correct the staging cause, clear the stage-failed hold, and restart: item_041 recovers in its item directory.
 	stage.corrected = true
-	backend := f.policy.Backends["fixture"]
-	backend.Model = "corrected-model"
-	f.policy.Backends["fixture"] = backend
+	clearStageFailedFault(t, f.store, "item_041", steps.Now())
 	result, err = newItemWorktreesLoop(t, f, 3, steps, stage, os.Stderr, steps.Now).Run(context.Background())
-	if err != nil || result.Landed != 1 || stage.calls != 2 || itemStateOf(t, f.store, "item_041") != "landed" {
+	if err != nil || result.Landed != 1 || result.ConflictFixes != 0 || stage.calls != callsAfterHold+1 || itemStateOf(t, f.store, "item_041") != "landed" {
 		t.Fatalf("corrected repair did not recover: %+v / %v calls=%d", result, err, stage.calls)
 	}
 	for _, r := range runsWithLaneForItem(t, f.store, "item_041") {
