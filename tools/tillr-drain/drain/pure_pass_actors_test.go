@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-drain/internal/bgactors"
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/notify"
 	"github.com/mschulkind-oss/tillr/store"
@@ -400,5 +401,84 @@ func TestRefreshSyncPlannerCachesSkipsFinishedDesignDocs(t *testing.T) {
 	}
 	if raw, err := os.ReadFile(countFile); err == nil && len(raw) > 0 {
 		t.Fatalf("refreshSyncPlannerCaches invoked QuestionsCmd for finished item design_doc")
+	}
+}
+
+func TestConflictFixCoordinatorReturnRefreshesTrunkCacheAndSignalsTrunkProofWake(t *testing.T) {
+	t.Setenv("TILLR_LOOP_STORE", "")
+	ctx := context.Background()
+	f, l := passFixture(t, "item-a")
+	l.cfg.Report = io.Discard
+	l.gateLand.Land.Active = true
+
+	oldBase := runGit(t, f.root, "rev-parse", "main")
+	l.actors.SetCachedTrunk(bgactors.TrunkCache{Tip: oldBase, Valid: true})
+	select {
+	case <-l.actors.TrunkProofWakeChan():
+	default:
+	}
+
+	// Commit a candidate change on lane-1 from oldBase.
+	wt := l.laneTarget("lane-1")
+	writeForkFile(t, filepath.Join(wt, "base.txt"), "candidate\n")
+	runGit(t, wt, "add", "base.txt")
+	runGit(t, wt, "commit", "-qm", "candidate")
+	headSHA := runGit(t, wt, "rev-parse", "HEAD")
+
+	// Advance trunk on the same file so the replay conflicts.
+	writeForkFile(t, filepath.Join(f.root, "base.txt"), "trunk\n")
+	runGit(t, f.root, "add", "base.txt")
+	runGit(t, f.root, "commit", "-qm", "trunk move")
+	newTip := runGit(t, f.root, "rev-parse", "main")
+
+	cand := Candidate{
+		ItemID:   "item-a",
+		RunID:    "run-item-a-a1",
+		LaneID:   "lane-1",
+		Worktree: wt,
+		BaseSHA:  oldBase,
+		HeadSHA:  headSHA,
+	}
+	if _, _, err := l.conflictFix(ctx, cand, LandOutcome{
+		Result:        LandSquashConflict,
+		ConflictPaths: []string{"CONFLICT (content): Merge conflict in base.txt"},
+	}, &LoopResult{}, &PassTiming{}); err != nil {
+		t.Fatalf("conflictFix: %v", err)
+	}
+	if got := l.actors.CachedTrunk().Tip; got != newTip {
+		t.Fatalf("CachedTrunk().Tip = %q, want %q", got, newTip)
+	}
+	select {
+	case <-l.actors.TrunkProofWakeChan():
+	default:
+		t.Fatal("conflictFix did not signal TrunkProofWake")
+	}
+}
+
+func TestAnswerBlockRefreshesTrunkCacheAndSignalsTrunkProofWake(t *testing.T) {
+	t.Setenv("TILLR_LOOP_STORE", "")
+	ctx := context.Background()
+	f, l, _, base := designAnswerFixture(t)
+	l.cfg.Report = io.Discard
+
+	l.actors.SetCachedTrunk(bgactors.TrunkCache{Tip: base, Valid: true})
+	select {
+	case <-l.actors.TrunkProofWakeChan():
+	default:
+	}
+
+	doc := "# Doc\n\n### Build item a\n\n<!-- tillr: item id=\"item-a\" paths=\"tools/item-a/\" -->\n- **c1:** the amended criterion\n"
+	newTip := commitBriefs(t, f, doc)
+
+	if err := l.answerBlock(ctx, landedAnswer(t, newTip, "item-a")); err != nil {
+		t.Fatalf("answerBlock: %v", err)
+	}
+	if got := l.actors.CachedTrunk().Tip; got != newTip {
+		t.Fatalf("CachedTrunk().Tip = %q, want %q", got, newTip)
+	}
+	select {
+	case <-l.actors.TrunkProofWakeChan():
+	default:
+		t.Fatal("answerBlock did not signal TrunkProofWake")
 	}
 }

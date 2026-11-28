@@ -679,7 +679,14 @@ func (l *Loop) recordBlockAnswerThen(ctx context.Context, candidate Candidate, t
 		return err
 	}
 	defer s.Close()
-	return s.WriteTx(ctx, func(tx *store.Tx) error {
+	var trunkTip string
+	if !l.nonLanding && l.cfg.Root != "" {
+		if tip, err := l.revParse(ctx, l.cfg.Root, l.trunkRef()); err == nil && tip != "" {
+			trunkTip = tip
+			_, _ = l.refreshTrunkCache(ctx, trunkTip)
+		}
+	}
+	if err := s.WriteTx(ctx, func(tx *store.Tx) error {
 		// An answered conflict returns its item to the queue; a terminal item stays put.
 		if err := refuseTerminalItem(tx.Reader(), c.ItemID, "conflict-answer"); err != nil {
 			return err
@@ -722,7 +729,16 @@ func (l *Loop) recordBlockAnswerThen(ctx context.Context, candidate Candidate, t
 			return then(tx)
 		}
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
+	if trunkTip != "" {
+		if _, err := l.refreshTrunkCache(ctx, trunkTip); err != nil {
+			return err
+		}
+		l.signalTrunkProofWake()
+	}
+	return nil
 }
 
 var (

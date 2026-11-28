@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -209,6 +210,15 @@ func (s *sessionConflictStager) Stage(ctx context.Context, spec drain.StageSpec)
 		return err
 	}
 	dir := filepath.Join(s.laneRoot, spec.LaneID)
+	if !spec.Continue && spec.BaseSHA != "" {
+		worktree := filepath.Join(dir, "worktree")
+		if _, err := os.Stat(worktree); err == nil {
+			cmd := exec.CommandContext(ctx, "git", "-C", worktree, "reset", "--hard", spec.BaseSHA)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				return fmt.Errorf("reset worktree to %s: %w: %s", spec.BaseSHA, err, out)
+			}
+		}
+	}
 	if err := os.WriteFile(filepath.Join(dir, drain.BriefFile), []byte("fixture brief\n"), 0644); err != nil {
 		return err
 	}
@@ -249,8 +259,8 @@ printf 'RESULT: done\n'`)
 		t.Fatalf("loop: %+v %v", result, err)
 	}
 	tip := strings.TrimSpace(git(t, f.root, "rev-parse", "main"))
-	if len(stage.specs) != 2 || stage.specs[1].Continue || stage.specs[1].BaseSHA != tip || stage.specs[1].BaseSHA == stage.specs[0].BaseSHA {
-		t.Fatalf("fix was not staged fresh on the trunk tip %s: %+v", tip, stage.specs)
+	if len(stage.specs) != 2 || stage.specs[1].Continue || stage.specs[1].BaseSHA != tip || stage.specs[1].BaseSHA == stage.specs[0].BaseSHA || stage.specs[1].Returned == nil || stage.specs[1].Returned.Cause != drain.RefusalConflict {
+		t.Fatalf("fix was not staged fresh on the trunk tip %s with conflict return: %+v", tip, stage.specs)
 	}
 	var found bool
 	for _, e := range eventsOf(t, f.store) {
@@ -265,12 +275,12 @@ printf 'RESULT: done\n'`)
 		if err := json.Unmarshal(e.Payload, &payload); err != nil {
 			t.Fatal(err)
 		}
-		if payload.Decision.WorkerSessionReason == "trunk-conflict" {
+		if payload.Decision.WorkerSessionReason == "resumed-worker" {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatal("fix dispatch did not record trunk-conflict")
+		t.Fatal("fix dispatch did not record resumed-worker")
 	}
 }
 

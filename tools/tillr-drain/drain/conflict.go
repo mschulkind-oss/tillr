@@ -143,6 +143,12 @@ func (l *Loop) conflictFix(ctx context.Context, candidate Candidate, landed Land
 	}
 	if conflictRepeatsIn(cycle, candidate, key) {
 		// The second identical conflict of the retry cycle: start over from the trunk.
+		if mainSHA != "" {
+			if _, err := l.refreshTrunkCache(ctx, mainSHA); err != nil {
+				return "", false, err
+			}
+			l.signalTrunkProofWake()
+		}
 		if err := l.restartConflicted(ctx, candidate, landed, key, mainSHA); err != nil {
 			return "", false, err
 		}
@@ -156,6 +162,12 @@ func (l *Loop) conflictFix(ctx context.Context, candidate Candidate, landed Land
 	if l.isLandCoordinatorActive() {
 		if err := l.pinCandidateHead(ctx, candidate); err != nil {
 			return "", false, err
+		}
+		if mainSHA != "" {
+			if _, err := l.refreshTrunkCache(ctx, mainSHA); err != nil {
+				return "", false, err
+			}
+			l.signalTrunkProofWake()
 		}
 		if err := l.recordConflict(ctx, candidate, landed, "", key, false); err != nil {
 			return "", false, err
