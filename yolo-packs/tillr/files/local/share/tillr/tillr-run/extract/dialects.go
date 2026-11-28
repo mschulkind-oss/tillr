@@ -301,7 +301,16 @@ func PiDialect(streamText string, liveProbe bool) DialectResult {
 		text = piCurrentText(deltas, settled, snapshotVals)
 	}
 
-	if piIsReasoningOnly(lastAssistant) {
+	if stop, _ := asString(lastAssistant["stopReason"]); stop == "error" && !hasParked {
+		// The provider refused the request: say so, rather than calling the turn empty.
+		if ended == nil {
+			message, _ := asString(lastAssistant["errorMessage"])
+			if message = strings.TrimSpace(message); message == "" {
+				message = "the provider reported an error without a message"
+			}
+			ended = &EndedInfo{Cause: "provider-error", Detail: message}
+		}
+	} else if piIsReasoningOnly(lastAssistant) {
 		text = "[Pi's last assistant turn had no text or tool call.]\n"
 	}
 	if liveProbe && hasParked {

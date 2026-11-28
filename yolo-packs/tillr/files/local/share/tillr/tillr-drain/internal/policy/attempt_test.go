@@ -84,3 +84,14 @@ func TestClassifyAttemptSeparatesMachineryFromWork(t *testing.T) {
 		})
 	}
 }
+
+// A provider-refused last turn is infrastructure whatever the exit code and log say,
+// even a log that quotes a RESULT footer.
+func TestClassifyAttemptProviderErrorIsInfrastructure(t *testing.T) {
+	for _, exit := range []int{0, 1, 143} {
+		rec := run.Record{Backend: "pi-scout", State: run.StateExited, EndCause: run.EndProviderError, ProviderError: "refused", ExitCode: code(exit)}
+		if got := ClassifyAttempt(rec, "RESULT: done"); got != AttemptInfrastructure {
+			t.Errorf("exit %d: ClassifyAttempt = %s, want infrastructure", exit, got)
+		}
+	}
+}

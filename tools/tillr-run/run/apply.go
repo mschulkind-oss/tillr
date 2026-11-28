@@ -37,6 +37,11 @@ const (
 	// like any ended run; the cause is what says the run is neither an answer nor a
 	// harness failure. The record's RepeatingCall names the call.
 	EndRepeatingCall = "repeating-call"
+	// EndProviderError is a Pi session whose last assistant turn ended with a provider
+	// error (stopReason "error"): the provider refused or failed the model request, so the
+	// run has no answer however the process exited. The record's ProviderError carries the
+	// provider's message, and the run's exit code is never 0.
+	EndProviderError = "provider-error"
 )
 
 // LoopDetectedEvent is the stream event pi emits, in `--mode json`, when it ends a
@@ -160,6 +165,9 @@ type Record struct {
 	// RepeatingCall names the call of a run that ended for EndRepeatingCall, and is
 	// carried only by such a run.
 	RepeatingCall *RepeatingCall `json:"repeating_call,omitempty"`
+	// ProviderError is the provider's message when the run ended for EndProviderError, and
+	// is carried only by such a run.
+	ProviderError string `json:"provider_error,omitempty"`
 	// LoopRecovery summarizes in-run loop recoveries pi performed during the session.
 	LoopRecovery *LoopRecovery `json:"loop_recovery,omitempty"`
 	// ExtensionSet records which Pi extension set (agent dir and content key or held
@@ -330,7 +338,7 @@ func checkRecord(payload Record) error {
 		return Usagef("a run.record needs a backend: the adapter program that produced the run")
 	}
 	switch payload.EndCause {
-	case "", EndNotRecorded, EndNormalExit, EndTimeLimit, EndLeaseReclaimed, EndSignal, EndFailedToStart, EndRestart, EndSettledIdle, EndRepeatingCall:
+	case "", EndNotRecorded, EndNormalExit, EndTimeLimit, EndLeaseReclaimed, EndSignal, EndFailedToStart, EndRestart, EndSettledIdle, EndRepeatingCall, EndProviderError:
 	default:
 		return Usagef("%q is not a run end cause", payload.EndCause)
 	}
@@ -351,6 +359,12 @@ func checkRecord(payload Record) error {
 	}
 	if payload.EndCause != EndRepeatingCall && payload.RepeatingCall != nil {
 		return Usagef("a repeating_call requires the repeating-call end cause")
+	}
+	if payload.EndCause == EndProviderError && (payload.State != StateExited || payload.ProviderError == "") {
+		return Usagef("provider-error requires an exited run that carries the provider's message")
+	}
+	if payload.EndCause != EndProviderError && payload.ProviderError != "" {
+		return Usagef("a provider_error requires the provider-error end cause")
 	}
 	if payload.LoopRecovery != nil && payload.LoopRecovery.Count <= 0 {
 		return Usagef("a loop_recovery requires a positive count")

@@ -17,21 +17,14 @@ func isDesignWork(w *pendingWork) bool {
 	return w != nil && isDesignDecision(w.Decision)
 }
 
-func classifyDecisionAttempt(d Decision, rec run.Record, log string) AttemptClass {
-	if isDesignDecision(d) {
-		if _, ok := piTransportError(rec); ok {
-			return AttemptInfrastructure
-		}
-	}
+// classifyDecisionAttempt and classifyWorkAttempt classify on every seat the way
+// ClassifyAttempt does, which already reads a provider-refused last turn as the
+// backend's failure.
+func classifyDecisionAttempt(_ Decision, rec run.Record, log string) AttemptClass {
 	return ClassifyAttempt(rec, log)
 }
 
-func classifyWorkAttempt(w *pendingWork, rec run.Record, log string) AttemptClass {
-	if isDesignWork(w) {
-		if _, ok := piTransportError(rec); ok {
-			return AttemptInfrastructure
-		}
-	}
+func classifyWorkAttempt(_ *pendingWork, rec run.Record, log string) AttemptClass {
 	return ClassifyAttempt(rec, log)
 }
 
@@ -41,8 +34,10 @@ func hasPiTransportError(rec run.Record) bool {
 }
 
 // piTransportError reports whether a pi run's own JSONL stream log ended on a
-// model or transport error after pi's automatic retries failed, returning the
-// error text when it did.
+// model or transport error, returning the error text when it did. It is read on every
+// seat, and it matches a final assistant message with stopReason "error" whether or not pi
+// emitted an auto_retry_end (an HTTP 400 refusal is never retried), so a log written
+// before the run record carried a provider error is covered too.
 func piTransportError(rec run.Record) (string, bool) {
 	if rec.Backend == "command" || rec.State != run.StateExited {
 		return "", false
@@ -131,12 +126,12 @@ func parsePiTransportError(raw string) (string, bool) {
 			}
 		}
 	}
-	if !agentEndError || !retryFailed {
+	if !agentEndError {
 		return "", false
 	}
-	msg := retryError
-	if msg == "" {
-		msg = agentEndMsg
+	msg := agentEndMsg
+	if retryFailed && retryError != "" {
+		msg = retryError
 	}
 	if msg == "" {
 		msg = "model or transport error"

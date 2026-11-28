@@ -42,7 +42,12 @@ type settledMonitor struct {
 	repeating *RepeatingCall
 	// loopRecovery summarizes any in-run loop recoveries pi performed.
 	loopRecovery *LoopRecovery
-	after        func(time.Duration) <-chan time.Time
+	// providerError is the provider's message when this execution's last assistant turn
+	// ended with stopReason "error"; a later assistant turn that did not clears it.
+	// parked says a landing-call offer was staged, which is an ending of its own.
+	providerError string
+	parked        bool
+	after         func(time.Duration) <-chan time.Time
 }
 
 // observe reads only this execution's new stream, never the preceding resumed segment.
@@ -84,11 +89,32 @@ func (m *settledMonitor) observe() error {
 			Shape        string          `json:"shape"`
 			TokensBefore int64           `json:"tokensBefore"`
 			TokensAfter  int64           `json:"tokensAfter"`
+			Message      *providerTurn   `json:"message"`
+			Messages     []providerTurn  `json:"messages"`
+			Success      *bool           `json:"success"`
+			FinalError   string          `json:"finalError"`
 		}
 		if json.Unmarshal(line, &e) != nil {
 			continue
 		}
 		switch e.Type {
+		case "message", "message_end", "turn_end":
+			if e.Message != nil {
+				m.noteTurn(*e.Message)
+			}
+		case "agent_end":
+			for i := len(e.Messages) - 1; i >= 0; i-- {
+				if e.Messages[i].Role == "assistant" {
+					m.noteTurn(e.Messages[i])
+					break
+				}
+			}
+		case "auto_retry_end":
+			if e.Success != nil && !*e.Success && m.providerError == "" {
+				m.providerError = providerMessage("", e.FinalError)
+			}
+		case "parked":
+			m.parked = true
 		case "agent_settled":
 			if !e.Aborted {
 				m.settledAt = time.Now().UTC().Format(time.RFC3339Nano)
@@ -116,6 +142,36 @@ func (m *settledMonitor) observe() error {
 		}
 	}
 	return nil
+}
+
+// providerTurn is the part of a Pi message that says how an assistant turn ended.
+type providerTurn struct {
+	Role         string `json:"role"`
+	StopReason   string `json:"stopReason"`
+	ErrorMessage string `json:"errorMessage"`
+}
+
+// noteTurn follows the latest assistant turn: one that ended in error holds the
+// provider's message, and a later one that did not clears it.
+func (m *settledMonitor) noteTurn(t providerTurn) {
+	if t.Role != "assistant" {
+		return
+	}
+	if t.StopReason == "error" {
+		m.providerError = providerMessage(t.ErrorMessage, m.providerError)
+		return
+	}
+	m.providerError = ""
+}
+
+func providerMessage(message, fallback string) string {
+	if text := strings.TrimSpace(message); text != "" {
+		return text
+	}
+	if text := strings.TrimSpace(fallback); text != "" {
+		return text
+	}
+	return "the provider reported an error without a message"
 }
 
 // HarnessEndedEvent is the stream event an adapter appends when it ended a harness

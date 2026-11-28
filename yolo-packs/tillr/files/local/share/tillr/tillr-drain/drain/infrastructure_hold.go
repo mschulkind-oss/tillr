@@ -41,6 +41,9 @@ func infrastructureDetail(rec run.Record, log string) string {
 }
 
 func infrastructureWords(rec run.Record, log string) string {
+	if words := strings.TrimSpace(rec.ProviderError); words != "" {
+		return words
+	}
 	if words, ok := piTransportError(rec); ok {
 		return words
 	}

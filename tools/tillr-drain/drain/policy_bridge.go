@@ -205,7 +205,12 @@ func (l *Loop) clearQuotaPause(ctx context.Context, id string) error {
 
 // Forwarding wrappers for failover.go.
 func ClassifyAttempt(rec run.Record, log string) AttemptClass {
-	return policy.ClassifyAttempt(rec, log)
+	class := policy.ClassifyAttempt(rec, log)
+	if class == AttemptAnswered && hasPiTransportError(rec) {
+		// A pre-fix run exited 0 on a provider-refused last turn; its stream says so.
+		return AttemptInfrastructure
+	}
+	return class
 }
 func RecordAdapterRefusal(rec run.Record, log string) (string, bool) {
 	return policy.RecordAdapterRefusal(rec, log)

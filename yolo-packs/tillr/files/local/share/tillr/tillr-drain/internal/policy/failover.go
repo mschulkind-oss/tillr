@@ -113,6 +113,10 @@ func ClassifyAttempt(rec run.Record, log string) AttemptClass {
 			code = *rec.ExitCode
 		}
 		switch {
+		case rec.EndCause == run.EndProviderError:
+			// The provider refused or failed the last model request: nothing was
+			// answered, and the failure is the backend's, whatever the exit code.
+			return AttemptInfrastructure
 		case code == 0:
 			return AttemptAnswered
 		case code == AdapterWallExit:

@@ -416,3 +416,23 @@ func TestRecoveredThenEndedActionEndsAsRepeatingCall(t *testing.T) {
 		t.Fatalf("missing repeating-call result in:\n%s", stdout)
 	}
 }
+
+// A last turn that ended with a provider error is reported as the provider's refusal,
+// not as an empty turn.
+func TestProviderErrorLastTurnIsNamedNotEmpty(t *testing.T) {
+	message := "github-copilot API error (400): invalid_request_body"
+	final := map[string]any{"role": "assistant", "stopReason": "error", "errorMessage": message, "content": []any{}}
+	code, stdout, stderr := runPiEvents(t, []map[string]any{
+		{"type": "message_end", "message": final},
+		{"type": "agent_end", "messages": []any{final}},
+	})
+	if code != 6 {
+		t.Fatalf("code = %d, want 6\n%s", code, stderr)
+	}
+	if !strings.Contains(stdout, "\nresult: ended by the harness: provider-error\n") || !strings.Contains(stdout, message) {
+		t.Fatalf("report does not name the provider error %q:\n%s", message, stdout)
+	}
+	if strings.Contains(stdout, "no text or tool call") {
+		t.Fatalf("report still calls the refused turn empty:\n%s", stdout)
+	}
+}

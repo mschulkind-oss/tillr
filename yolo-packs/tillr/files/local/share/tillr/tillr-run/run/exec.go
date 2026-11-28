@@ -714,6 +714,18 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 		payload.State = StateExited
 		payload.ExitCode = &code
 	}
+	if monitor.providerError != "" && !monitor.parked && payload.State == StateExited &&
+		(payload.EndCause == EndNormalExit || payload.EndCause == EndSettledIdle) {
+		// The provider refused the last model request: whatever the adapter's exit, the
+		// run has no answer, and the message says why.
+		payload.EndCause = EndProviderError
+		payload.ProviderError = monitor.providerError
+		payload.SettledAt, payload.HarnessEndedAt = "", ""
+		if payload.ExitCode == nil || *payload.ExitCode == 0 {
+			code := 1
+			payload.ExitCode = &code
+		}
+	}
 	if monitor.loopRecovery != nil {
 		payload.LoopRecovery = monitor.loopRecovery
 	}
