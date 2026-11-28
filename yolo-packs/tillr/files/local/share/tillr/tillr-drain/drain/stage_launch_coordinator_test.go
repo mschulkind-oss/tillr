@@ -289,6 +289,98 @@ func TestPreExistingRunsRowImplicitlyStaged(t *testing.T) {
 	}
 }
 
+func TestRestartedParallelSiblingStagesAndLaunchesWhenPrimaryFinished(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), hangGuard)
+	defer cancel()
+
+	f, l, _ := parallelFixture(t)
+	plan := mustPlan(t, l)[0]
+	base := runGit(t, f.root, "rev-parse", TrunkRef)
+	at := l.cfg.Now().UTC()
+	ok, work, err := l.applyPlan(ctx, plan, base, at)
+	if !ok || err != nil || work == nil {
+		t.Fatalf("applyPlan: ok=%v work=%+v err=%v", ok, work, err)
+	}
+	if len(work.Decision.Parallel) == 0 {
+		t.Fatalf("expected parallel decision, got %+v", work.Decision)
+	}
+
+	// Mark nodes[0] as already finished in runs and already launched in-process,
+	// while assigning a fresh -restart RunID to a sibling reader.
+	restarted := work.Decision
+	restarted.WorkflowRestart = true
+	restarted.Parallel = append([]Decision(nil), work.Decision.Parallel...)
+	siblingReq := *restarted.Parallel[0].RunRequest
+	siblingReq.RunID = markRunID(siblingReq.RunID, "restart")
+	restarted.Parallel[0].RunRequest = &siblingReq
+	restarted.Parallel[0].WorkflowRestart = true
+
+	primary := restarted.RunRequest
+	l.mu.Lock()
+	l.stageLaunch.MarkLaunched(primary.RunID)
+	l.mu.Unlock()
+
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		rec := run.Record{
+			RunID: primary.RunID, ItemID: restarted.ItemID, LaneID: restarted.LaneID,
+			Backend: primary.Backend, State: run.StateExited, ExitCode: countPtr(0),
+			StartedAt: at.Format(time.RFC3339), FinishedAt: at.Format(time.RFC3339),
+		}
+		if err := applyTerminal(tx, rec); err != nil {
+			return err
+		}
+		return appendEffect(tx, dispatchStartedKind, primary.RunID, &pendingWork{
+			Decision: restarted, BaseSHA: base,
+		}, at)
+	})
+
+	stageable, err := l.findStageableRuns(ctx)
+	if err != nil {
+		t.Fatalf("findStageableRuns: %v", err)
+	}
+	if len(stageable) != 1 || stageable[0].runID != primary.RunID {
+		t.Fatalf("findStageableRuns = %+v, want 1 run for %s", stageable, primary.RunID)
+	}
+
+	var result LoopResult
+	ready, cancelled, err := l.stageAssignedRun(ctx, restarted, base, at, &result)
+	if err != nil || cancelled || ready == nil {
+		t.Fatalf("stageAssignedRun = ready=%v cancelled=%v err=%v; want non-nil, false, nil", ready != nil, cancelled, err)
+	}
+
+	launchable, err := l.findLaunchableRuns(ctx)
+	if err != nil {
+		t.Fatalf("findLaunchableRuns: %v", err)
+	}
+	if len(launchable) != 1 || launchable[0].runID != primary.RunID {
+		t.Fatalf("findLaunchableRuns = %+v, want 1 run for %s", launchable, primary.RunID)
+	}
+
+	// Once every sibling reader also has a runs row, the parallel group is no
+	// longer launchable.
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		for _, node := range parallelNodes(restarted)[1:] {
+			rec := run.Record{
+				RunID: node.RunRequest.RunID, ItemID: node.ItemID, LaneID: node.LaneID,
+				Backend: node.RunRequest.Backend, State: run.StateExited, ExitCode: countPtr(0),
+				StartedAt: at.Format(time.RFC3339), FinishedAt: at.Format(time.RFC3339),
+			}
+			if err := applyTerminal(tx, rec); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+
+	launchable, err = l.findLaunchableRuns(ctx)
+	if err != nil {
+		t.Fatalf("findLaunchableRuns after all siblings recorded: %v", err)
+	}
+	if len(launchable) != 0 {
+		t.Fatalf("findLaunchableRuns returned %d runs after all siblings recorded, want 0", len(launchable))
+	}
+}
+
 func TestStageAndLaunchParityWithNoNotify(t *testing.T) {
 	runScenario := func(noNotify bool) (startedCount, stagedCount, runCount int) {
 		ctx, cancel := context.WithTimeout(context.Background(), hangGuard)

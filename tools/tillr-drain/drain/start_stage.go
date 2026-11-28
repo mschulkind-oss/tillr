@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"sort"
@@ -52,6 +53,62 @@ func workStageLaunchEligibility(work *pendingWork) stagelaunch.Eligibility {
 		LaneReleased: work.LaneReleased,
 		RunID:        runID,
 		IsDispatch:   isDispatch(work.Decision),
+	}
+}
+
+func decisionRunIDs(d Decision) []string {
+	nodes := parallelNodes(d)
+	ids := make([]string, 0, len(nodes))
+	for _, node := range nodes {
+		if node.RunRequest != nil && node.RunRequest.RunID != "" {
+			ids = append(ids, node.RunRequest.RunID)
+		}
+	}
+	return ids
+}
+
+// decisionRunRecordsExist reports whether every node in parallelNodes(d)
+// already has a runs row. A restarted parallel group keeps already-finished
+// nodes[0] as d.RunRequest.RunID while assigning -restart IDs to interrupted
+// sibling readers; as long as any sibling lacks a runs row, the group still
+// needs to stage and launch.
+func decisionRunRecordsExist(r *store.Reader, d Decision) (bool, error) {
+	ids := decisionRunIDs(d)
+	if len(ids) == 0 {
+		return false, nil
+	}
+	for _, id := range ids {
+		exists, err := stagelaunch.RunRecordExists(r, id)
+		if err != nil {
+			return false, err
+		}
+		if !exists {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func decisionAllIn(d Decision, set map[string]bool) bool {
+	ids := decisionRunIDs(d)
+	if len(ids) == 0 {
+		return false
+	}
+	for _, id := range ids {
+		if !set[id] {
+			return false
+		}
+	}
+	return true
+}
+
+func (l *Loop) decisionAlreadyLaunched(d Decision) bool {
+	return decisionAllIn(d, l.stageLaunch.LaunchedRuns)
+}
+
+func (l *Loop) markDecisionLaunched(d Decision) {
+	for _, id := range decisionRunIDs(d) {
+		l.stageLaunch.MarkLaunched(id)
 	}
 }
 
@@ -137,7 +194,7 @@ func (l *Loop) scanAndStage(ctx context.Context, result *LoopResult) {
 			return
 		}
 		l.stageLaunch.Ensure()
-		if l.stageLaunch.HasRun(c.runID) || l.stageLaunch.IsLaunched(c.runID) || l.active[c.runID] || l.activeBrackets[c.runID] {
+		if l.stageLaunch.HasRun(c.runID) || l.decisionAlreadyLaunched(c.work.Decision) || l.active[c.runID] || l.activeBrackets[c.runID] {
 			l.mu.Unlock()
 			continue
 		}
@@ -163,14 +220,11 @@ func (l *Loop) findStageableRuns(ctx context.Context) ([]stageableRun, error) {
 			return err
 		}
 		l.mu.Lock()
-		skip := make(map[string]bool, l.stageLaunch.RunCount()+len(l.stageLaunch.LaunchedRuns)+len(l.active)+len(l.activeBrackets))
+		skip := make(map[string]bool, l.stageLaunch.RunCount()+len(l.active)+len(l.activeBrackets))
 		for id := range l.stageLaunch.Stage.Runs {
 			skip[id] = true
 		}
 		for id := range l.stageLaunch.Launch.Runs {
-			skip[id] = true
-		}
-		for id := range l.stageLaunch.LaunchedRuns {
 			skip[id] = true
 		}
 		for id := range l.active {
@@ -179,6 +233,7 @@ func (l *Loop) findStageableRuns(ctx context.Context) ([]stageableRun, error) {
 		for id := range l.activeBrackets {
 			skip[id] = true
 		}
+		launched := maps.Clone(l.stageLaunch.LaunchedRuns)
 		l.mu.Unlock()
 
 		for itemID, work := range works {
@@ -186,7 +241,7 @@ func (l *Loop) findStageableRuns(ctx context.Context) ([]stageableRun, error) {
 				continue
 			}
 			runID := work.Decision.RunRequest.RunID
-			if skip[runID] {
+			if skip[runID] || decisionAllIn(work.Decision, launched) {
 				continue
 			}
 			paused, err := pausedPendingWork(r, work)
@@ -196,7 +251,7 @@ func (l *Loop) findStageableRuns(ctx context.Context) ([]stageableRun, error) {
 			if paused {
 				continue
 			}
-			exists, err := stagelaunch.RunRecordExists(r, runID)
+			exists, err := decisionRunRecordsExist(r, work.Decision)
 			if err != nil {
 				return err
 			}
@@ -427,7 +482,7 @@ func (l *Loop) recordDispatchStaged(ctx context.Context, d Decision, base, reque
 		if !isWorkStageEligible(work) || work.Decision.RunRequest.RunID != d.RunRequest.RunID {
 			return nil
 		}
-		exists, err := stagelaunch.RunRecordExists(tx.Reader(), d.RunRequest.RunID)
+		exists, err := decisionRunRecordsExist(tx.Reader(), d)
 		if err != nil {
 			return err
 		}

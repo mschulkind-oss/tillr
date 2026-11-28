@@ -106,7 +106,7 @@ func (l *Loop) scanAndLaunch(ctx context.Context, result *LoopResult) {
 			return
 		}
 		l.stageLaunch.Ensure()
-		if l.stageLaunch.Launch.Runs[c.runID] || l.stageLaunch.IsLaunched(c.runID) || l.active[c.runID] || l.activeBrackets[c.runID] {
+		if l.stageLaunch.Launch.Runs[c.runID] || l.decisionAlreadyLaunched(c.work.Decision) || l.active[c.runID] || l.activeBrackets[c.runID] {
 			l.mu.Unlock()
 			continue
 		}
@@ -132,11 +132,8 @@ func (l *Loop) findLaunchableRuns(ctx context.Context) ([]launchableRun, error) 
 			return err
 		}
 		l.mu.Lock()
-		skip := make(map[string]bool, len(l.stageLaunch.Launch.Runs)+len(l.stageLaunch.LaunchedRuns)+len(l.active)+len(l.activeBrackets))
+		skip := make(map[string]bool, len(l.stageLaunch.Launch.Runs)+len(l.active)+len(l.activeBrackets))
 		for id := range l.stageLaunch.Launch.Runs {
-			skip[id] = true
-		}
-		for id := range l.stageLaunch.LaunchedRuns {
 			skip[id] = true
 		}
 		for id := range l.active {
@@ -145,6 +142,7 @@ func (l *Loop) findLaunchableRuns(ctx context.Context) ([]launchableRun, error) 
 		for id := range l.activeBrackets {
 			skip[id] = true
 		}
+		launched := maps.Clone(l.stageLaunch.LaunchedRuns)
 		l.mu.Unlock()
 
 		for itemID, work := range works {
@@ -152,7 +150,7 @@ func (l *Loop) findLaunchableRuns(ctx context.Context) ([]launchableRun, error) 
 				continue
 			}
 			runID := work.Decision.RunRequest.RunID
-			if skip[runID] {
+			if skip[runID] || decisionAllIn(work.Decision, launched) {
 				continue
 			}
 			paused, err := pausedPendingWork(r, work)
@@ -162,7 +160,7 @@ func (l *Loop) findLaunchableRuns(ctx context.Context) ([]launchableRun, error) 
 			if paused {
 				continue
 			}
-			exists, err := stagelaunch.RunRecordExists(r, runID)
+			exists, err := decisionRunRecordsExist(r, work.Decision)
 			if err != nil {
 				return err
 			}
@@ -259,11 +257,11 @@ func (l *Loop) launchStagedRun(ctx context.Context, d Decision, at time.Time, wa
 	}
 	id := d.RunRequest.RunID
 	l.mu.Lock()
-	if l.stageLaunch.IsLaunched(id) || l.active[id] || l.activeBrackets[id] {
+	if l.decisionAlreadyLaunched(d) || l.active[id] || l.activeBrackets[id] {
 		l.mu.Unlock()
 		return nil
 	}
-	l.stageLaunch.MarkLaunched(id)
+	l.markDecisionLaunched(d)
 	l.mu.Unlock()
 
 	startHandoffFrom(ctx).setDecision(d)
