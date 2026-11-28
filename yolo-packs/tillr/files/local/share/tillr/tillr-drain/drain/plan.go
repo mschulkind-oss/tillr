@@ -786,7 +786,7 @@ func (p *planner) reserveWorkerLanes(items []itemRow, released map[string]bool) 
 			id, err := ReadSessionID(e.WorkerSession.LaneDir)
 			if err == nil && id != "" && id == e.WorkerSession.SessionID {
 				p.workerLanes[e.WorkerSession.LaneID] = row.ItemID
-			} else if verifyBuildReturn(e) && e.WorkerSession.SessionID == "" {
+			} else if (verifyBuildReturn(e) || pieceScopeReturn(e)) && e.WorkerSession.SessionID == "" {
 				// A build stage with no session of its own still holds the candidate.
 				p.workerLanes[e.WorkerSession.LaneID] = row.ItemID
 			}
@@ -1342,7 +1342,7 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 			// session when the writer's cannot be resumed, and on whatever lane the plan
 			// offers: the graph (with any expanded pieces and the inserted work stage) is
 			// retained even when the original lane is unavailable.
-			if !retainedGraph && (verifyBuildReturn(e) || verifyNoVerdictReturn(e)) && e.WorkerSession.NodeIndex >= 0 && e.WorkerSession.NodeIndex < len(e.WorkerSession.Workflow.Stages) {
+			if !retainedGraph && (verifyBuildReturn(e) || verifyNoVerdictReturn(e) || pieceScopeReturn(e)) && e.WorkerSession.NodeIndex >= 0 && e.WorkerSession.NodeIndex < len(e.WorkerSession.Workflow.Stages) {
 				w, resumeNode, loadErr = e.WorkerSession.Workflow, e.WorkerSession.NodeIndex, nil
 				retainedGraph = true
 			}
@@ -1447,7 +1447,7 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 					if decision.RunRequest.SessionTurn && decision.Returned.WorkerSession.Workflow != nil {
 						decision.NodeBaseSHA = decision.Returned.WorkerSession.NodeBaseSHA
 					}
-					if verifyBuildReturn(decision.Returned) || verifyNoVerdictReturn(decision.Returned) ||
+					if verifyBuildReturn(decision.Returned) || verifyNoVerdictReturn(decision.Returned) || pieceScopeReturn(decision.Returned) ||
 						(gateBuildReturn(decision.Returned) && !decision.RunRequest.SessionTurn) {
 						// Per-node checks measure the repair commit atop the candidate; the
 						// whole item still diffs against its own base.
@@ -2387,7 +2387,7 @@ func (p *planner) returnedEnding(itemID string) *ReturnedEnding {
 			ws = reconstructSplitCallWorkerSession(p.inputDecisionReader, call)
 		}
 	}
-	return &ReturnedEnding{RunID: latest, Cause: cause, Detail: detail, Checks: e.Checks, WorkerSession: ws, Replan: e.Replan}
+	return &ReturnedEnding{RunID: latest, Cause: cause, Detail: detail, Checks: e.Checks, WorkerSession: ws, Replan: e.Replan, ScopeEscapes: e.ScopeEscapes}
 }
 
 // retry is one item's operator authorization, resolved against the store: which run it

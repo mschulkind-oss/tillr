@@ -203,6 +203,10 @@ type Candidate struct {
 	// from the latest trunk rather than from the old candidate commit.
 	RestartOnTip   bool `json:"-"`
 	verifyFeedback *verifyFeedback
+	// pieceScope is set on a fence refusal of a piece that wrote outside its own
+	// write_scope but inside its item's: the session names the piece to run again, and
+	// the refusal records the escaped paths (verify_return.go).
+	pieceScope *pieceScopeEscape
 	// Runtime-only observation, sampled when the gate records a stall.
 	gateCount     func() int
 	RefusalDetail string `json:"refusal_detail,omitempty"`
@@ -2338,7 +2342,7 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 			spec.KeptHeadSHA = decision.RetryCandidate.HeadSHA
 			spec.KeptItemBaseSHA = decision.RetryCandidate.BaseSHA
 		}
-		freshCandidateReturn := (decision.Reason == ReasonReturned || decision.Action == ActionRetry) && (verifyBuildReturn(decision.Returned) || verifyNoVerdictReturn(decision.Returned) || gateBuildReturn(decision.Returned)) && !request.SessionTurn
+		freshCandidateReturn := (decision.Reason == ReasonReturned || decision.Action == ActionRetry) && (verifyBuildReturn(decision.Returned) || verifyNoVerdictReturn(decision.Returned) || gateBuildReturn(decision.Returned) || pieceScopeReturn(decision.Returned)) && !request.SessionTurn
 		if freshCandidateReturn {
 			// A fresh build run keeps the candidate the verifier or gate read, even on a cold lane.
 			s := decision.Returned.WorkerSession
@@ -4890,62 +4894,74 @@ func (l *Loop) fenceViolationAt(ctx context.Context, candidate Candidate, fenceP
 // A blocked node with a complete obstacle offers no candidate. Check its unfinished
 // paths along with its commits, rather than requiring a clean candidate worktree.
 func (l *Loop) changeFenceViolationAt(ctx context.Context, candidate Candidate, fencePath string, blocked bool) (string, error) {
+	detail, _, err := l.changeFenceEscapeAt(ctx, candidate, fencePath, blocked)
+	return detail, err
+}
+
+// changeFenceEscapeAt is changeFenceViolationAt that also answers every changed path outside
+// the scope file when, and only when, the refusal is the scope comparison itself: a dirty
+// candidate, a rebasing fork checkout, a deny-list entry or a remote-sync tree answers no
+// paths, so a caller can tell a piece that wrote outside its own write_scope from every
+// other boundary refusal.
+func (l *Loop) changeFenceEscapeAt(ctx context.Context, candidate Candidate, fencePath string, blocked bool) (string, []string, error) {
 	var pending []string
 	if blocked {
 		var err error
 		pending, err = l.uncommittedPaths(ctx, candidate.Worktree)
 		if err != nil {
-			return "", err
+			return "", nil, err
 		}
 	} else {
 		status, err := l.git(ctx, candidate.Worktree, "status", "--porcelain")
 		if err != nil {
-			return "", err
+			return "", nil, err
 		}
 		if dirty := strings.TrimSpace(status); dirty != "" {
 			return fmt.Sprintf("%s: the candidate worktree is not clean, so the commit is not the change that was judged: %s",
-				ScopeEscape, strings.Join(strings.Split(dirty, "\n"), "; ")), nil
+				ScopeEscape, strings.Join(strings.Split(dirty, "\n"), "; ")), nil, nil
 		}
 	}
 	if candidate.Worktree != "" && candidate.Worktree == l.laneForkTarget(candidate.LaneID) {
 		rebase, err := l.forkRebaseDir(ctx, candidate.Worktree)
 		if err != nil {
-			return "", err
+			return "", nil, err
 		}
 		if rebase != "" {
-			return ScopeEscape + ": the fork checkout is still rebasing, so its detached HEAD is not a finished candidate", nil
+			return ScopeEscape + ": the fork checkout is still rebasing, so its detached HEAD is not a finished candidate", nil, nil
 		}
 	}
 	if !blocked {
 		if detail, err := l.denyListViolation(ctx, candidate); err != nil || detail != "" {
-			return detail, err
+			return detail, nil, err
 		}
 		if IsRemoteSyncItem(candidate.ItemID) {
-			return l.checkRemoteSyncTree(ctx, candidate)
+			detail, err := l.checkRemoteSyncTree(ctx, candidate)
+			return detail, nil, err
 		}
 	}
 	if fencePath == "" {
-		return "", nil
+		return "", nil, nil
 	}
 	body, err := os.ReadFile(fencePath)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	fence := fenceEntries(string(body))
 	if len(fence) == 0 {
-		return "", nil
+		return "", nil, nil
 	}
 	base, err := l.fenceDiffBase(ctx, candidate)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	// Disable rename detection so both the removed source and added destination
 	// are checked; a rename into scope must not hide a deletion outside it.
 	changed, err := l.git(ctx, candidate.Worktree, "diff", "--no-renames", "--name-only", "-z", base+".."+candidate.HeadSHA)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	prefix := l.fencePrefix(ctx, candidate.Worktree)
+	var escaped []string
 	for _, path := range append(strings.Split(changed, "\x00"), pending...) {
 		if path == "" {
 			continue
@@ -4957,13 +4973,16 @@ func (l *Loop) changeFenceViolationAt(ctx context.Context, candidate Candidate, 
 		if prefix != "" {
 			scoped = prefix + path
 		}
-		if insideFence(scoped, fence) {
+		if insideFence(scoped, fence) || slices.Contains(escaped, scoped) {
 			continue
 		}
-		return fmt.Sprintf("%s: %s is outside node write_scope (the scope file is %s)",
-			ScopeEscape, scoped, fencePath), nil
+		escaped = append(escaped, scoped)
 	}
-	return "", nil
+	if len(escaped) == 0 {
+		return "", nil, nil
+	}
+	return fmt.Sprintf("%s: %s is outside node write_scope (the scope file is %s)",
+		ScopeEscape, escaped[0], fencePath), escaped, nil
 }
 
 // fenceDiffBase skips landings already in a candidate that moved onto newer trunk.

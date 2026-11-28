@@ -299,3 +299,92 @@ func (l *Loop) pinCandidateHead(ctx context.Context, c Candidate) error {
 	}
 	return writeItemPin(ctx, l.git, repo, c.ItemID, c.HeadSHA)
 }
+
+// A piece is one writing node the plan step cut, with a write_scope of its own that is
+// narrower than its item's. A piece that changes a path outside its own write_scope but
+// inside its item's is not a boundary question for the operator: either the worker reached
+// past its piece, or the plan cut the piece too narrowly. Both are put right automatically
+// (owner's standing direction of 2026-11-26), and this is the rule that tells them apart:
+//
+//  1. the first such escape of a piece goes back to the builder: the same piece runs again
+//     from its own start, with the escaped paths named, and is told to finish inside its
+//     write_scope or, if it cannot, to end blocked with `plan-wrong:` evidence naming them;
+//  2. the plan step runs again as a wrong plan (the existing RefusalPlanWrong route, with
+//     the escaped paths named) when that returned piece says it cannot finish without the
+//     paths (builderPlanWrong) or escapes its write_scope a second time.
+//
+// A path outside the item's own scope, a deny-list entry, a dirty candidate and every other
+// boundary refusal are refused and held as boundary-scope-escape, as before.
+
+// pieceScopeEscape is a piece-scope fence refusal's return: the piece's session to run
+// again and the paths it changed outside its write_scope.
+type pieceScopeEscape struct {
+	session *WorkerSession
+	paths   []string
+}
+
+// pieceScopeReturn reports whether an ending sends the item back to one piece after that
+// piece wrote outside its own write_scope but inside its item's.
+func pieceScopeReturn(e *ReturnedEnding) bool {
+	return e != nil && e.Cause == RefusalFence && len(e.ScopeEscapes) > 0 && e.WorkerSession != nil && e.WorkerSession.Workflow != nil &&
+		e.WorkerSession.NodeIndex >= 0 && e.WorkerSession.NodeIndex < len(e.WorkerSession.Workflow.Stages)
+}
+
+// pieceScopeReturnTo reports whether d is the returned run of stage after a piece-scope
+// escape. A later node dispatched under the same decision carries the same ending, so the
+// stage is compared by id.
+func pieceScopeReturnTo(d Decision, stage WorkflowStage) bool {
+	return pieceScopeReturn(d.Returned) && d.Returned.WorkerSession.Workflow.Stages[d.Returned.WorkerSession.NodeIndex].ID == stage.ID
+}
+
+// planStepReachable reports whether a wrong plan can go back to a plan step: the graph's
+// first stage is the plan and this node is not it.
+func planStepReachable(d Decision) bool {
+	return d.Workflow != nil && len(d.Workflow.Stages) > 0 && d.Workflow.Stages[0].Seat == "plan" && d.NodeIndex > 0
+}
+
+// insideItemScope reports whether every path is inside the lane's whole-item scope file:
+// the fork checkout for a fork item, and no entries for a repository item, whose scope is
+// the whole repository less the common deny-list (checked before any scope comparison, so a
+// deny-listed path never reaches here). A scope file that cannot be found answers false,
+// which keeps the operator hold.
+func (l *Loop) insideItemScope(lane string, paths []string) (bool, error) {
+	fencePath, err := l.itemFencePath(lane)
+	if err != nil {
+		return false, err
+	}
+	body, err := os.ReadFile(fencePath)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	fence := fenceEntries(string(body))
+	if len(fence) == 0 {
+		return true, nil
+	}
+	for _, p := range paths {
+		if !insideFence(p, fence) {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+// pieceScopeDetail is the refusal's words for a piece-scope escape: the piece, every
+// escaped path, and what the next run is to do.
+func pieceScopeDetail(stage WorkflowStage, scopeFile string, paths []string, replan bool) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s: piece %s changed paths outside its own write_scope (the scope file is %s) but inside its item's scope:\n", ScopeEscape, stage.ID, scopeFile)
+	for _, p := range paths {
+		fmt.Fprintf(&b, "- %s\n", p)
+	}
+	fmt.Fprintf(&b, "Its write_scope is: %s\n", strings.Join(stage.WriteScope.Paths, ", "))
+	if replan {
+		fmt.Fprintf(&b, "%s the piece was returned once to finish inside its write_scope and could not; revise the plan so a piece's write_scope holds the paths above.", PlanWrongPrefix)
+	} else {
+		b.WriteString("Redo the piece inside its write_scope. If it cannot be finished without the paths above, end with RESULT: blocked, OBSTACLE: definition, CRITERIA: plan, and EVIDENCE: plan-wrong: <the paths and why the piece needs them>.")
+	}
+	return b.String()
+}

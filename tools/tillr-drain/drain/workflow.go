@@ -847,9 +847,41 @@ func (l *Loop) settleNodeFormat(ctx context.Context, d Decision, rec run.Record,
 		if stage.WriteScope.Paths != nil {
 			scopeFile = filepath.Join(l.nodeMetaDir(d), FenceFile)
 		}
-		escape, err := l.changeFenceViolationAt(ctx, c, scopeFile, blocked)
+		escape, escaped, err := l.changeFenceEscapeAt(ctx, c, scopeFile, blocked)
 		if err != nil {
 			return true, err
+		}
+		if escape != "" && scopeFile != "" && len(escaped) > 0 && stage.Kind == "agent" {
+			// A piece that wrote outside its own write_scope but inside its item's goes
+			// back to the builder, or to the plan step as a wrong plan (verify_return.go).
+			inside, err := l.insideItemScope(d.LaneID, escaped)
+			if err != nil {
+				return true, err
+			}
+			replan := pieceScopeReturnTo(d, stage) && planStepReachable(d)
+			if inside && (replan || !pieceScopeReturnTo(d, stage)) {
+				if err := l.nodeOutcome(ctx, d, "refused"); err != nil {
+					return true, err
+				}
+				c.BaseSHA = base
+				c.RefusalDetail = "node " + stage.ID + ": " + pieceScopeDetail(stage, scopeFile, escaped, replan)
+				step := RefusalPlanWrong
+				if !replan {
+					step = RefusalFence
+					c.pieceScope = &pieceScopeEscape{paths: escaped, session: &WorkerSession{
+						RunID: rec.RunID, LaneDir: l.laneDirPath(d.LaneID), LaneID: d.LaneID,
+						BaseSHA: base, HeadSHA: nodeBase, NodeBaseSHA: nodeBase,
+						Workflow: d.Workflow, NodeIndex: d.NodeIndex, Attempt: d.Attempt,
+					}}
+				}
+				if err := l.refuse(ctx, c, result, step); err != nil {
+					return true, err
+				}
+				if stop := l.abandon(ctx, d.LaneID, rec.RunID, head, c.RefusalDetail); stop != "" {
+					return true, retainedAfter(d.LaneID, stop)
+				}
+				return true, l.markExamined(ctx, d)
+			}
 		}
 		if escape != "" {
 			c.BaseSHA = base
@@ -867,7 +899,7 @@ func (l *Loop) settleNodeFormat(ctx context.Context, d Decision, rec run.Record,
 		}
 	}
 	if stage.Kind == "agent" {
-		if verifyBuildReturn(d.Returned) || gateBuildReturn(d.Returned) {
+		if verifyBuildReturn(d.Returned) || gateBuildReturn(d.Returned) || pieceScopeReturnTo(d, stage) {
 			if why, wrong := l.builderPlanWrong(d, stage, footer, log); wrong {
 				// The build step cannot meet the findings within the plan: the plan step runs
 				// again, with the builder's explanation and the findings it was given.

@@ -162,6 +162,16 @@ func commandNodeHold(r *store.Reader, id string) (string, error) {
 		if step == RefusalPlanWrong {
 			return "", nil
 		}
+		// A piece that wrote outside its own write_scope but inside its item's goes back
+		// to that piece (verify_return.go).
+		var escapes sql.NullString
+		err = r.QueryRow(`SELECT json_extract(payload,'$.scope_escapes') FROM events WHERE kind=? AND object_id=? ORDER BY seq DESC LIMIT 1`, RefusalKind, runID).Scan(&escapes)
+		if err != nil && err != sql.ErrNoRows {
+			return "", err
+		}
+		if step == RefusalFence && escapes.Valid && escapes.String != "" && escapes.String != "[]" {
+			return "", nil
+		}
 		return ReasonBoundaryScopeEscape, nil
 	}
 	if outcome == "fault" {

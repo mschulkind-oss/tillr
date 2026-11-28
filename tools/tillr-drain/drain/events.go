@@ -153,7 +153,11 @@ type refusalPayload struct {
 	Restart bool `json:"restart,omitempty"`
 	// Replan marks a verify-not-done refusal whose findings say the plan was wrong: the
 	// item returns to the plan step instead of the build step, and no worker session is kept.
-	Replan         bool            `json:"replan,omitempty"`
+	Replan bool `json:"replan,omitempty"`
+	// ScopeEscapes are a piece-scope fence refusal's own field: the paths a piece changed
+	// outside its own write_scope but inside its item's. A fence refusal that carries them
+	// goes back to that piece rather than holding the item (verify_return.go).
+	ScopeEscapes   []string        `json:"scope_escapes,omitempty"`
 	VerifyFeedback *verifyFeedback `json:"verify_feedback,omitempty"`
 	// The size is advisory. A missing observation with an error is distinct from zero.
 	CandidateSize      *candidateSize     `json:"candidate_size,omitempty"`
@@ -256,6 +260,17 @@ func (l *Loop) recordRefusal(ctx context.Context, candidate Candidate, step stri
 			}
 		case RefusalPlanWrong, RefusalDeliveryOrder:
 			// Return the feedback, not a session working on the wrong plan or target.
+		case RefusalFence:
+			if candidate.pieceScope != nil {
+				// The piece runs again from its own start, with the escaped paths named.
+				payload.WorkerSession, payload.ScopeEscapes = candidate.pieceScope.session, candidate.pieceScope.paths
+				break
+			}
+			var err error
+			payload.WorkerSession, err = l.captureWorkerSession(ctx, candidate)
+			if err != nil {
+				return err
+			}
 		default:
 			var err error
 			payload.WorkerSession, err = l.captureWorkerSession(ctx, candidate)

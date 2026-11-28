@@ -532,7 +532,7 @@ func carryReturnedNodeInputs(tx *store.Tx, d Decision) error {
 	var old *WorkerSession
 	if c := d.RetryCandidate; c != nil && c.Available {
 		old = c.WorkerSession
-	} else if d.Returned != nil && d.RunRequest != nil && (d.RunRequest.SessionTurn || d.WorkerSessionReason == "resume-failed" || verifyBuildReturn(d.Returned) || verifyNoVerdictReturn(d.Returned) || gateBuildReturn(d.Returned)) {
+	} else if d.Returned != nil && d.RunRequest != nil && (d.RunRequest.SessionTurn || d.WorkerSessionReason == "resume-failed" || verifyBuildReturn(d.Returned) || verifyNoVerdictReturn(d.Returned) || gateBuildReturn(d.Returned) || pieceScopeReturn(d.Returned)) {
 		old = d.Returned.WorkerSession
 	}
 	if d.RunRequest == nil || d.Workflow == nil || old == nil {

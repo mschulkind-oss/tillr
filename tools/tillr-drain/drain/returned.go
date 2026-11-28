@@ -39,6 +39,9 @@ type ReturnedEnding struct {
 	// Replan is a verify-not-done ending whose findings say the plan was wrong; its next
 	// run is the plan step, not the build step.
 	Replan bool `json:"replan,omitempty"`
+	// ScopeEscapes are the paths a piece wrote outside its own write_scope but inside its
+	// item's; the ending returns to that piece (pieceScopeReturn).
+	ScopeEscapes []string `json:"scope_escapes,omitempty"`
 }
 
 // returnedBrief is the brief's section for a run dispatched with an earlier run's ending:
@@ -86,7 +89,11 @@ func returnedBrief(e ReturnedEnding) string {
 	case RefusalNoOp:
 		b.WriteString("It ended without committing anything, so there was no candidate to judge.")
 	case RefusalFence:
-		b.WriteString("Its candidate failed a boundary check before the gate. Read the specific refusal below.")
+		if pieceScopeReturn(&e) {
+			b.WriteString("Its piece changed paths outside the piece's own write_scope, though inside the item's. This run is that piece again, from the piece's own start: do its work inside its write_scope. If it cannot be finished without the paths named below, end with RESULT: blocked, OBSTACLE: definition, CRITERIA: plan, and EVIDENCE: plan-wrong: <the paths and why the piece needs them>.")
+		} else {
+			b.WriteString("Its candidate failed a boundary check before the gate. Read the specific refusal below.")
+		}
 	case RefusalLand:
 		b.WriteString("The gate passed its candidate, but the landing was refused.")
 	case RefusalDeliveryOrder:
