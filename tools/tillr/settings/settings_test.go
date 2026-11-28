@@ -276,3 +276,93 @@ func TestDrainProfileSettingsAndStartupLine(t *testing.T) {
 		t.Fatalf("StartupLine unexpectedly included drain.profile when unset: %s", unset.StartupLine())
 	}
 }
+
+func TestDrainAllStartDefaultSettingsAndConflicts(t *testing.T) {
+	dir := root(t)
+	body := `[drain]
+exit_when_drained = true
+store = ".tillr/custom.db"
+lanes = 6
+worktree_count = 12
+worktree_disk_budget = 8589934592
+max_concurrent_triage = 4
+lane_root = ".tillr/custom-lanes/"
+backoff_base = "2s"
+fallback_poll = "15s"
+no_notify = true
+policy = "config/tillr/backend-policy.json"
+run_bin = "custom-run"
+item_bin = "custom-item"
+brief_template = "config/tillr/brief.md"
+gate = "my-gate"
+land = "my-land"
+verdict = "my-verdict"
+replay = ""
+heavy_gate = "my-heavy-gate"
+rolling = ""
+fixer_gate = "my-fixer-gate"
+questions_cmd = "uvx custom"
+questions_index = ".tillr/q.json"
+`
+	if err := os.WriteFile(filepath.Join(dir, ".tillr.toml"), []byte(body), 0644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := settings.Read(dir)
+	if err != nil {
+		t.Fatalf("settings.Read: %v", err)
+	}
+	if !got.Drain.ExitWhenDrainedSet || !got.Drain.ExitWhenDrained ||
+		got.Drain.Store != ".tillr/custom.db" ||
+		!got.Drain.LanesSet || got.Drain.Lanes != 6 ||
+		got.Drain.LaneRoot != ".tillr/custom-lanes" ||
+		got.Drain.BackoffBase != "2s" ||
+		got.Drain.FallbackPoll != "15s" ||
+		!got.Drain.NoNotify ||
+		got.Drain.Policy != "config/tillr/backend-policy.json" ||
+		!got.Drain.ReplaySet || got.Drain.Replay != "" ||
+		!got.Drain.RollingSet || got.Drain.Rolling != "" {
+		t.Fatalf("unexpected Drain settings: %+v", got.Drain)
+	}
+	line := got.StartupLine()
+	for _, want := range []string{
+		`drain.exit_when_drained=true`,
+		`drain.lanes=6`,
+		`drain.policy="config/tillr/backend-policy.json"`,
+		`drain.lane_root=".tillr/custom-lanes"`,
+		`drain.replay=""`,
+		`drain.rolling=""`,
+	} {
+		if !strings.Contains(line, want) {
+			t.Errorf("StartupLine missing %q: %s", want, line)
+		}
+	}
+
+	for _, tc := range []struct {
+		name string
+		toml string
+		want string
+	}{
+		{"absolute policy", "[drain]\npolicy = '/etc/policy.json'\n", "drain.policy"},
+		{"traversal policy", "[drain]\npolicy = '../policy.json'\n", "drain.policy"},
+		{"git store", "[drain]\nstore = '.git/state.db'\n", "drain.store"},
+		{"negative lanes", "[drain]\nlanes = -1\n", "drain.lanes"},
+		{"bad backoff", "[drain]\nbackoff_base = 'soon'\n", "drain.backoff_base"},
+		{"negative backoff", "[drain]\nbackoff_base = '-1s'\n", "drain.backoff_base"},
+		{"empty run_bin", "[drain]\nrun_bin = ' '\n", "drain.run_bin"},
+		{"max_agents vs lanes", "[drain]\nmax_agents = 3\nlanes = 4\n", "drain.max_agents"},
+		{"worktrees vs drain", "[worktrees]\nmax_count = 4\n[drain]\nworktree_count = 5\n", "worktrees.max_count"},
+		{"disk budget vs drain", "[worktrees]\ndisk_budget_bytes = 100\n[drain]\nworktree_disk_budget = 200\n", "worktrees.disk_budget_bytes"},
+		{"brief vs drain", "[brief]\ntemplate = 'a.md'\n[drain]\nbrief_template = 'b.md'\n", "brief.template"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := root(t)
+			if err := os.WriteFile(filepath.Join(d, ".tillr.toml"), []byte(tc.toml), 0644); err != nil {
+				t.Fatal(err)
+			}
+			_, err := settings.Read(d)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("settings.Read = %v, want error naming %q", err, tc.want)
+			}
+		})
+	}
+}

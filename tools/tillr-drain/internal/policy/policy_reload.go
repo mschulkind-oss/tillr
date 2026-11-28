@@ -14,15 +14,26 @@ import (
 	"github.com/mschulkind-oss/tillr-drain/internal/drainmodel"
 )
 
+// StartOption records one resolved loop start option and where it came from.
+type StartOption struct {
+	Name   string `json:"name"`
+	Value  string `json:"value"`
+	Source string `json:"source"`
+	Detail string `json:"detail,omitempty"`
+}
+
 // PolicyState is the last policy accepted by a loop, not a fresh interpretation
 // of the file on disk. Content retains seat lists in their original JSON shape.
 type PolicyState struct {
-	Ref      string    `json:"ref"`
-	Hash     string    `json:"hash"`
-	DiskHash string    `json:"disk_hash"`
-	Content  string    `json:"content"`
-	Refusal  string    `json:"refusal,omitempty"`
-	At       time.Time `json:"at"`
+	Ref          string        `json:"ref"`
+	Source       string        `json:"source,omitempty"`
+	Profile      string        `json:"profile,omitempty"`
+	Hash         string        `json:"hash"`
+	DiskHash     string        `json:"disk_hash"`
+	Content      string        `json:"content"`
+	Refusal      string        `json:"refusal,omitempty"`
+	StartOptions []StartOption `json:"start_options,omitempty"`
+	At           time.Time     `json:"at"`
 }
 
 type PolicyChange struct {

@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/pelletier/go-toml/v2"
 )
@@ -85,9 +86,58 @@ type Brief struct {
 	Template string
 }
 
-// Drain configures defaults for tillr-drain.
+// Drain configures defaults for tillr-drain loop.
 type Drain struct {
-	Profile string
+	ExitWhenDrained        bool
+	ExitWhenDrainedSet     bool
+	Store                  string
+	StoreSet               bool
+	MaxAgents              int64
+	MaxAgentsSet           bool
+	Lanes                  int64
+	LanesSet               bool
+	WorktreeCount          int64
+	WorktreeCountSet       bool
+	WorktreeDiskBudget     int64
+	WorktreeDiskBudgetSet  bool
+	MaxConcurrentTriage    int64
+	MaxConcurrentTriageSet bool
+	LaneRoot               string
+	LaneRootSet            bool
+	BackoffBase            string
+	BackoffBaseSet         bool
+	FallbackPoll           string
+	FallbackPollSet        bool
+	NoNotify               bool
+	NoNotifySet            bool
+	Policy                 string
+	PolicySet              bool
+	Profile                string
+	ProfileSet             bool
+	RunBin                 string
+	RunBinSet              bool
+	ItemBin                string
+	ItemBinSet             bool
+	BriefTemplate          string
+	BriefTemplateSet       bool
+	Gate                   string
+	GateSet                bool
+	Land                   string
+	LandSet                bool
+	Verdict                string
+	VerdictSet             bool
+	Replay                 string
+	ReplaySet              bool
+	HeavyGate              string
+	HeavyGateSet           bool
+	Rolling                string
+	RollingSet             bool
+	FixerGate              string
+	FixerGateSet           bool
+	QuestionsCmd           string
+	QuestionsCmdSet        bool
+	QuestionsIndex         string
+	QuestionsIndexSet      bool
 }
 
 // Settings holds optional post-landing actions and review intake. Empty command
@@ -222,6 +272,12 @@ func read(root, nonLandingDefinition string) (Settings, error) {
 		return Settings{}, fmt.Errorf("%s: expected valid TOML: %w", path, err)
 	}
 	refuse := func(key, expected string) error { return fmt.Errorf("%s: %s: expected %s", path, key, expected) }
+	refuseValue := func(key string, val any, expected string) error {
+		if str, ok := val.(string); ok {
+			return fmt.Errorf("%s: %s=%q: expected %s", path, key, str, expected)
+		}
+		return fmt.Errorf("%s: %s=%v: expected %s", path, key, val, expected)
+	}
 	if nonLandingDefinition != "" {
 		var incompatible []string
 		for _, table := range []string{"trunk", "roll", "push"} {
@@ -393,12 +449,193 @@ func read(root, nonLandingDefinition string) (Settings, error) {
 					return Settings{}, refuse(full, "a boolean")
 				}
 				s.Prose.Rewrite = flag
+			case "drain.exit_when_drained":
+				flag, ok := value.(bool)
+				if !ok {
+					return Settings{}, refuseValue(full, value, "a boolean")
+				}
+				s.Drain.ExitWhenDrained = flag
+				s.Drain.ExitWhenDrainedSet = true
+			case "drain.no_notify":
+				flag, ok := value.(bool)
+				if !ok {
+					return Settings{}, refuseValue(full, value, "a boolean")
+				}
+				s.Drain.NoNotify = flag
+				s.Drain.NoNotifySet = true
+			case "drain.max_agents":
+				n, ok := value.(int64)
+				if !ok || n < 0 {
+					return Settings{}, refuseValue(full, value, "a nonnegative integer")
+				}
+				s.Drain.MaxAgents = n
+				s.Drain.MaxAgentsSet = true
+			case "drain.lanes":
+				n, ok := value.(int64)
+				if !ok || n < 0 {
+					return Settings{}, refuseValue(full, value, "a nonnegative integer")
+				}
+				s.Drain.Lanes = n
+				s.Drain.LanesSet = true
+			case "drain.worktree_count":
+				n, ok := value.(int64)
+				if !ok || n < 0 {
+					return Settings{}, refuseValue(full, value, "a nonnegative integer")
+				}
+				s.Drain.WorktreeCount = n
+				s.Drain.WorktreeCountSet = true
+			case "drain.worktree_disk_budget":
+				n, ok := value.(int64)
+				if !ok || n < 0 {
+					return Settings{}, refuseValue(full, value, "a nonnegative integer")
+				}
+				s.Drain.WorktreeDiskBudget = n
+				s.Drain.WorktreeDiskBudgetSet = true
+			case "drain.max_concurrent_triage":
+				n, ok := value.(int64)
+				if !ok || n < 0 {
+					return Settings{}, refuseValue(full, value, "a nonnegative integer")
+				}
+				s.Drain.MaxConcurrentTriage = n
+				s.Drain.MaxConcurrentTriageSet = true
+			case "drain.store":
+				str, ok := value.(string)
+				if !ok || !validRepoFilePath(str) {
+					return Settings{}, refuseValue(full, value, "a clean repository-relative file path")
+				}
+				s.Drain.Store = str
+				s.Drain.StoreSet = true
+			case "drain.lane_root":
+				str, ok := value.(string)
+				if !ok {
+					return Settings{}, refuseValue(full, value, "a clean repository-relative subdirectory path outside .git")
+				}
+				clean, ok := cleanChecksDir(str)
+				if !ok {
+					return Settings{}, refuseValue(full, value, "a clean repository-relative subdirectory path outside .git")
+				}
+				s.Drain.LaneRoot = clean
+				s.Drain.LaneRootSet = true
+			case "drain.backoff_base":
+				str, ok := value.(string)
+				if !ok {
+					return Settings{}, refuseValue(full, value, "a nonnegative duration string (for example \"1s\")")
+				}
+				d, err := time.ParseDuration(str)
+				if err != nil || d < 0 {
+					return Settings{}, refuseValue(full, value, "a nonnegative duration string (for example \"1s\")")
+				}
+				s.Drain.BackoffBase = str
+				s.Drain.BackoffBaseSet = true
+			case "drain.fallback_poll":
+				str, ok := value.(string)
+				if !ok {
+					return Settings{}, refuseValue(full, value, "a nonnegative duration string (for example \"10s\")")
+				}
+				d, err := time.ParseDuration(str)
+				if err != nil || d < 0 {
+					return Settings{}, refuseValue(full, value, "a nonnegative duration string (for example \"10s\")")
+				}
+				s.Drain.FallbackPoll = str
+				s.Drain.FallbackPollSet = true
+			case "drain.policy":
+				str, ok := value.(string)
+				if !ok || !validRepoFilePath(str) {
+					return Settings{}, refuseValue(full, value, "a clean repository-relative file path")
+				}
+				s.Drain.Policy = str
+				s.Drain.PolicySet = true
 			case "drain.profile":
 				str, ok := value.(string)
 				if !ok || !ValidProfileName(str) {
-					return Settings{}, refuse(full, "a valid profile name matching [a-z0-9][a-z0-9_-]*")
+					return Settings{}, refuseValue(full, value, "a valid profile name matching [a-z0-9][a-z0-9_-]*")
 				}
 				s.Drain.Profile = str
+				s.Drain.ProfileSet = true
+			case "drain.run_bin":
+				str, ok := value.(string)
+				if !ok || strings.TrimSpace(str) == "" {
+					return Settings{}, refuseValue(full, value, "a nonempty string")
+				}
+				s.Drain.RunBin = str
+				s.Drain.RunBinSet = true
+			case "drain.item_bin":
+				str, ok := value.(string)
+				if !ok || strings.TrimSpace(str) == "" {
+					return Settings{}, refuseValue(full, value, "a nonempty string")
+				}
+				s.Drain.ItemBin = str
+				s.Drain.ItemBinSet = true
+			case "drain.brief_template":
+				str, ok := value.(string)
+				if !ok || !validRepoFilePath(str) {
+					return Settings{}, refuseValue(full, value, "a clean repository-relative file path")
+				}
+				s.Drain.BriefTemplate = str
+				s.Drain.BriefTemplateSet = true
+			case "drain.gate":
+				str, ok := value.(string)
+				if !ok {
+					return Settings{}, refuseValue(full, value, "a string")
+				}
+				s.Drain.Gate = str
+				s.Drain.GateSet = true
+			case "drain.land":
+				str, ok := value.(string)
+				if !ok {
+					return Settings{}, refuseValue(full, value, "a string")
+				}
+				s.Drain.Land = str
+				s.Drain.LandSet = true
+			case "drain.verdict":
+				str, ok := value.(string)
+				if !ok {
+					return Settings{}, refuseValue(full, value, "a string")
+				}
+				s.Drain.Verdict = str
+				s.Drain.VerdictSet = true
+			case "drain.replay":
+				str, ok := value.(string)
+				if !ok {
+					return Settings{}, refuseValue(full, value, "a string")
+				}
+				s.Drain.Replay = str
+				s.Drain.ReplaySet = true
+			case "drain.heavy_gate":
+				str, ok := value.(string)
+				if !ok || strings.TrimSpace(str) == "" {
+					return Settings{}, refuseValue(full, value, "a nonempty string")
+				}
+				s.Drain.HeavyGate = str
+				s.Drain.HeavyGateSet = true
+			case "drain.rolling":
+				str, ok := value.(string)
+				if !ok {
+					return Settings{}, refuseValue(full, value, "a string")
+				}
+				s.Drain.Rolling = str
+				s.Drain.RollingSet = true
+			case "drain.fixer_gate":
+				str, ok := value.(string)
+				if !ok {
+					return Settings{}, refuseValue(full, value, "a string")
+				}
+				s.Drain.FixerGate = str
+				s.Drain.FixerGateSet = true
+			case "drain.questions_cmd":
+				str, ok := value.(string)
+				if !ok {
+					return Settings{}, refuseValue(full, value, "a string")
+				}
+				s.Drain.QuestionsCmd = str
+				s.Drain.QuestionsCmdSet = true
+			case "drain.questions_index":
+				str, ok := value.(string)
+				if !ok || !validRepoFilePath(str) {
+					return Settings{}, refuseValue(full, value, "a clean repository-relative file path")
+				}
+				s.Drain.QuestionsIndex = str
+				s.Drain.QuestionsIndexSet = true
 			case "push.after_landing":
 				flag, ok := value.(bool)
 				if !ok {
@@ -424,7 +661,7 @@ func read(root, nonLandingDefinition string) (Settings, error) {
 					expected = "a known gate key (checks_dir)"
 				}
 				if table == "drain" {
-					expected = "a known drain key (profile)"
+					expected = "a known drain key (exit_when_drained, store, max_agents, lanes, worktree_count, worktree_disk_budget, max_concurrent_triage, lane_root, backoff_base, fallback_poll, no_notify, policy, profile, run_bin, item_bin, brief_template, gate, land, verdict, replay, heavy_gate, rolling, fixer_gate, questions_cmd or questions_index)"
 				}
 				if table == "candidate_size" {
 					expected = "a known candidate_size key (file_limit or added_line_limit)"
@@ -489,6 +726,18 @@ func read(root, nonLandingDefinition string) (Settings, error) {
 				return Settings{}, refuse("comments.paths", "clean repository-relative paths")
 			}
 		}
+	}
+	if s.Drain.MaxAgentsSet && s.Drain.LanesSet && s.Drain.MaxAgents != s.Drain.Lanes {
+		return Settings{}, fmt.Errorf("%s: drain.max_agents (%d) and drain.lanes (%d) disagree; set one", path, s.Drain.MaxAgents, s.Drain.Lanes)
+	}
+	if s.Worktrees.MaxCountSet && s.Drain.WorktreeCountSet && s.Worktrees.MaxCount != s.Drain.WorktreeCount {
+		return Settings{}, fmt.Errorf("%s: worktrees.max_count (%d) and drain.worktree_count (%d) disagree; set one", path, s.Worktrees.MaxCount, s.Drain.WorktreeCount)
+	}
+	if s.Worktrees.DiskBudgetSet && s.Drain.WorktreeDiskBudgetSet && s.Worktrees.DiskBudgetBytes != s.Drain.WorktreeDiskBudget {
+		return Settings{}, fmt.Errorf("%s: worktrees.disk_budget_bytes (%d) and drain.worktree_disk_budget (%d) disagree; set one", path, s.Worktrees.DiskBudgetBytes, s.Drain.WorktreeDiskBudget)
+	}
+	if s.Brief.Template != "" && s.Drain.BriefTemplateSet && s.Brief.Template != s.Drain.BriefTemplate {
+		return Settings{}, fmt.Errorf("%s: brief.template (%q) and drain.brief_template (%q) disagree; set one", path, s.Brief.Template, s.Drain.BriefTemplate)
 	}
 	return s, nil
 }
@@ -624,8 +873,80 @@ func (s Settings) StartupLine() string {
 	if s.Brief.Template != "" {
 		line += fmt.Sprintf(" brief.template=%s", strconv.Quote(s.Brief.Template))
 	}
+	if s.Drain.ExitWhenDrainedSet {
+		line += fmt.Sprintf(" drain.exit_when_drained=%t", s.Drain.ExitWhenDrained)
+	}
+	if s.Drain.StoreSet {
+		line += fmt.Sprintf(" drain.store=%s", strconv.Quote(s.Drain.Store))
+	}
+	if s.Drain.MaxAgentsSet {
+		line += fmt.Sprintf(" drain.max_agents=%d", s.Drain.MaxAgents)
+	}
+	if s.Drain.LanesSet {
+		line += fmt.Sprintf(" drain.lanes=%d", s.Drain.Lanes)
+	}
+	if s.Drain.WorktreeCountSet {
+		line += fmt.Sprintf(" drain.worktree_count=%d", s.Drain.WorktreeCount)
+	}
+	if s.Drain.WorktreeDiskBudgetSet {
+		line += fmt.Sprintf(" drain.worktree_disk_budget=%d", s.Drain.WorktreeDiskBudget)
+	}
+	if s.Drain.MaxConcurrentTriageSet {
+		line += fmt.Sprintf(" drain.max_concurrent_triage=%d", s.Drain.MaxConcurrentTriage)
+	}
+	if s.Drain.LaneRootSet {
+		line += fmt.Sprintf(" drain.lane_root=%s", strconv.Quote(s.Drain.LaneRoot))
+	}
+	if s.Drain.BackoffBaseSet {
+		line += fmt.Sprintf(" drain.backoff_base=%s", strconv.Quote(s.Drain.BackoffBase))
+	}
+	if s.Drain.FallbackPollSet {
+		line += fmt.Sprintf(" drain.fallback_poll=%s", strconv.Quote(s.Drain.FallbackPoll))
+	}
+	if s.Drain.NoNotifySet {
+		line += fmt.Sprintf(" drain.no_notify=%t", s.Drain.NoNotify)
+	}
+	if s.Drain.PolicySet {
+		line += fmt.Sprintf(" drain.policy=%s", strconv.Quote(s.Drain.Policy))
+	}
 	if s.Drain.Profile != "" {
 		line += fmt.Sprintf(" drain.profile=%s", strconv.Quote(s.Drain.Profile))
+	}
+	if s.Drain.RunBinSet {
+		line += fmt.Sprintf(" drain.run_bin=%s", strconv.Quote(s.Drain.RunBin))
+	}
+	if s.Drain.ItemBinSet {
+		line += fmt.Sprintf(" drain.item_bin=%s", strconv.Quote(s.Drain.ItemBin))
+	}
+	if s.Drain.BriefTemplateSet {
+		line += fmt.Sprintf(" drain.brief_template=%s", strconv.Quote(s.Drain.BriefTemplate))
+	}
+	if s.Drain.GateSet {
+		line += fmt.Sprintf(" drain.gate=%s", strconv.Quote(s.Drain.Gate))
+	}
+	if s.Drain.LandSet {
+		line += fmt.Sprintf(" drain.land=%s", strconv.Quote(s.Drain.Land))
+	}
+	if s.Drain.VerdictSet {
+		line += fmt.Sprintf(" drain.verdict=%s", strconv.Quote(s.Drain.Verdict))
+	}
+	if s.Drain.ReplaySet {
+		line += fmt.Sprintf(" drain.replay=%s", strconv.Quote(s.Drain.Replay))
+	}
+	if s.Drain.HeavyGateSet {
+		line += fmt.Sprintf(" drain.heavy_gate=%s", strconv.Quote(s.Drain.HeavyGate))
+	}
+	if s.Drain.RollingSet {
+		line += fmt.Sprintf(" drain.rolling=%s", strconv.Quote(s.Drain.Rolling))
+	}
+	if s.Drain.FixerGateSet {
+		line += fmt.Sprintf(" drain.fixer_gate=%s", strconv.Quote(s.Drain.FixerGate))
+	}
+	if s.Drain.QuestionsCmdSet {
+		line += fmt.Sprintf(" drain.questions_cmd=%s", strconv.Quote(s.Drain.QuestionsCmd))
+	}
+	if s.Drain.QuestionsIndexSet {
+		line += fmt.Sprintf(" drain.questions_index=%s", strconv.Quote(s.Drain.QuestionsIndex))
 	}
 	if s.WorkflowDefaults != nil {
 		defaults, _ := json.Marshal(s.WorkflowDefaults)

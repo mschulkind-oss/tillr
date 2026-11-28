@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os/user"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -199,6 +200,13 @@ value_json=excluded.value_json,source=excluded.source,updated_at=excluded.update
 		if err := l.storeLiveLanes(ctx, l.targetLanesForOrdinaryCount(count), true); err != nil {
 			return err
 		}
+		for i := range l.policyState.StartOptions {
+			if l.policyState.StartOptions[i].Name == "lanes" || l.policyState.StartOptions[i].Name == "max-agents" {
+				l.policyState.StartOptions[i].Value = strconv.Itoa(count)
+				l.policyState.StartOptions[i].Source = "saved scale target"
+				l.policyState.StartOptions[i].Detail = "drain_runtime_config"
+			}
+		}
 		l.reportf("loop: ordinary lanes: %d (from saved target)\n", count)
 		return nil
 	}
@@ -206,8 +214,26 @@ value_json=excluded.value_json,source=excluded.source,updated_at=excluded.update
 		l.reportf("loop: ordinary lanes: %d (from --lanes flag)\n", *l.cfg.ExplicitLanes)
 		return nil
 	}
+	if l.cfg.LanesSource != "" {
+		l.reportf("loop: ordinary lanes: %d (from %s)\n", ordinaryLaneCount(l.cfg.Lanes), l.cfg.LanesSource)
+		return nil
+	}
 	l.reportf("loop: ordinary lanes: %d (from default)\n", ordinaryLaneCount(l.cfg.Lanes))
 	return nil
+}
+
+// FormatStartOptionsLine formats the resolved start options and their sources
+// for the loop's startup log line.
+func FormatStartOptionsLine(opts []StartOption) string {
+	parts := make([]string, 0, len(opts))
+	for _, opt := range opts {
+		src := opt.Source
+		if opt.Detail != "" {
+			src = fmt.Sprintf("%s %s", opt.Source, opt.Detail)
+		}
+		parts = append(parts, fmt.Sprintf("%s=%s (%s)", opt.Name, opt.Value, src))
+	}
+	return "loop: start-options: " + strings.Join(parts, ", ")
 }
 
 func (l *Loop) refreshLaneCount(ctx context.Context, startup bool) error {

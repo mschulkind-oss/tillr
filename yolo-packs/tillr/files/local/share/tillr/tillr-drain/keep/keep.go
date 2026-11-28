@@ -596,10 +596,13 @@ func observeLoopWithPoll(stop <-chan struct{}, child *LoopChild, out io.Writer, 
 	}
 }
 
-func hasBriefTemplateFlag(args []string) bool {
+func hasAnyFlag(args []string, name string) bool {
+	long := "--" + name
+	short := "-" + name
+	longEq := long + "="
+	shortEq := short + "="
 	for _, arg := range args {
-		if arg == "--brief-template" || arg == "-brief-template" ||
-			strings.HasPrefix(arg, "--brief-template=") || strings.HasPrefix(arg, "-brief-template=") {
+		if arg == long || arg == short || strings.HasPrefix(arg, longEq) || strings.HasPrefix(arg, shortEq) {
 			return true
 		}
 	}
@@ -607,17 +610,28 @@ func hasBriefTemplateFlag(args []string) bool {
 }
 
 // LoopCommand composes the standard `tillr-drain loop` argv for root plus extra options.
-// When .tillr.toml configures [brief] template and extra does not already pass
-// --brief-template, it passes the configured template path through.
+// Default helper flags (--gate, --land, --verdict, and --brief-template from [brief] template)
+// are supplied only when not already provided in extra, .tillr.toml [drain], or TILLR_DRAIN_*.
 func LoopCommand(root string, extra []string) []string {
-	cmd := []string{
-		"tillr-drain", "loop", "--root", root,
-		"--gate", "tillr-loop gate",
-		"--land", "tillr-loop land",
-		"--verdict", "tillr-loop verdict",
+	cmd := []string{"tillr-drain", "loop", "--root", root}
+	cfg, cfgErr := settings.Read(root)
+	if !hasAnyFlag(extra, "gate") && !(cfgErr == nil && cfg.Drain.GateSet) {
+		if _, ok := os.LookupEnv("TILLR_DRAIN_GATE"); !ok {
+			cmd = append(cmd, "--gate", "tillr-loop gate")
+		}
 	}
-	if !hasBriefTemplateFlag(extra) {
-		if cfg, err := settings.Read(root); err == nil && cfg.Brief.Template != "" {
+	if !hasAnyFlag(extra, "land") && !(cfgErr == nil && cfg.Drain.LandSet) {
+		if _, ok := os.LookupEnv("TILLR_DRAIN_LAND"); !ok {
+			cmd = append(cmd, "--land", "tillr-loop land")
+		}
+	}
+	if !hasAnyFlag(extra, "verdict") && !(cfgErr == nil && cfg.Drain.VerdictSet) {
+		if _, ok := os.LookupEnv("TILLR_DRAIN_VERDICT"); !ok {
+			cmd = append(cmd, "--verdict", "tillr-loop verdict")
+		}
+	}
+	if !hasAnyFlag(extra, "brief-template") && cfgErr == nil && cfg.Brief.Template != "" && !cfg.Drain.BriefTemplateSet {
+		if _, ok := os.LookupEnv("TILLR_DRAIN_BRIEF_TEMPLATE"); !ok {
 			cmd = append(cmd, "--brief-template", filepath.Join(root, filepath.FromSlash(cfg.Brief.Template)))
 		}
 	}

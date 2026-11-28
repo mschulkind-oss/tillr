@@ -466,6 +466,13 @@ type LoopConfig struct {
 	Policy *Policy
 	// PolicyRef enables content-checked reloads at the start of each pass.
 	PolicyRef string
+	// PolicySource and PolicyProfile record how PolicyRef was selected for PolicyState.
+	PolicySource  string
+	PolicyProfile string
+	// LanesSource describes where the initial ordinary lane count came from when not from CLI or saved target.
+	LanesSource string
+	// StartOptions records every resolved loop start option and its source for PolicyState.
+	StartOptions []StartOption
 	// QuestionsCmd is the program that answers Vantage's index, cached lazily for each
 	// trunk commit and discarded when the trunk moves. Empty is
 	// DefaultIndexCommand, and a program that is not there holds the affected items with
@@ -991,7 +998,15 @@ func NewLoop(cfg LoopConfig) (*Loop, error) {
 			return nil, err
 		}
 		l.cfg.Policy = p
-		l.policyState = PolicyState{Ref: cfg.PolicyRef, Hash: hash, DiskHash: hash, Content: string(raw)}
+		l.policyState = PolicyState{
+			Ref:          cfg.PolicyRef,
+			Source:       cfg.PolicySource,
+			Profile:      cfg.PolicyProfile,
+			Hash:         hash,
+			DiskHash:     hash,
+			Content:      string(raw),
+			StartOptions: append([]StartOption(nil), cfg.StartOptions...),
+		}
 	}
 	if l.cfg.Policy != nil && l.cfg.Policy.Root == "" && cfg.Root != "" {
 		policyCopy := *l.cfg.Policy
@@ -1150,6 +1165,9 @@ func (l *Loop) Run(ctx context.Context) (result LoopResult, err error) {
 			return result, nil
 		}
 		return faultResult(result, err)
+	}
+	if len(l.policyState.StartOptions) > 0 {
+		l.reportf("%s\n", FormatStartOptionsLine(l.policyState.StartOptions))
 	}
 	// Cost is observation only. An unavailable measurement is explicit, but
 	// cannot withhold work that the planner would otherwise dispatch.

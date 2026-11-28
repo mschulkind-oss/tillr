@@ -294,7 +294,66 @@ valid reading. Each changed reading is appended to
 the accepted policy is kept in `.tillr/loop/backend-policy.json`.
 
 `tillr drain policy` prints the accepted snapshot without activating disk edits. Before a
-loop has recorded a policy it refuses.
+loop has recorded a policy it refuses. Both `tillr drain policy` (text and `--json`) and the
+loop's `loop: start-options:` startup line report each effective start value and where it came
+from.
+
+## Loop start defaults and precedence
+
+Standing options for `tillr-drain loop` can be set once in environment variables (such as a
+jail's environment settings) or in the repository's `.tillr.toml` under `[drain]`, instead of
+passing them on every start or restart command.
+
+### Order of precedence (highest first)
+
+1. **Command-line option** (`option`) on a fresh start (`--policy`, `--profile`, `--lanes`,
+   `--max-agents`, and the rest). On a fresh start, `--lanes` / `--max-agents` also updates
+   the saved scale target in `drain_runtime_config`.
+2. **Saved scale target** (`saved scale target`) in `.tillr/state.db` (`drain_runtime_config`,
+   set by `tillr drain scale`). On an in-place `exec` restart (`TILLR_RESTART_REQUEST` set),
+   the saved target outranks the inherited boot flags.
+3. **Repository `.tillr.toml`** (`.tillr.toml`), under `[drain] <snake_case>` (plus existing
+   aliases `[brief] template`, `[worktrees] max_count`, and `[worktrees] disk_budget_bytes`).
+4. **Environment variable** (`environment variable`), under `TILLR_DRAIN_<UPPER_SNAKE>`.
+5. **Built-in default** (`built-in default`).
+
+Within any single rung that offers both a policy file path and a profile name (`--policy` /
+`--profile`, `[drain] policy` / `[drain] profile`, `TILLR_DRAIN_POLICY` /
+`TILLR_DRAIN_PROFILE`), `policy` wins over `profile`. When a higher rung sets an option,
+lower rungs for that option are not consulted. An active `TILLR_DRAIN_<OPTION>` variable or
+`.tillr.toml` key with a value the option would refuse stops the start with exit 2 and names
+the source and the value; it is never skipped.
+
+`tillr-drain keep` and `tillr-drain keep --restart` pass `TILLR_DRAIN_*` through unchanged
+and supply default `--gate`, `--land`, `--verdict`, and `--brief-template` flags only when not
+already set in `extra`, `.tillr.toml`, or `TILLR_DRAIN_*`.
+
+### Uniform naming, relative paths, and excluded options
+
+Every included `--<option>` maps mechanically to `TILLR_DRAIN_<UPPER_SNAKE>` (replacing `-`
+with `_` and uppercasing) and `[drain] <snake_case>` (replacing `-` with `_`):
+
+- **Included (25 options):** `--exit-when-drained` (`TILLR_DRAIN_EXIT_WHEN_DRAINED`),
+  `--store` (`TILLR_DRAIN_STORE`), `--max-agents` (`TILLR_DRAIN_MAX_AGENTS`), `--lanes`
+  (`TILLR_DRAIN_LANES`), `--worktree-count` (`TILLR_DRAIN_WORKTREE_COUNT`),
+  `--worktree-disk-budget` (`TILLR_DRAIN_WORKTREE_DISK_BUDGET`), `--max-concurrent-triage`
+  (`TILLR_DRAIN_MAX_CONCURRENT_TRIAGE`), `--lane-root` (`TILLR_DRAIN_LANE_ROOT`),
+  `--backoff-base` (`TILLR_DRAIN_BACKOFF_BASE`), `--fallback-poll`
+  (`TILLR_DRAIN_FALLBACK_POLL`), `--no-notify` (`TILLR_DRAIN_NO_NOTIFY`), `--policy`
+  (`TILLR_DRAIN_POLICY`), `--profile` (`TILLR_DRAIN_PROFILE`), `--run-bin`
+  (`TILLR_DRAIN_RUN_BIN`), `--item-bin` (`TILLR_DRAIN_ITEM_BIN`), `--brief-template`
+  (`TILLR_DRAIN_BRIEF_TEMPLATE`), `--gate` (`TILLR_DRAIN_GATE`), `--land`
+  (`TILLR_DRAIN_LAND`), `--verdict` (`TILLR_DRAIN_VERDICT`), `--replay`
+  (`TILLR_DRAIN_REPLAY`), `--heavy-gate` (`TILLR_DRAIN_HEAVY_GATE`), `--rolling`
+  (`TILLR_DRAIN_ROLLING`), `--fixer-gate` (`TILLR_DRAIN_FIXER_GATE`), `--questions-cmd`
+  (`TILLR_DRAIN_QUESTIONS_CMD`), and `--questions-index` (`TILLR_DRAIN_QUESTIONS_INDEX`).
+- **Excluded (4 options):** `--check` (validation-only exit), `--migrate-owner-questions`
+  (one-shot migration exit), `--now` (injected RFC 3339 test clock), and `--root`
+  (checkout selector).
+- **Relative paths in `.tillr.toml`:** Because `.tillr.toml` is tracked repository content,
+  path-valued `[drain]` keys (`policy`, `brief_template`, `store`, `questions_index`, and
+  `lane_root`) must be clean repository-relative paths outside `.git` (no absolute paths or
+  `..` traversal) and are resolved relative to `--root`.
 
 ## Seat backend shares and selection
 

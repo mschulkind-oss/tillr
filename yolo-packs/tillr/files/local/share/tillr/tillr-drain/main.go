@@ -22,6 +22,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -975,31 +976,285 @@ func loopFace(args []string) int {
 	}
 	explicitSteps := map[string]bool{}
 	fs.Visit(func(set *flag.Flag) { explicitSteps[set.Name] = true })
-	agentLimit, explicitLimit, err := resolveAgentLimit(explicitSteps, *maxAgents, *laneCount, 2)
-	if err != nil {
-		return failStartup(err)
-	}
-	if agentLimit < 0 {
-		return failStartup(drain.Usagef("loop needs --max-agents N (N >= 0)"))
-	}
-	if *maxConcurrentTriage < 0 {
-		return failStartup(drain.Usagef("loop needs --max-concurrent-triage N (N >= 0)"))
-	}
-	if *worktreeCount < 0 {
-		return failStartup(drain.Usagef("loop needs --worktree-count N (N >= 0)"))
-	}
-	if *worktreeDiskBudget < 0 {
-		return failStartup(drain.Usagef("loop needs --worktree-disk-budget N (N >= 0)"))
-	}
+
 	// A missing store must not mask invalid repository settings, including
 	// when --check is run before the first loop startup.
 	repositorySettings, err := settings.Read(*root)
 	if err != nil {
 		return failStartup(drain.Usagef("%v", err))
 	}
-	if *path == "" {
-		*path = filepath.Join(*root, ".tillr", "state.db")
+
+	var startOpts []drain.StartOption
+	recordOpt := func(name, val, src, detail string) {
+		startOpts = append(startOpts, drain.StartOption{Name: name, Value: val, Source: src, Detail: detail})
 	}
+
+	exitWhenDrainedVal, exitWhenDrainedSrc, exitWhenDrainedDetail, err := resolveBoolOption(
+		"exit-when-drained", explicitSteps, *exitWhenDrained,
+		repositorySettings.Drain.ExitWhenDrainedSet, repositorySettings.Drain.ExitWhenDrained,
+		false, "drain.exit_when_drained",
+	)
+	if err != nil {
+		return failStartup(err)
+	}
+	*exitWhenDrained = exitWhenDrainedVal
+
+	defaultStore := filepath.Join(*root, ".tillr", "state.db")
+	tomlStore := ""
+	if repositorySettings.Drain.StoreSet {
+		tomlStore = filepath.Join(*root, filepath.FromSlash(repositorySettings.Drain.Store))
+	}
+	storeVal, storeSrc, storeDetail, err := resolveStringOption(
+		"store", explicitSteps, *path,
+		repositorySettings.Drain.StoreSet, tomlStore, defaultStore, "drain.store", false,
+	)
+	if err != nil {
+		return failStartup(err)
+	}
+	*path = storeVal
+
+	agentLimit, explicitLimit, lanesSrc, lanesDetail, err := resolveLaneLimitOptions(explicitSteps, *maxAgents, *laneCount, repositorySettings)
+	if err != nil {
+		return failStartup(err)
+	}
+	lanesSourceLabel := ""
+	if lanesSrc == sourceSettings {
+		lanesSourceLabel = ".tillr.toml"
+	} else if lanesSrc == sourceEnv {
+		lanesSourceLabel = "environment variable " + lanesDetail
+	}
+
+	wtCountTomlSet := repositorySettings.Drain.WorktreeCountSet || repositorySettings.Worktrees.MaxCountSet
+	wtCountTomlVal := repositorySettings.Drain.WorktreeCount
+	wtCountTomlKey := "drain.worktree_count"
+	if !repositorySettings.Drain.WorktreeCountSet && repositorySettings.Worktrees.MaxCountSet {
+		wtCountTomlVal = repositorySettings.Worktrees.MaxCount
+		wtCountTomlKey = "worktrees.max_count"
+	}
+	wtCountVal, wtCountSrc, wtCountDetail, err := resolveNonnegIntOption(
+		"worktree-count", explicitSteps, *worktreeCount,
+		wtCountTomlSet, wtCountTomlVal, 0, wtCountTomlKey,
+	)
+	if err != nil {
+		return failStartup(err)
+	}
+	*worktreeCount = wtCountVal
+
+	wtBudgetTomlSet := repositorySettings.Drain.WorktreeDiskBudgetSet || repositorySettings.Worktrees.DiskBudgetSet
+	wtBudgetTomlVal := repositorySettings.Drain.WorktreeDiskBudget
+	wtBudgetTomlKey := "drain.worktree_disk_budget"
+	if !repositorySettings.Drain.WorktreeDiskBudgetSet && repositorySettings.Worktrees.DiskBudgetSet {
+		wtBudgetTomlVal = repositorySettings.Worktrees.DiskBudgetBytes
+		wtBudgetTomlKey = "worktrees.disk_budget_bytes"
+	}
+	wtBudgetVal, wtBudgetSrc, wtBudgetDetail, err := resolveNonnegInt64Option(
+		"worktree-disk-budget", explicitSteps, *worktreeDiskBudget,
+		wtBudgetTomlSet, wtBudgetTomlVal, 0, wtBudgetTomlKey,
+	)
+	if err != nil {
+		return failStartup(err)
+	}
+	*worktreeDiskBudget = wtBudgetVal
+
+	triageVal, triageSrc, triageDetail, err := resolveNonnegIntOption(
+		"max-concurrent-triage", explicitSteps, *maxConcurrentTriage,
+		repositorySettings.Drain.MaxConcurrentTriageSet, repositorySettings.Drain.MaxConcurrentTriage, 2, "drain.max_concurrent_triage",
+	)
+	if err != nil {
+		return failStartup(err)
+	}
+	*maxConcurrentTriage = triageVal
+
+	tomlLaneRoot := ""
+	if repositorySettings.Drain.LaneRootSet {
+		tomlLaneRoot = filepath.Join(*root, filepath.FromSlash(repositorySettings.Drain.LaneRoot))
+	}
+	laneRootVal, laneRootSrc, laneRootDetail, err := resolveStringOption(
+		"lane-root", explicitSteps, *laneRoot,
+		repositorySettings.Drain.LaneRootSet, tomlLaneRoot, "", "drain.lane_root", false,
+	)
+	if err != nil {
+		return failStartup(err)
+	}
+	*laneRoot = laneRootVal
+
+	backoffVal, backoffSrc, backoffDetail, err := resolveDurationOption(
+		"backoff-base", explicitSteps, *backoffBase,
+		repositorySettings.Drain.BackoffBaseSet, repositorySettings.Drain.BackoffBase, drain.DefaultBackoffBase, "drain.backoff_base",
+	)
+	if err != nil {
+		return failStartup(err)
+	}
+	*backoffBase = backoffVal
+
+	fallbackVal, fallbackSrc, fallbackDetail, err := resolveDurationOption(
+		"fallback-poll", explicitSteps, *fallbackPoll,
+		repositorySettings.Drain.FallbackPollSet, repositorySettings.Drain.FallbackPoll, drain.DefaultFallbackPollInterval, "drain.fallback_poll",
+	)
+	if err != nil {
+		return failStartup(err)
+	}
+	*fallbackPoll = fallbackVal
+
+	noNotifyVal, noNotifySrc, noNotifyDetail, err := resolveBoolOption(
+		"no-notify", explicitSteps, *noNotify,
+		repositorySettings.Drain.NoNotifySet, repositorySettings.Drain.NoNotify, false, "drain.no_notify",
+	)
+	if err != nil {
+		return failStartup(err)
+	}
+	*noNotify = noNotifyVal
+
+	resolvedPolicyRef, resolvedProfileName, policySrc, policyDetail, err := resolvePolicyAndProfileOptions(*root, explicitSteps, *policyPath, *profileName, repositorySettings)
+	if err != nil {
+		return failStartup(err)
+	}
+	*policyPath = resolvedPolicyRef
+
+	runBinVal, runBinSrc, runBinDetail, err := resolveStringOption(
+		"run-bin", explicitSteps, *runBin,
+		repositorySettings.Drain.RunBinSet, repositorySettings.Drain.RunBin, "tillr-run", "drain.run_bin", false,
+	)
+	if err != nil {
+		return failStartup(err)
+	}
+	*runBin = runBinVal
+
+	itemBinVal, itemBinSrc, itemBinDetail, err := resolveStringOption(
+		"item-bin", explicitSteps, *itemBin,
+		repositorySettings.Drain.ItemBinSet, repositorySettings.Drain.ItemBin, "tillr-item", "drain.item_bin", false,
+	)
+	if err != nil {
+		return failStartup(err)
+	}
+	*itemBin = itemBinVal
+
+	briefTomlSet := repositorySettings.Drain.BriefTemplateSet || repositorySettings.Brief.Template != ""
+	briefTomlVal := ""
+	briefTomlKey := "drain.brief_template"
+	if repositorySettings.Drain.BriefTemplateSet {
+		briefTomlVal = filepath.Join(*root, filepath.FromSlash(repositorySettings.Drain.BriefTemplate))
+	} else if repositorySettings.Brief.Template != "" {
+		briefTomlVal = filepath.Join(*root, filepath.FromSlash(repositorySettings.Brief.Template))
+		briefTomlKey = "brief.template"
+	}
+	briefVal, briefSrc, briefDetail, err := resolveStringOption(
+		"brief-template", explicitSteps, *briefTemplate,
+		briefTomlSet, briefTomlVal, "", briefTomlKey, false,
+	)
+	if err != nil {
+		return failStartup(err)
+	}
+	*briefTemplate = briefVal
+
+	gateVal, gateSrc, gateDetail, err := resolveStringOption(
+		"gate", explicitSteps, *gate,
+		repositorySettings.Drain.GateSet, repositorySettings.Drain.Gate, "", "drain.gate", true,
+	)
+	if err != nil {
+		return failStartup(err)
+	}
+	*gate = gateVal
+
+	landVal, landSrc, landDetail, err := resolveStringOption(
+		"land", explicitSteps, *land,
+		repositorySettings.Drain.LandSet, repositorySettings.Drain.Land, "", "drain.land", true,
+	)
+	if err != nil {
+		return failStartup(err)
+	}
+	*land = landVal
+
+	verdictVal, verdictSrc, verdictDetail, err := resolveStringOption(
+		"verdict", explicitSteps, *verdict,
+		repositorySettings.Drain.VerdictSet, repositorySettings.Drain.Verdict, "", "drain.verdict", true,
+	)
+	if err != nil {
+		return failStartup(err)
+	}
+	*verdict = verdictVal
+
+	replayVal, replaySrc, replayDetail, err := resolveStringOption(
+		"replay", explicitSteps, *replay,
+		repositorySettings.Drain.ReplaySet, repositorySettings.Drain.Replay, drain.DefaultReplayProgram, "drain.replay", true,
+	)
+	if err != nil {
+		return failStartup(err)
+	}
+	*replay = replayVal
+
+	heavyGateVal, heavyGateSrc, heavyGateDetail, err := resolveStringOption(
+		"heavy-gate", explicitSteps, *heavyGate,
+		repositorySettings.Drain.HeavyGateSet, repositorySettings.Drain.HeavyGate, "tillr-gate", "drain.heavy_gate", false,
+	)
+	if err != nil {
+		return failStartup(err)
+	}
+	*heavyGate = heavyGateVal
+
+	rollingVal, rollingSrc, rollingDetail, err := resolveStringOption(
+		"rolling", explicitSteps, *rolling,
+		repositorySettings.Drain.RollingSet, repositorySettings.Drain.Rolling, drain.DefaultRollingProgram, "drain.rolling", true,
+	)
+	if err != nil {
+		return failStartup(err)
+	}
+	*rolling = rollingVal
+
+	fixerGateVal, fixerGateSrc, fixerGateDetail, err := resolveStringOption(
+		"fixer-gate", explicitSteps, *fixerGate,
+		repositorySettings.Drain.FixerGateSet, repositorySettings.Drain.FixerGate, drain.DefaultFixerGateProgram, "drain.fixer_gate", true,
+	)
+	if err != nil {
+		return failStartup(err)
+	}
+	*fixerGate = fixerGateVal
+
+	questionsCmdVal, questionsCmdSrc, questionsCmdDetail, err := resolveStringOption(
+		"questions-cmd", explicitSteps, *questionsCmd,
+		repositorySettings.Drain.QuestionsCmdSet, repositorySettings.Drain.QuestionsCmd, "", "drain.questions_cmd", true,
+	)
+	if err != nil {
+		return failStartup(err)
+	}
+	*questionsCmd = questionsCmdVal
+
+	tomlQuestionsIdx := ""
+	if repositorySettings.Drain.QuestionsIndexSet {
+		tomlQuestionsIdx = filepath.Join(*root, filepath.FromSlash(repositorySettings.Drain.QuestionsIndex))
+	}
+	questionsIdxVal, questionsIdxSrc, questionsIdxDetail, err := resolveStringOption(
+		"questions-index", explicitSteps, *questionsIndex,
+		repositorySettings.Drain.QuestionsIndexSet, tomlQuestionsIdx, "", "drain.questions_index", false,
+	)
+	if err != nil {
+		return failStartup(err)
+	}
+	*questionsIndex = questionsIdxVal
+
+	configuredSteps := map[string]bool{}
+	for k, v := range explicitSteps {
+		configuredSteps[k] = v
+	}
+	if gateSrc != sourceBuiltinDefault {
+		configuredSteps["gate"] = true
+	}
+	if landSrc != sourceBuiltinDefault {
+		configuredSteps["land"] = true
+	}
+	if verdictSrc != sourceBuiltinDefault {
+		configuredSteps["verdict"] = true
+	}
+	if replaySrc != sourceBuiltinDefault {
+		configuredSteps["replay"] = true
+	}
+	if rollingSrc != sourceBuiltinDefault {
+		configuredSteps["rolling"] = true
+	}
+	if fixerGateSrc != sourceBuiltinDefault {
+		configuredSteps["fixer-gate"] = true
+	}
+
 	var checkVersion int
 	if *check {
 		var err error
@@ -1030,53 +1285,81 @@ func loopFace(args []string) int {
 	if !*check {
 		fmt.Fprintf(os.Stderr, "loop: lane-root %s (%s)\n", *laneRoot, laneRootReason)
 	}
-	if *policyPath == "" {
-		selectedProfile := *profileName
-		if selectedProfile == "" {
-			selectedProfile = repositorySettings.Drain.Profile
-		}
-		if selectedProfile != "" {
-			resolved, err := drain.ResolveProfilePath(selectedProfile)
-			if err != nil {
-				return failStartup(err)
-			}
-			*policyPath = resolved
-		} else {
-			defaultPolicy := filepath.Join(*root, "config", "tillr", "backend-policy.json")
-			if _, statErr := os.Stat(defaultPolicy); !os.IsNotExist(statErr) || !drain.CommandOnlyWorkflows(*root) {
-				*policyPath = defaultPolicy
-			}
-		}
-	}
 	briefFromInstall := false
 	if *briefTemplate == "" {
-		if repositorySettings.Brief.Template != "" {
-			*briefTemplate = filepath.Join(*root, filepath.FromSlash(repositorySettings.Brief.Template))
-		} else {
-			briefFromInstall = true
-			resolved, err := run.ResolveBriefTemplate()
-			if err != nil {
-				return failStartup(formatInstallSupportError(err))
-			}
-			*briefTemplate = resolved
+		briefFromInstall = true
+		resolved, err := run.ResolveBriefTemplate()
+		if err != nil {
+			return failStartup(formatInstallSupportError(err))
 		}
+		*briefTemplate = resolved
 	}
 	var policy *drain.Policy
 	adaptersFromInstall := false
 	if *policyPath != "" {
+		settingsPolicyVal := *policyPath
+		if resolvedProfileName != "" {
+			settingsPolicyVal = resolvedProfileName
+		}
 		var err error
 		policy, err = readPolicy(*policyPath)
 		if err != nil {
+			if policySrc == sourceEnv {
+				return failStartup(drain.Usagef("environment variable %s=%q: %v", policyDetail, *policyPath, err))
+			}
+			if policySrc == sourceSettings {
+				return failStartup(drain.Usagef(".tillr.toml %s=%q: %v", policyDetail, settingsPolicyVal, err))
+			}
 			return failStartup(err)
 		}
 		if policy == nil {
+			if policySrc == sourceEnv {
+				return failStartup(drain.Usagef("environment variable %s=%q: loop needs a policy: %s names none", policyDetail, *policyPath, *policyPath))
+			}
+			if policySrc == sourceSettings {
+				return failStartup(drain.Usagef(".tillr.toml %s=%q: loop needs a policy: %s names none", policyDetail, settingsPolicyVal, *policyPath))
+			}
 			return failStartup(drain.Usagef("loop needs a policy: %s names none", *policyPath))
 		}
 		adaptersFromInstall, err = policy.CheckAdaptersWithOrigin(*root)
 		if err != nil {
+			if policySrc == sourceEnv {
+				return failStartup(drain.Usagef("environment variable %s=%q: %v", policyDetail, *policyPath, formatInstallSupportError(err)))
+			}
+			if policySrc == sourceSettings {
+				return failStartup(drain.Usagef(".tillr.toml %s=%q: %v", policyDetail, settingsPolicyVal, formatInstallSupportError(err)))
+			}
 			return failStartup(formatInstallSupportError(err))
 		}
 	}
+
+	recordOpt("exit-when-drained", strconv.FormatBool(*exitWhenDrained), exitWhenDrainedSrc, exitWhenDrainedDetail)
+	recordOpt("store", *path, storeSrc, storeDetail)
+	recordOpt("lanes", strconv.Itoa(agentLimit), lanesSrc, lanesDetail)
+	recordOpt("worktree-count", strconv.Itoa(*worktreeCount), wtCountSrc, wtCountDetail)
+	recordOpt("worktree-disk-budget", strconv.FormatInt(*worktreeDiskBudget, 10), wtBudgetSrc, wtBudgetDetail)
+	recordOpt("max-concurrent-triage", strconv.Itoa(*maxConcurrentTriage), triageSrc, triageDetail)
+	recordOpt("lane-root", *laneRoot, laneRootSrc, laneRootDetail)
+	recordOpt("backoff-base", backoffBase.String(), backoffSrc, backoffDetail)
+	recordOpt("fallback-poll", fallbackPoll.String(), fallbackSrc, fallbackDetail)
+	recordOpt("no-notify", strconv.FormatBool(*noNotify), noNotifySrc, noNotifyDetail)
+	if resolvedProfileName != "" {
+		recordOpt("profile", resolvedProfileName, policySrc, policyDetail)
+	}
+	recordOpt("policy", *policyPath, policySrc, policyDetail)
+	recordOpt("run-bin", *runBin, runBinSrc, runBinDetail)
+	recordOpt("item-bin", *itemBin, itemBinSrc, itemBinDetail)
+	recordOpt("brief-template", *briefTemplate, briefSrc, briefDetail)
+	recordOpt("gate", *gate, gateSrc, gateDetail)
+	recordOpt("land", *land, landSrc, landDetail)
+	recordOpt("verdict", *verdict, verdictSrc, verdictDetail)
+	recordOpt("replay", *replay, replaySrc, replayDetail)
+	recordOpt("heavy-gate", *heavyGate, heavyGateSrc, heavyGateDetail)
+	recordOpt("rolling", *rolling, rollingSrc, rollingDetail)
+	recordOpt("fixer-gate", *fixerGate, fixerGateSrc, fixerGateDetail)
+	recordOpt("questions-cmd", *questionsCmd, questionsCmdSrc, questionsCmdDetail)
+	recordOpt("questions-index", *questionsIndex, questionsIdxSrc, questionsIdxDetail)
+
 	at := time.Now
 	if *now != "" {
 		parsed, err := time.Parse(time.RFC3339, *now)
@@ -1093,7 +1376,7 @@ func loopFace(args []string) int {
 		QuestionsCmd: commandFields(*questionsCmd),
 		TrunkRef:     repositorySettings.TrunkBranch(),
 	}
-	steps.ConfigureHooks(hooks, explicitSteps)
+	steps.ConfigureHooks(hooks, configuredSteps)
 	var explicitLanes *int
 	if explicitLimit {
 		n := agentLimit
@@ -1105,8 +1388,8 @@ func loopFace(args []string) int {
 	}
 	loop, err := drain.NewLoop(drain.LoopConfig{
 		Root: *root, Store: *path, LaneRoot: *laneRoot, MigrateOwnerQuestions: *migrateOwner,
-		Lanes: laneIDs(agentLimit), ItemWorktrees: true, WorktreeCountOverride: *worktreeCount, WorktreeDiskBudgetOverride: *worktreeDiskBudget, LiveScale: true, ExplicitLanes: explicitLanes, BackoffBase: *backoffBase, MaxConcurrentTriage: *maxConcurrentTriage, StorePollInterval: *fallbackPoll, NoNotify: *noNotify, ExitWhenDrained: *exitWhenDrained,
-		Policy: policy, PolicyRef: *policyPath, QuestionsCmd: commandFields(*questionsCmd), QuestionsIndex: *questionsIndex,
+		Lanes: laneIDs(agentLimit), ItemWorktrees: true, WorktreeCountOverride: *worktreeCount, WorktreeDiskBudgetOverride: *worktreeDiskBudget, LiveScale: true, ExplicitLanes: explicitLanes, LanesSource: lanesSourceLabel, BackoffBase: *backoffBase, MaxConcurrentTriage: *maxConcurrentTriage, StorePollInterval: *fallbackPoll, NoNotify: *noNotify, ExitWhenDrained: *exitWhenDrained,
+		Policy: policy, PolicyRef: *policyPath, PolicySource: policySrc, PolicyProfile: resolvedProfileName, StartOptions: startOpts, QuestionsCmd: commandFields(*questionsCmd), QuestionsIndex: *questionsIndex,
 		Steps: steps, Stage: stager, Now: at, Report: os.Stderr,
 		Comments: repositorySettings.Comments, WorkflowDefaults: repositorySettings.WorkflowDefaults,
 		CandidateSizeLimits: &repositorySettings.CandidateSize,
@@ -1119,7 +1402,7 @@ func loopFace(args []string) int {
 	if err := checkLoopPrograms(steps, loop.StagedSchemaPrograms()); err != nil {
 		return failStartup(err)
 	}
-	if err := verifyInstallSupport(*root, briefFromInstall, adaptersFromInstall, steps, explicitSteps, repositorySettings.WorkflowDefaults); err != nil {
+	if err := verifyInstallSupport(*root, briefFromInstall, adaptersFromInstall, steps, configuredSteps, repositorySettings.WorkflowDefaults); err != nil {
 		return failStartup(err)
 	}
 	if *check {

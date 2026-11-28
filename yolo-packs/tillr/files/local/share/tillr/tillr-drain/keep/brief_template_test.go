@@ -43,3 +43,22 @@ func TestLoopCommandPassesBriefTemplateFromSettings(t *testing.T) {
 		t.Fatalf("LoopCommand without [brief] template passed --brief-template: %q", plain)
 	}
 }
+
+func TestLoopCommandRespectsEnvAndDrainSettingsForDefaults(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, ".tillr.toml"), []byte("[drain]\ngate = \"custom-gate\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TILLR_DRAIN_LAND", "env-land")
+
+	got := LoopCommand(dir, nil)
+	if slices.Contains(got, "--gate") {
+		t.Fatalf("LoopCommand should omit --gate when [drain] gate is set: %q", got)
+	}
+	if slices.Contains(got, "--land") {
+		t.Fatalf("LoopCommand should omit --land when TILLR_DRAIN_LAND is set: %q", got)
+	}
+	if !slices.Contains(got, "--verdict") {
+		t.Fatalf("LoopCommand should still supply default --verdict when unset: %q", got)
+	}
+}

@@ -30,7 +30,25 @@ func policyFace(args []string) int {
 		if err := json.Unmarshal([]byte(state.Content), &policy); err != nil {
 			return fail(err)
 		}
-		fmt.Printf("policy in force: %s (%s)\n%s", state.Hash, state.Ref, policy.Description())
+		fmt.Printf("policy in force: %s (%s)\n", state.Hash, state.Ref)
+		if state.Source != "" || state.Profile != "" {
+			fmt.Printf("policy selection: source=%s", state.Source)
+			if state.Profile != "" {
+				fmt.Printf(" profile=%s", state.Profile)
+			}
+			fmt.Println()
+		}
+		fmt.Print(policy.Description())
+		if len(state.StartOptions) > 0 {
+			fmt.Println("start options:")
+			for _, opt := range state.StartOptions {
+				if opt.Detail != "" {
+					fmt.Printf("  %s=%q (%s: %s)\n", opt.Name, opt.Value, opt.Source, opt.Detail)
+				} else {
+					fmt.Printf("  %s=%q (%s)\n", opt.Name, opt.Value, opt.Source)
+				}
+			}
+		}
 		if state.Refusal != "" {
 			fmt.Printf("policy on disk is not the policy in force: %s\n", state.Refusal)
 		}
