@@ -196,11 +196,19 @@ func (l *Loop) conflictFix(ctx context.Context, candidate Candidate, landed Land
 	}
 	fix := *candidate.Request
 	if policy != nil {
-		if _, ok := policy.Backends[fix.Backend]; !ok {
+		target, move, ok := resolveStepBackend(policy, candidate.ItemID, fix.Seat, fix.Backend, nil)
+		if !ok {
 			return "", false, l.holdRepair(ctx, basis, fmt.Errorf("original repair backend %q is absent from the policy; restore that backend", fix.Backend))
 		}
+		if move != nil {
+			move.RunID = fixRunID
+			move.NodeID = fix.NodeID
+			if err := recordBackendMove(ctx, l.cfg.Store, *move, l.cfg.Now().UTC()); err != nil {
+				return "", false, err
+			}
+		}
 		prev := fix
-		fix = *policy.Request(candidate.ItemID, candidate.LaneID, fixRunID, fix.Backend)
+		fix = *policy.Request(candidate.ItemID, candidate.LaneID, fixRunID, target)
 		fix.Seat = prev.Seat
 		fix.Workflow = prev.Workflow
 		fix.Node = prev.Node

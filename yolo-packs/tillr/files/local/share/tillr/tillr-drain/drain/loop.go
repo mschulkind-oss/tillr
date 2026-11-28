@@ -2791,12 +2791,17 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 		}
 		if interrupted && (refused || record.State == run.StatePaused) {
 			prepared = true
-			resumed, resumedLog, stop, err := l.resumeQuotaRun(ctx, decision, record, tick, at, result, watched)
+			resumed, resumedLog, stop, expectedBackend, err := l.resumeQuotaRun(ctx, decision, record, tick, at, result, watched)
 			if err != nil || stop != "" || resumed.RunID == "" {
 				return laneOutcome{stop: stop, err: err}
 			}
-			if resumed.Backend != request.Backend {
-				return laneOutcome{err: Externalf("quota continuation %s returned backend %s, not %s", resumed.RunID, resumed.Backend, request.Backend)}
+			if resumed.Backend != expectedBackend {
+				return laneOutcome{err: Externalf("quota continuation %s returned backend %s, not %s", resumed.RunID, resumed.Backend, expectedBackend)}
+			}
+			if decision.RunRequest != nil && resumed.Backend != decision.RunRequest.Backend {
+				updated := *decision.RunRequest
+				updated.Backend = resumed.Backend
+				decision.RunRequest = &updated
 			}
 			return l.settle(ctx, decision, resumed, resumedLog, mainSHA, tick, at, result, timing, watched, deferJudge)
 		}
@@ -3482,13 +3487,29 @@ func (l *Loop) runContinuation(ctx context.Context, lane string, request run.Req
 		// A malformed session-id is a lane defect to report, not a value to hand on.
 		return run.Record{}, "", "", err
 	}
-	if sessionID == "" {
-		return run.Record{}, "", "", nil
-	}
 	resumed := request
-	if fresh, ok := refreshRestartRequest(l.currentPolicy(), Decision{}, &request); ok && fresh.Route() != request.Route() {
+	if pol := l.currentPolicy(); pol != nil && !policyHasBackend(pol, request.Backend) {
+		if target, move, ok := resolveStepBackend(pol, request.ItemID, request.Seat, request.Backend, nil); ok && move != nil {
+			if fresh, rebuilt := refreshRestartRequestForBackend(pol, Decision{}, &request, target); rebuilt {
+				move.RunID = request.RunID
+				move.NodeID = fresh.NodeID
+				if err := recordBackendMove(ctx, l.cfg.Store, *move, l.cfg.Now().UTC()); err != nil {
+					return run.Record{}, "", "", err
+				}
+				resumed = *fresh
+				resumed.FreshSession = true
+				resumed.SessionTurn = false
+				if resumed.ResumePrompt == "" {
+					resumed.ResumePrompt = fmt.Sprintf("The earlier session ran on %s, which is no longer in the active profile. Continue the same attempt on %s in a fresh session, preserving existing work.", request.Backend, target)
+				}
+			}
+		}
+	} else if fresh, ok := refreshRestartRequest(l.currentPolicy(), Decision{}, &request); ok && fresh.Route() != request.Route() {
 		resumed.Command = fresh.Command
 		resumed.TimeoutMS = fresh.TimeoutMS
+	}
+	if sessionID == "" && !resumed.FreshSession {
+		return run.Record{}, "", "", nil
 	}
 	resumed.Resume = true
 	resumed.CorrelationID = tick

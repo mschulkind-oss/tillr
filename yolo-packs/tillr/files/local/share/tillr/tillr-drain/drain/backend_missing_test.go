@@ -102,7 +102,101 @@ func TestPolicyChangeRemovingBackendHoldsInProgressWorkflowItemAndContinuesLoop(
 		t.Fatalf("loop exited after policy removed backend: %v", err)
 	}
 
-	// item-b must still dispatch on pi; item-a must not fall back to pi.
+	// Both item-a (moved from pi-judge to pi) and item-b must dispatch on pi.
+	dispatched := map[string]run.Request{}
+	for len(dispatched) < 2 {
+		select {
+		case req := <-steps.requests:
+			dispatched[req.ItemID] = req
+		case <-time.After(hangGuard):
+			t.Fatalf("expected both item-a and item-b to dispatch, got %+v", dispatched)
+		}
+	}
+	if req := dispatched["item-a"]; req.Backend != "pi" || req.NodeID != "verify" {
+		t.Fatalf("item-a dispatch = %+v, want verify on pi", req)
+	}
+	if req := dispatched["item-b"]; req.Backend != "pi" {
+		t.Fatalf("item-b dispatch = %+v, want pi", req)
+	}
+
+	moves := readBackendMoves(t, f, "item-a")
+	if len(moves) != 1 || moves[0].FromBackend != "pi-judge" || moves[0].ToBackend != "pi" || moves[0].Seat != "verify" {
+		t.Fatalf("item-a backend moves = %+v, want one move pi-judge -> pi for verify", moves)
+	}
+}
+
+func TestPolicyChangeRemovingSeatHoldsInProgressWorkflowItemAndContinuesLoop(t *testing.T) {
+	f, l := passFixture(t, "item-a", "item-b")
+	l.cfg.Lanes = []string{"lane-1", "lane-2"}
+	ref := filepath.Join(f.root, "policy.json")
+	p := Policy{
+		DefaultBackend: "pi",
+		Seats:          map[string]string{"build": "pi", "verify": "pi-judge"},
+		Backends: map[string]Backend{
+			"pi":       {Adapter: "pi", Model: "model-pi", TimeoutSeconds: 60},
+			"pi-judge": {Adapter: "pi-judge", Model: "model-judge", TimeoutSeconds: 60},
+		},
+	}
+	l.cfg.Policy, l.cfg.PolicyRef = savePolicyFile(t, ref, p), ref
+
+	steps := &policyRunSteps{requests: make(chan run.Request, 4), release: make(chan struct{})}
+	l.cfg.Steps = steps
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		if _, err := tx.Exec(`UPDATE items SET seat = 'build' WHERE item_id = 'item-b'`); err != nil {
+			return err
+		}
+		wf := &Workflow{
+			Name:    "test-wf",
+			Version: 1,
+			Stages: []WorkflowStage{
+				{ID: "work", Seat: "build", Access: "write"},
+				{ID: "verify", Seat: "verify", Access: "read_only"},
+			},
+		}
+		req := l.cfg.Policy.Request("item-a", "lane-1", "run-item-a-a1-n2-restart", "pi-judge")
+		req.NodeID = "verify"
+		d := Decision{
+			ItemID:          "item-a",
+			Attempt:         1,
+			Action:          ActionDispatch,
+			Reason:          "workflow-node-restart",
+			From:            "running",
+			To:              "running",
+			LaneID:          "lane-1",
+			Seat:            "verify",
+			Workflow:        wf,
+			NodeIndex:       1,
+			WorkflowRestart: true,
+			RunRequest:      req,
+		}
+		stampDecisionRequest(d, req)
+		identifyDecision(&d)
+		return appendEffect(tx, nodeAdvancedKind, req.RunID, pendingWork{
+			Decision: d,
+			Ready:    true,
+		}, l.cfg.Now().UTC())
+	})
+
+	// Remove pi-judge and leave verify unmapped in the policy.
+	delete(p.Seats, "verify")
+	delete(p.Backends, "pi-judge")
+	savePolicyFile(t, ref, p)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	defer func() {
+		close(steps.release)
+		for len(l.active) > 0 {
+			c := <-l.completions
+			delete(l.active, c.id)
+		}
+	}()
+
+	var result LoopResult
+	if _, err := l.pass(ctx, &result); err != nil {
+		t.Fatalf("loop exited after policy removed seat: %v", err)
+	}
+
 	select {
 	case req := <-steps.requests:
 		if req.ItemID != "item-b" || req.Backend != "pi" {
@@ -196,25 +290,24 @@ func TestPolicyChangeRemovingBackendHoldsFailedItemAndContinuesLoop(t *testing.T
 		t.Fatalf("loop exited after policy removed backend: %v", err)
 	}
 
-	select {
-	case req := <-steps.requests:
-		if req.ItemID != "item-b" || req.Backend != "pi" {
-			t.Fatalf("unexpected dispatch: %+v", req)
+	dispatched := map[string]run.Request{}
+	for len(dispatched) < 2 {
+		select {
+		case req := <-steps.requests:
+			dispatched[req.ItemID] = req
+		case <-time.After(hangGuard):
+			t.Fatalf("expected both item-a and item-b to dispatch, got %+v", dispatched)
 		}
-	case <-time.After(hangGuard):
-		t.Fatal("other item did not dispatch")
 	}
-	select {
-	case extra := <-steps.requests:
-		t.Fatalf("item-a fell back instead of holding: %+v", extra)
-	default:
+	if req := dispatched["item-a"]; req.Backend != "pi" {
+		t.Fatalf("item-a dispatch = %+v, want pi", req)
 	}
-
-	held := planFor(t, l, "item-a")
-	if held.Action != ActionHold || !strings.HasPrefix(held.Reason, ReasonBackendMissing+": ") ||
-		!strings.Contains(held.Reason, "verify") || !strings.Contains(held.Reason, "pi-judge") ||
-		held.Seat != "verify" || held.DeferredBy != "pi-judge" || held.RunRequest != nil {
-		t.Fatalf("unexpected hold decision for item-a: %+v", held)
+	if req := dispatched["item-b"]; req.Backend != "pi" {
+		t.Fatalf("item-b dispatch = %+v, want pi", req)
+	}
+	moves := readBackendMoves(t, f, "item-a")
+	if len(moves) != 1 || moves[0].FromBackend != "pi-judge" || moves[0].ToBackend != "pi" || moves[0].Seat != "verify" {
+		t.Fatalf("item-a backend moves = %+v, want one move pi-judge -> pi for verify", moves)
 	}
 }
 
@@ -280,19 +373,48 @@ func TestPolicyChangeRemovingDesignBackendHoldsConflictAndContinuesLoop(t *testi
 		t.Fatalf("loop exited after policy removed design backend: %v", err)
 	}
 
-	select {
-	case req := <-steps.requests:
-		if req.ItemID != "item-b" || req.Backend != "pi" {
-			t.Fatalf("unexpected dispatch: %+v", req)
+	dispatched := map[string]run.Request{}
+	for len(dispatched) < 2 {
+		select {
+		case req := <-steps.requests:
+			dispatched[req.ItemID] = req
+		case <-time.After(hangGuard):
+			t.Fatalf("expected both item-a and item-b to dispatch, got %+v", dispatched)
 		}
-	case <-time.After(hangGuard):
-		t.Fatal("other item did not dispatch")
 	}
+	if req := dispatched["item-a"]; req.Backend != "pi" || req.Seat != "design" {
+		t.Fatalf("item-a dispatch = %+v, want design on pi", req)
+	}
+	if req := dispatched["item-b"]; req.Backend != "pi" {
+		t.Fatalf("item-b dispatch = %+v, want pi", req)
+	}
+	moves := readBackendMoves(t, f, "item-a")
+	if len(moves) != 1 || moves[0].FromBackend != "pi-design" || moves[0].ToBackend != "pi" || moves[0].Seat != "design" {
+		t.Fatalf("item-a backend moves = %+v, want one move pi-design -> pi for design", moves)
+	}
+}
 
-	held := planFor(t, l, "item-a")
-	if held.Action != ActionHold || !strings.HasPrefix(held.Reason, ReasonBackendMissing+": ") ||
-		!strings.Contains(held.Reason, "design") || !strings.Contains(held.Reason, "pi-design") ||
-		held.Seat != "design" || held.DeferredBy != "pi-design" || held.RunRequest != nil {
-		t.Fatalf("unexpected hold decision for item-a: %+v", held)
-	}
+func readBackendMoves(t *testing.T, f refusalLoopFixture, itemID string) []BackendMove {
+	t.Helper()
+	var moves []BackendMove
+	fixtureRead(t, f, func(r *store.Reader) error {
+		rows, err := r.Query(`SELECT payload FROM events WHERE kind = ? AND object_type = 'item' AND object_id = ? ORDER BY seq ASC`, BackendMovedKind, itemID)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var raw []byte
+			if err := rows.Scan(&raw); err != nil {
+				return err
+			}
+			var m BackendMove
+			if err := json.Unmarshal(raw, &m); err != nil {
+				return err
+			}
+			moves = append(moves, m)
+		}
+		return rows.Err()
+	})
+	return moves
 }

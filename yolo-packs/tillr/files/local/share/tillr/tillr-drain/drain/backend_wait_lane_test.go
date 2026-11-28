@@ -131,12 +131,20 @@ func TestBackendWaitLane(t *testing.T) {
 				t.Fatalf("claim freed lane for open item: %v / %v", ok, err)
 			}
 			l.cfg.Lanes = append(l.cfg.Lanes, "lane-2")
-			// Changing the seat's assignment must not reroute the refused node.
-			l.cfg.Policy.Seats["scout"] = "open"
+			// While scout still maps to the closed backend, the released node waits for its reset.
 			wait := mustPlan(t, l)[0].decision
 			if wait.Reason != ReasonBackendWindow || wait.DeferredBy != rec.Backend || !strings.Contains(wait.BackendHoldMover, reset.Format(time.RFC3339)) {
 				t.Fatalf("released node should wait for the original backend: %+v", wait)
 			}
+			// Reassigning scout to an open backend moves the waiting node immediately.
+			l.cfg.Policy.Seats["scout"] = "open"
+			moved := mustPlan(t, l)[0].decision
+			if moved.Action != ActionDispatch || moved.LaneID != "lane-2" || moved.RunRequest == nil || moved.RunRequest.Backend != "open" ||
+				moved.BackendMove == nil || moved.BackendMove.FromBackend != rec.Backend || moved.BackendMove.ToBackend != "open" {
+				t.Fatalf("reassigned seat should move released node to open: %+v", moved)
+			}
+			// Restoring scout to the closed backend keeps waiting until reset, then offers lane-2.
+			l.cfg.Policy.Seats["scout"] = rec.Backend
 			l.cfg.Now = func() time.Time { return reset.Add(time.Second) }
 			next := mustPlan(t, l)[0]
 			got := next.decision

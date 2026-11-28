@@ -50,6 +50,20 @@ func (l *Loop) prepareDesignContinuation(ctx context.Context, r *store.Reader, d
 	if !sameLane {
 		why = "is on another lane"
 	}
+	if available && (old.Backend != d.RunRequest.Backend || old.Route() != d.RunRequest.Route()) {
+		available = false
+		why = "ran on backend " + old.Backend + " rather than " + d.RunRequest.Backend
+	}
+	if d.BackendMove == nil && old.Backend != "" && d.RunRequest != nil && old.Backend != d.RunRequest.Backend {
+		d.BackendMove = &BackendMove{
+			ItemID:      d.ItemID,
+			Seat:        "design",
+			RunID:       d.RunRequest.RunID,
+			FromBackend: old.Backend,
+			ToBackend:   d.RunRequest.Backend,
+			Reason:      "profile-changed",
+		}
+	}
 	if available && len(old.Command) > 0 {
 		capability, err := os.ReadFile(filepath.Join(filepath.Dir(old.Command[0]), "pause-kind"))
 		if err == nil && strings.TrimSpace(string(capability)) == run.PauseCannotResume {

@@ -387,14 +387,16 @@ func (l *Loop) settlementHeldByBackendOrWait(r *store.Reader, d Decision, rec *r
 		return shut, err
 	}
 	if evaluatorNode(d) && (rec.State == run.StateFailedToStart || judgeQuotaRefusal(*rec)) {
-		if policy != nil && !policyHasBackend(policy, d.RunRequest.Backend) {
-			return true, nil
-		}
 		s, err := loadShut()
 		if err != nil {
 			return false, err
 		}
-		if s[d.RunRequest.Backend] {
+		if policy != nil {
+			target, _, hasBackend := resolveStepBackend(policy, d.ItemID, d.Seat, d.RunRequest.Backend, s)
+			if !hasBackend || s[target] {
+				return true, nil
+			}
+		} else if s[d.RunRequest.Backend] {
 			return true, nil
 		}
 	}
@@ -412,7 +414,8 @@ func (l *Loop) settlementHeldByBackendOrWait(r *store.Reader, d Decision, rec *r
 			if err != nil {
 				return false, err
 			}
-			if s[backend] {
+			target, _, hasBackend := resolveStepBackend(policy, d.ItemID, d.Seat, backend, s)
+			if !hasBackend || s[target] {
 				return true, nil
 			}
 		}
@@ -433,7 +436,13 @@ func (l *Loop) settlementHeldByBackendOrWait(r *store.Reader, d Decision, rec *r
 		if err != nil {
 			return false, err
 		}
-		if s[d.RunRequest.Backend] {
+		target := d.RunRequest.Backend
+		if policy != nil {
+			if resolved, _, hasBackend := resolveStepBackend(policy, d.ItemID, "design", d.RunRequest.Backend, s); hasBackend {
+				target = resolved
+			}
+		}
+		if s[target] {
 			return true, nil
 		}
 	}

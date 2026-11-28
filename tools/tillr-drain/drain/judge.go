@@ -320,21 +320,25 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 			} else if err := l.holdJudgeInfrastructure(ctx, c, receipt, *rec, logTail(rec.ArtifactRefs)); err != nil {
 				return c, false, err
 			}
-			open, err := l.recordedBackendOpen(ctx, receipt.Request.Backend)
+			req := receipt.Request
+			req.RunID = markRunID(req.RunID, "restart")
+			req, move, open, err := l.resolveJudgeRequest(ctx, req)
 			if err != nil {
 				return c, false, err
 			}
 			if !open {
-				return c, false, fmt.Errorf("%w: backend %s", errJudgeBackendHeld, receipt.Request.Backend)
+				return c, false, fmt.Errorf("%w: backend %s", errJudgeBackendHeld, req.Backend)
+			}
+			if move != nil {
+				if err := recordBackendMove(ctx, l.cfg.Store, *move, l.cfg.Now().UTC()); err != nil {
+					return c, false, err
+				}
 			}
 			if err := l.restoreJudgeInputs(c, receipt); err != nil {
 				return c, false, err
 			}
-			req := receipt.Request
-			req.RunID = markRunID(req.RunID, "restart")
-			req = l.refreshJudgeRequest(req)
 			req.SessionTurn, req.ResumePrompt = false, ""
-			if !quotaRefusal && receipt.JudgeSession != "" && canResumeInfrastructure(rec, &req) {
+			if !quotaRefusal && move == nil && receipt.JudgeSession != "" && canResumeInfrastructure(rec, &req) {
 				replacementSession = receipt.JudgeSession
 				req.SessionTurn = true
 				req.ResumePrompt = "The backend has recovered. Continue reviewing the same candidate and write the verdict."
@@ -342,13 +346,16 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 			replacementRequest = &req
 			receipt = nil
 		} else if evalMissing && rec != nil && rec.State == run.StatePaused && (rec.EndCause == run.EndRestart || rec.EndCause == "") && !quotaRefusal {
-			if c.Evaluator == nil {
-				open, err := l.recordedBackendOpen(ctx, receipt.Request.Backend)
-				if err != nil {
+			req, move, open, err := l.resolveJudgeRequest(ctx, receipt.Request)
+			if err != nil {
+				return c, false, err
+			}
+			if c.Evaluator == nil && !open {
+				return c, false, fmt.Errorf("%w: backend %s", errJudgeBackendHeld, req.Backend)
+			}
+			if move != nil {
+				if err := recordBackendMove(ctx, l.cfg.Store, *move, l.cfg.Now().UTC()); err != nil {
 					return c, false, err
-				}
-				if !open {
-					return c, false, fmt.Errorf("%w: backend %s", errJudgeBackendHeld, receipt.Request.Backend)
 				}
 			}
 			if len(c.Writers) == 0 {
@@ -370,27 +377,30 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 			if err := l.stageJudge(ctx, c, receipt, judgeSession); err != nil {
 				return c, false, err
 			}
-			req := receipt.Request
-			req = l.refreshJudgeRequest(req)
 			req.Resume = true
-			req.SessionTurn, req.ResumePrompt, req.FreshSession = false, "", false
+			req.SessionTurn, req.ResumePrompt, req.FreshSession = false, "", move != nil
+			if move != nil {
+				req.ResumePrompt = fmt.Sprintf("The earlier judge session ran on %s, and the active profile moved seat %s to %s. Continue reviewing the same candidate in a fresh session and write the verdict.", move.FromBackend, move.Seat, move.ToBackend)
+			}
 			resumedRequest = &req
 		} else if evalMissing && rec != nil && ClassifyAttempt(*rec, logTail(rec.ArtifactRefs)) == AttemptInterrupted {
-			if c.Evaluator == nil {
-				open, err := l.recordedBackendOpen(ctx, receipt.Request.Backend)
-				if err != nil {
+			req := receipt.Request
+			req.RunID = markRunID(req.RunID, "interrupted")
+			req, move, open, err := l.resolveJudgeRequest(ctx, req)
+			if err != nil {
+				return c, false, err
+			}
+			if c.Evaluator == nil && !open {
+				return c, false, fmt.Errorf("%w: backend %s", errJudgeBackendHeld, req.Backend)
+			}
+			if move != nil {
+				if err := recordBackendMove(ctx, l.cfg.Store, *move, l.cfg.Now().UTC()); err != nil {
 					return c, false, err
-				}
-				if !open {
-					return c, false, fmt.Errorf("%w: backend %s", errJudgeBackendHeld, receipt.Request.Backend)
 				}
 			}
 			if err := l.restoreJudgeInputs(c, receipt); err != nil {
 				return c, false, err
 			}
-			req := receipt.Request
-			req.RunID = markRunID(req.RunID, "interrupted")
-			req = l.refreshJudgeRequest(req)
 			replacementRequest = &req
 			receipt = nil
 		} else if l.cfg.Restart != nil {
@@ -417,7 +427,15 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 				if !missing {
 					req.RunID = markRunID(req.RunID, "restart")
 				}
-				req = l.refreshJudgeRequest(req)
+				req, move, _, err := l.resolveJudgeRequest(ctx, req)
+				if err != nil {
+					return c, false, err
+				}
+				if move != nil {
+					if err := recordBackendMove(ctx, l.cfg.Store, *move, l.cfg.Now().UTC()); err != nil {
+						return c, false, err
+					}
+				}
 				replacementRequest = &req
 				receipt = nil
 			}
@@ -1551,6 +1569,46 @@ func (l *Loop) refreshJudgeRequest(req run.Request) run.Request {
 		return *fresh
 	}
 	return req
+}
+
+func (l *Loop) resolveJudgeRequest(ctx context.Context, req run.Request) (run.Request, *BackendMove, bool, error) {
+	pol := l.currentPolicy()
+	seat := req.Seat
+	if seat == "" {
+		seat = "review"
+	}
+	openOld := false
+	if pol == nil || policyHasBackend(pol, req.Backend) {
+		var err error
+		openOld, err = l.recordedBackendOpen(ctx, req.Backend)
+		if err != nil {
+			return req, nil, false, err
+		}
+	}
+	if pol == nil {
+		return req, nil, openOld, nil
+	}
+	shut := map[string]bool{req.Backend: !openOld}
+	target, move, ok := resolveStepBackend(pol, req.ItemID, seat, req.Backend, shut)
+	if !ok {
+		return req, nil, false, nil
+	}
+	if move != nil {
+		openNew, err := l.recordedBackendOpen(ctx, target)
+		if err != nil {
+			return req, move, false, err
+		}
+		if !openNew {
+			return req, move, false, nil
+		}
+		if fresh, rebuilt := refreshRestartRequestForBackend(pol, Decision{}, &req, target); rebuilt {
+			req = *fresh
+		}
+		move.RunID = req.RunID
+		move.NodeID = req.NodeID
+		return req, move, true, nil
+	}
+	return l.refreshJudgeRequest(req), nil, openOld, nil
 }
 
 // nextUnusedJudgeRunID advances id with markRunID(id, kind) until the resulting

@@ -658,38 +658,10 @@ func observeFirstSegmentFaces(r *store.Reader, path string, tick Pass, works map
 // instead of replaying a retired model and closing the backend. Session-resume
 // flags are kept only while the route is unchanged.
 func refreshRestartRequest(policy *Policy, d Decision, prev *run.Request) (*run.Request, bool) {
-	if policy == nil || prev == nil || !policyHasBackend(policy, prev.Backend) {
+	if prev == nil {
 		return nil, false
 	}
-	fresh := policy.Request(prev.ItemID, prev.LaneID, prev.RunID, prev.Backend)
-	fresh.ReadOnlyGroup = prev.ReadOnlyGroup
-	if prev.WorkingDir != "" {
-		fresh.WorkingDir = prev.WorkingDir
-	}
-	if d.Workflow != nil && d.NodeIndex >= 0 && d.NodeIndex < len(d.Workflow.Stages) {
-		stage := d.Workflow.Stages[d.NodeIndex]
-		fresh.NodeID = stage.ID
-		if stage.TimeoutMS > 0 {
-			fresh.TimeoutMS = stage.TimeoutMS
-		}
-	} else if prev.NodeID != "" {
-		fresh.NodeID = prev.NodeID
-	}
-	fresh.ScratchEnv = prev.ScratchEnv
-	if fresh.Route() == prev.Route() {
-		fresh.Resume = prev.Resume
-		fresh.SessionTurn = prev.SessionTurn
-		fresh.ResumePrompt = prev.ResumePrompt
-		fresh.FreshSession = prev.FreshSession
-	}
-	if d.Workflow != nil {
-		stampDecisionRequest(d, fresh)
-	} else {
-		fresh.Seat = prev.Seat
-		fresh.Workflow = prev.Workflow
-		fresh.Node = prev.Node
-	}
-	return fresh, true
+	return refreshRestartRequestForBackend(policy, d, prev, prev.Backend)
 }
 
 func nonQuotaPausedRun(r *store.Reader, runID string) (bool, error) {
@@ -913,7 +885,8 @@ func pendingDecisionInternal(r *store.Reader, work *pendingWork, at time.Time, i
 					identifyDecision(&d)
 					return d, nil
 				}
-				if !policyHasBackend(policy, node.RunRequest.Backend) {
+				target, move, ok := resolveStepBackend(policy, node.ItemID, node.Seat, node.RunRequest.Backend, shut)
+				if !ok {
 					d.Seat = node.Seat
 					d.DeferredBy = node.RunRequest.Backend
 					d.Action, d.Reason, d.From, d.To = ActionHold, backendMissingReason(node.Seat, node.RunRequest.Backend), "running", ""
@@ -921,15 +894,20 @@ func pendingDecisionInternal(r *store.Reader, work *pendingWork, at time.Time, i
 					identifyDecision(&d)
 					return d, nil
 				}
-				if shut[node.RunRequest.Backend] {
+				if shut[target] {
 					d.Seat = node.Seat
-					d.DeferredBy = node.RunRequest.Backend
+					d.DeferredBy = target
 					d.Action, d.Reason, d.To = ActionHold, ReasonBackendWindow, ""
 					identifyDecision(&d)
 					return d, nil
 				}
-				if fresh, ok := refreshRestartRequest(policy, node, node.RunRequest); ok {
+				if fresh, ok := refreshRestartRequestForBackend(policy, node, node.RunRequest, target); ok {
 					node.RunRequest = fresh
+					if move != nil {
+						move.NodeID = fresh.NodeID
+						move.RunID = fresh.RunID
+						node.BackendMove = move
+					}
 					nodes[i] = node
 				}
 			}
@@ -938,7 +916,9 @@ func pendingDecisionInternal(r *store.Reader, work *pendingWork, at time.Time, i
 		}
 		if len(d.Parallel) > 0 {
 			if policy != nil {
-				for _, node := range parallelNodes(d) {
+				nodes := parallelNodes(d)
+				changed := false
+				for i, node := range nodes {
 					if node.RunRequest == nil || commandStage(node) {
 						continue
 					}
@@ -946,7 +926,11 @@ func pendingDecisionInternal(r *store.Reader, work *pendingWork, at time.Time, i
 					if err != nil {
 						return Decision{}, err
 					}
-					if rec == nil && !policyHasBackend(policy, node.RunRequest.Backend) {
+					if rec != nil {
+						continue
+					}
+					target, move, ok := resolveStepBackend(policy, node.ItemID, node.Seat, node.RunRequest.Backend, shut)
+					if !ok {
 						d.Seat = node.Seat
 						d.DeferredBy = node.RunRequest.Backend
 						d.Action, d.Reason, d.From, d.To = ActionHold, backendMissingReason(node.Seat, node.RunRequest.Backend), "running", ""
@@ -954,6 +938,20 @@ func pendingDecisionInternal(r *store.Reader, work *pendingWork, at time.Time, i
 						identifyDecision(&d)
 						return d, nil
 					}
+					if move != nil {
+						if fresh, ok := refreshRestartRequestForBackend(policy, node, node.RunRequest, target); ok {
+							node.RunRequest = fresh
+							move.NodeID = fresh.NodeID
+							move.RunID = fresh.RunID
+							node.BackendMove = move
+							nodes[i] = node
+							changed = true
+						}
+					}
+				}
+				if changed {
+					d = nodes[0]
+					d.Parallel = nodes[1:]
 				}
 			}
 			open, err := dispatchQuotaOpen(r, d, shut, policy)
@@ -987,28 +985,58 @@ func pendingDecisionInternal(r *store.Reader, work *pendingWork, at time.Time, i
 		}
 		d.Action, d.Reason, d.From, d.To = ActionDispatch, "workflow-next-node", "running", "running"
 		d.SelectSeat = !d.WorkflowRestart
-		backend := policy.FirstBackend(d.ItemID, d.Seat)
-		if d.WorkflowRestart {
-			backend = d.RunRequest.Backend
+		prevBackend := ""
+		if d.RunRequest != nil {
+			prevBackend = d.RunRequest.Backend
 		}
-		if backend != "" && !policyHasBackend(policy, backend) {
-			d.DeferredBy = backend
-			d.Action, d.Reason, d.From, d.To = ActionHold, backendMissingReason(d.Seat, backend), "running", ""
+		var backend string
+		var move *BackendMove
+		var hasBackend bool
+		if d.WorkflowRestart {
+			backend, move, hasBackend = resolveStepBackend(policy, d.ItemID, d.Seat, prevBackend, shut)
+		} else {
+			backend, hasBackend = seatCurrentBackend(policy, d.ItemID, d.Seat)
+			if hasBackend && prevBackend != "" && prevBackend != backend {
+				reason := "profile-changed"
+				if !policyHasBackend(policy, prevBackend) {
+					reason = ReasonBackendMissing
+				} else if shut[prevBackend] {
+					reason = ReasonBackendWindow
+				}
+				move = &BackendMove{
+					ItemID:      d.ItemID,
+					Seat:        d.Seat,
+					FromBackend: prevBackend,
+					ToBackend:   backend,
+					Reason:      reason,
+				}
+			}
+		}
+		if !hasBackend {
+			missing := backend
+			if missing == "" {
+				missing = prevBackend
+			}
+			d.DeferredBy = missing
+			d.Action, d.Reason, d.From, d.To = ActionHold, backendMissingReason(d.Seat, missing), "running", ""
 			d.RunRequest = nil
 			d.Inputs = inputs
 			identifyDecision(&d)
 			return d, nil
 		}
 		ok := !shut[backend]
-		if !d.WorkflowRestart {
+		if !d.WorkflowRestart || move != nil {
 			ok = policy.SeatMayStart(d.ItemID, d.Seat, backend, shut)
-			if usesSeatShares(policy, d) {
+			if !d.WorkflowRestart && usesSeatShares(policy, d) {
 				saved, err := waitingSeatBackend(r, d.RunRequest.RunID, d.Seat, policy.SeatList(d.Seat))
 				if err != nil {
 					return Decision{}, err
 				}
 				if saved != "" {
 					backend, ok = saved, !shut[saved]
+					if move != nil && backend == prevBackend {
+						move = nil
+					}
 				}
 			}
 		}
@@ -1018,7 +1046,7 @@ func pendingDecisionInternal(r *store.Reader, work *pendingWork, at time.Time, i
 		} else {
 			var request *run.Request
 			if d.WorkflowRestart {
-				request, _ = refreshRestartRequest(policy, d, d.RunRequest)
+				request, _ = refreshRestartRequestForBackend(policy, d, d.RunRequest, backend)
 			} else {
 				request = policy.Request(d.ItemID, d.LaneID, d.RunRequest.RunID, backend)
 				if request != nil {
@@ -1036,6 +1064,11 @@ func pendingDecisionInternal(r *store.Reader, work *pendingWork, at time.Time, i
 			}
 			if request == nil {
 				return Decision{}, Usagef("workflow seat %s cannot build a request", d.Seat)
+			}
+			if move != nil {
+				move.NodeID = request.NodeID
+				move.RunID = request.RunID
+				d.BackendMove = move
 			}
 			d.RunRequest = request
 		}
@@ -1102,12 +1135,18 @@ func pendingDecisionInternal(r *store.Reader, work *pendingWork, at time.Time, i
 				if stem, _, _ := splitRunID(failure.RunID); stem == judgeRunID(work.Candidate.RunID) {
 					blocked, open = failure.Backend, !shut[failure.Backend]
 				}
-				if blocked != "" && !policyHasBackend(policy, blocked) {
-					d.Seat, d.DeferredBy = "review", blocked
-					d.From, d.To, d.Action, d.Reason = "candidate", "", ActionHold, backendMissingReason(d.Seat, blocked)
-					d.RunRequest = nil
-					identifyDecision(&d)
-					return d, nil
+				if blocked != "" {
+					target, move, hasBackend := resolveStepBackend(policy, d.ItemID, "review", blocked, shut)
+					if !hasBackend {
+						d.Seat, d.DeferredBy = "review", blocked
+						d.From, d.To, d.Action, d.Reason = "candidate", "", ActionHold, backendMissingReason(d.Seat, blocked)
+						d.RunRequest = nil
+						identifyDecision(&d)
+						return d, nil
+					}
+					if move != nil {
+						blocked, open = target, policy.SeatMayStart("", "review", target, shut)
+					}
 				}
 				if !open {
 					d.From, d.To, d.Action, d.Reason = "candidate", "", ActionHold, ReasonBackendWindow
@@ -1196,14 +1235,22 @@ func pendingDecisionInternal(r *store.Reader, work *pendingWork, at time.Time, i
 		if finished {
 			if evaluatorNode(d) && rec != nil {
 				if rec.State == run.StateFailedToStart || judgeQuotaRefusal(*rec) {
-					if policy != nil && !policyHasBackend(policy, d.RunRequest.Backend) {
-						d.Action, d.Reason, d.From, d.To = ActionHold, backendMissingReason(d.Seat, d.RunRequest.Backend), "running", ""
-						d.DeferredBy = d.RunRequest.Backend
-						d.RunRequest = nil
-						identifyDecision(&d)
-						return d, nil
-					}
-					if shut[d.RunRequest.Backend] {
+					if policy != nil {
+						target, _, hasBackend := resolveStepBackend(policy, d.ItemID, d.Seat, d.RunRequest.Backend, shut)
+						if !hasBackend {
+							d.Action, d.Reason, d.From, d.To = ActionHold, backendMissingReason(d.Seat, d.RunRequest.Backend), "running", ""
+							d.DeferredBy = d.RunRequest.Backend
+							d.RunRequest = nil
+							identifyDecision(&d)
+							return d, nil
+						}
+						if shut[target] {
+							d.Action, d.Reason, d.To = ActionHold, ReasonBackendWindow, ""
+							d.DeferredBy = target
+							identifyDecision(&d)
+							return d, nil
+						}
+					} else if shut[d.RunRequest.Backend] {
 						d.Action, d.Reason, d.To = ActionHold, ReasonBackendWindow, ""
 						d.DeferredBy = d.RunRequest.Backend
 						identifyDecision(&d)
@@ -1217,10 +1264,26 @@ func pendingDecisionInternal(r *store.Reader, work *pendingWork, at time.Time, i
 					return Decision{}, err
 				}
 				_, _, _, refused := refusedWindow(*rec)
-				if backend != "" && (rec.State == run.StatePaused || refused) && (policy == nil || shut[backend]) {
-					d.Action, d.Reason, d.To = ActionHold, ReasonBackendWindow, ""
-					identifyDecision(&d)
-					return d, nil
+				if backend != "" && (rec.State == run.StatePaused || refused) {
+					if policy == nil {
+						d.Action, d.Reason, d.To = ActionHold, ReasonBackendWindow, ""
+						identifyDecision(&d)
+						return d, nil
+					}
+					target, _, hasBackend := resolveStepBackend(policy, d.ItemID, d.Seat, backend, shut)
+					if !hasBackend {
+						d.DeferredBy = backend
+						d.Action, d.Reason, d.From, d.To = ActionHold, backendMissingReason(d.Seat, backend), "running", ""
+						d.RunRequest = nil
+						identifyDecision(&d)
+						return d, nil
+					}
+					if shut[target] {
+						d.DeferredBy = target
+						d.Action, d.Reason, d.To = ActionHold, ReasonBackendWindow, ""
+						identifyDecision(&d)
+						return d, nil
+					}
 				}
 			}
 			if rec != nil {
@@ -1233,25 +1296,46 @@ func pendingDecisionInternal(r *store.Reader, work *pendingWork, at time.Time, i
 					// old run pending so the replacement can be planned after release.
 					return d, nil
 				}
-				if failed && shut[d.RunRequest.Backend] {
-					d.Action, d.Reason, d.To = ActionHold, ReasonBackendWindow, ""
-					d.DeferredBy = d.RunRequest.Backend
-					identifyDecision(&d)
-					return d, nil
+				if failed {
+					target := d.RunRequest.Backend
+					if policy != nil {
+						if resolved, _, hasBackend := resolveStepBackend(policy, d.ItemID, "design", d.RunRequest.Backend, shut); hasBackend {
+							target = resolved
+						}
+					}
+					if shut[target] {
+						d.Action, d.Reason, d.To = ActionHold, ReasonBackendWindow, ""
+						d.DeferredBy = target
+						identifyDecision(&d)
+						return d, nil
+					}
 				}
 			}
 			d.To, d.Action, d.Reason = "candidate", ActionSettle, ActionSettle
 		} else if evaluatorNode(d) && rec == nil {
 			// Retry the judge's retained handoff, never allocate another evaluator id.
-			if policy != nil {
-				if fresh, ok := refreshRestartRequest(policy, d, d.RunRequest); ok {
-					d.RunRequest = fresh
-				} else if d.RunRequest != nil && !commandStage(d) {
+			if policy != nil && d.RunRequest != nil && !commandStage(d) {
+				target, move, hasBackend := resolveStepBackend(policy, d.ItemID, d.Seat, d.RunRequest.Backend, shut)
+				if !hasBackend {
 					d.DeferredBy = d.RunRequest.Backend
 					d.Action, d.Reason, d.From, d.To = ActionHold, backendMissingReason(d.Seat, d.RunRequest.Backend), "running", ""
 					d.RunRequest = nil
 					identifyDecision(&d)
 					return d, nil
+				}
+				if shut[target] {
+					d.DeferredBy = target
+					d.Action, d.Reason, d.To = ActionHold, ReasonBackendWindow, ""
+					identifyDecision(&d)
+					return d, nil
+				}
+				if fresh, ok := refreshRestartRequestForBackend(policy, d, d.RunRequest, target); ok {
+					d.RunRequest = fresh
+					if move != nil {
+						move.NodeID = fresh.NodeID
+						move.RunID = fresh.RunID
+						d.BackendMove = move
+					}
 				}
 			}
 			d.To, d.Action, d.Reason, d.WorkflowRestart = "running", ActionDispatch, "workflow-next-node", true
@@ -2473,7 +2557,7 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 				return err
 			}
 			claimAt := l.cfg.Now().UTC()
-			for _, node := range nodes {
+			for i, node := range nodes {
 				if len(d.Parallel) > 0 {
 					rec, err := terminalRecord(tx.Reader(), node.RunRequest.RunID)
 					if err != nil {
@@ -2487,10 +2571,26 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 				if _, err := run.ClaimLease(ctx, tx, *node.RunRequest, node.LaneID, claimAt); err != nil {
 					return err
 				}
+				if node.BackendMove != nil {
+					move := *node.BackendMove
+					if move.RunID == "" && node.RunRequest != nil {
+						move.RunID = node.RunRequest.RunID
+					}
+					if move.NodeID == "" && node.RunRequest != nil {
+						move.NodeID = node.RunRequest.NodeID
+					}
+					if err := recordBackendMoveTx(tx, move, claimAt); err != nil {
+						return err
+					}
+					nodes[i].BackendMove = nil
+				}
 				if err := startNode(tx, node); err != nil {
 					return err
 				}
 			}
+			persisted := nodes[0]
+			persisted.Parallel = nodes[1:]
+			work.Decision = persisted
 			if err := appendEffect(tx, dispatchStartedKind, d.RunRequest.RunID, work, claimAt); err != nil {
 				return err
 			}

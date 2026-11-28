@@ -25,6 +25,7 @@ type (
 	priorRun             = policy.PriorRun
 	backendOutcome       = policy.BackendOutcome
 	backendOutcomesState = policy.BackendOutcomesState
+	BackendMove          = policy.BackendMove
 )
 
 // Constants re-exported from tools/tillr-drain/internal/policy.
@@ -34,6 +35,7 @@ const (
 	SeatEscalatedKind        = policy.SeatEscalatedKind
 	backendQuotaReopenedKind = policy.BackendQuotaReopenedKind
 	dispatchDeclinedKind     = policy.DispatchDeclinedKind
+	BackendMovedKind         = policy.BackendMovedKind
 	QuotaProbeInterval       = policy.QuotaProbeInterval
 	backendQuotaDDL          = policy.BackendQuotaDDL
 	quotaUpdatedKind         = policy.QuotaUpdatedKind
@@ -219,4 +221,21 @@ func resolveInfrastructureClosed(r *store.Reader, outcomes []backendOutcome, pro
 }
 func populateClosedBackendRecords(r *store.Reader, closed, prev map[string]backendOutcome) error {
 	return policy.PopulateClosedBackendRecords(r, closed, prev)
+}
+
+// Forwarding wrappers for backend_move.go.
+func recordBackendMoveTx(tx *store.Tx, move BackendMove, at time.Time) error {
+	return policy.RecordBackendMoveTx(tx, move, at)
+}
+func recordBackendMove(ctx context.Context, storePath string, move BackendMove, at time.Time) error {
+	return policy.RecordBackendMove(ctx, storePath, move, at)
+}
+func seatCurrentBackend(p *Policy, itemID, seat string) (string, bool) {
+	return policy.SeatCurrentBackend(p, itemID, seat)
+}
+func seatAllowsBackend(p *Policy, itemID, seat, backend string) bool {
+	return policy.SeatAllowsBackend(p, itemID, seat, backend)
+}
+func resolveStepBackend(p *Policy, itemID, seat, prevBackend string, shut map[string]bool) (string, *BackendMove, bool) {
+	return policy.ResolveStepBackend(p, itemID, seat, prevBackend, shut)
 }

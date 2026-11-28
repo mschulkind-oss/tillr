@@ -129,7 +129,8 @@ func (t Pass) check() error {
 // RunRequest is run's own type rather than a copy of it, so the two utilities cannot
 // drift on the shape of the request drain emits and run consumes.
 type Decision struct {
-	WorkerSessionReason string `json:"worker_session_reason,omitempty"`
+	WorkerSessionReason string       `json:"worker_session_reason,omitempty"`
+	BackendMove         *BackendMove `json:"backend_move,omitempty"`
 	// Parallel lists sibling readers claimed with this node; the item retains one pending owner.
 	Parallel []Decision `json:"parallel,omitempty"`
 	// BuildRestartFrom is the interrupted reader whose face must end before this
@@ -1700,6 +1701,12 @@ func (p *planner) decide(item itemRow, edges []itemEdge) Decision {
 			attempt.backend = p.firstBackend(item)
 		}
 		if attempt.backend != "" {
+			if escalated := p.escalated[item.ItemID]; escalated == "" || escalated != attempt.backend || !policyHasBackend(p.policy, attempt.backend) {
+				if target, move, ok := resolveStepBackend(p.policy, item.ItemID, item.Seat, attempt.backend, p.shut); ok && move != nil {
+					attempt.backend = target
+					decision.BackendMove = move
+				}
+			}
 			backendWaitStart = attempt.backend
 			shut := p.shut
 			if retry != nil && retry.refusal == "" && !p.quotaShut[attempt.backend] {

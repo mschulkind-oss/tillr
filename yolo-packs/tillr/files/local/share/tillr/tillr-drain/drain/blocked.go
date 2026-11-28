@@ -73,13 +73,26 @@ func (p *planner) conflictDecision(row itemRow, c item.Conflict) Decision {
 	case c.BodyRef == "" && !p.requests[row.ItemID]:
 		d.Reason = ReasonConflictOwner
 	default:
-		// Reopening a failed design run is not a fresh seat choice.
+		// Reopening a failed design run is not a fresh seat choice, unless the
+		// active profile removed that backend or moved design to an open one.
 		failedBackend := p.failedBackendFor(row.ItemID, c.DesignRunID)
 		backend := failedBackend
+		var move *BackendMove
 		open := !p.shut[backend]
 		if backend == "" {
 			backend = p.policy.SeatList("design")[0]
 			open = p.policy.SeatMayStart(row.ItemID, "design", backend, p.shut)
+		} else {
+			target, m, ok := resolveStepBackend(p.policy, row.ItemID, "design", backend, p.shut)
+			if !ok {
+				d.Seat = "design"
+				d.Reason, d.DeferredBy = backendMissingReason(d.Seat, backend), backend
+				break
+			}
+			if m != nil {
+				backend, move = target, m
+				open = p.policy.SeatMayStart(row.ItemID, "design", backend, p.shut)
+			}
 		}
 		if !policyHasBackend(p.policy, backend) {
 			d.Seat = "design"
@@ -135,7 +148,8 @@ func (p *planner) conflictDecision(row itemRow, c item.Conflict) Decision {
 			p.assignLane(lane)
 			d.Action, d.From, d.To, d.LaneID = ActionDispatch, "queued", "running", lane
 			d.Seat = "design"
-			d.SelectSeat = failedBackend == ""
+			d.SelectSeat = failedBackend == "" || move != nil
+			d.BackendMove = move
 			d.BlockConflict = &c
 			d.RunRequest = p.request(row.ItemID, lane, backend)
 			stampDecisionRequest(d, d.RunRequest)

@@ -168,12 +168,10 @@ func TestWorkflowRestartHoldsWhenBackendRemovedFromPolicy(t *testing.T) {
 			break
 		}
 	}
-	if itemA == nil || itemA.Action != ActionHold ||
-		!strings.HasPrefix(itemA.Reason, ReasonBackendMissing+": ") ||
-		!strings.Contains(itemA.Reason, "build") ||
-		!strings.Contains(itemA.Reason, "pi") ||
-		itemA.DeferredBy != "pi" {
-		t.Fatalf("removed backend passPlans item-a = %+v, want hold/%s naming build and pi", itemA, ReasonBackendMissing)
+	if itemA == nil || itemA.Action != ActionDispatch || !itemA.WorkflowRestart ||
+		itemA.RunRequest == nil || itemA.RunRequest.Backend != "fixture" ||
+		itemA.BackendMove == nil || itemA.BackendMove.FromBackend != "pi" || itemA.BackendMove.ToBackend != "fixture" {
+		t.Fatalf("removed backend passPlans item-a = %+v, want dispatch on fixture with move pi -> fixture", itemA)
 	}
 	work := pendingForTest(t, f, "item-a")
 	fixtureRead(t, f, func(r *store.Reader) error {
@@ -181,10 +179,10 @@ func TestWorkflowRestartHoldsWhenBackendRemovedFromPolicy(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if got.Action != ActionHold || !strings.HasPrefix(got.Reason, ReasonBackendMissing+": ") ||
-			!strings.Contains(got.Reason, "build") || !strings.Contains(got.Reason, "pi") ||
-			got.DeferredBy != "pi" {
-			t.Errorf("removed backend restart decision = %+v, want hold/%s naming build and pi", got, ReasonBackendMissing)
+		if got.Action != ActionDispatch || !got.WorkflowRestart ||
+			got.RunRequest == nil || got.RunRequest.Backend != "fixture" ||
+			got.BackendMove == nil || got.BackendMove.FromBackend != "pi" || got.BackendMove.ToBackend != "fixture" {
+			t.Errorf("removed backend restart decision = %+v, want dispatch on fixture with move pi -> fixture", got)
 		}
 		return nil
 	})
