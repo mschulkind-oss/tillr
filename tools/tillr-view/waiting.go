@@ -197,7 +197,7 @@ func waitingFace(args []string) (record.Envelope, int) {
 		}
 		var laneRows []laneRow
 		if err == nil {
-			laneRows, err = readLaneRows(ctx, *path, filepath.Join(filepath.Dir(*path), "loop"), defaultLaneRoot(filepath.Dir(*path)), now)
+			laneRows, err = readWaitingLaneCapacityRows(ctx, *path, filepath.Join(filepath.Dir(*path), "loop"))
 		}
 		if err == nil {
 			_, err = fmt.Fprintln(os.Stdout, laneCapacityLine(laneRows))
@@ -317,15 +317,19 @@ func assembleWaiting(r *store.Reader, questions vantage.QuestionSource, storePat
 }
 
 func assembleWaitingAt(r *store.Reader, questions vantage.QuestionSource, storePath string, now time.Time) ([]waitingRow, error) {
-	conflicts, err := waitingConflicts(r)
+	items, err := readOpenItems(r)
 	if err != nil && !isMissingTable(err) {
 		return nil, err
 	}
-	items, err := readItems(r)
+	openItemIDs := make([]string, len(items))
+	for i, it := range items {
+		openItemIDs[i] = it.ItemID
+	}
+	conflicts, err := waitingConflictsForItems(r, openItemIDs)
 	if err != nil && !isMissingTable(err) {
 		return nil, err
 	}
-	runs, err := readRuns(r)
+	runs, err := readRunsForItems(r, openItemIDs)
 	if err != nil && !isMissingTable(err) {
 		return nil, err
 	}
@@ -333,16 +337,37 @@ func assembleWaitingAt(r *store.Reader, questions vantage.QuestionSource, storeP
 	if err != nil && !isMissingTable(err) {
 		return nil, err
 	}
-	allocations, err := readAllocations(r)
+	seenRun := map[string]bool{}
+	var openRunIDs []string
+	addRunID := func(id string) {
+		if id != "" && !seenRun[id] {
+			seenRun[id] = true
+			openRunIDs = append(openRunIDs, id)
+		}
+	}
+	for _, run := range runs {
+		addRunID(run.RunID)
+	}
+	for _, lane := range lanes {
+		addRunID(lane.RunID)
+		for _, nodeRunID := range lane.ActiveNodes {
+			addRunID(nodeRunID)
+		}
+	}
+	allocations, err := readAllocationsFor(r, openRunIDs)
 	if err != nil {
 		return nil, err
 	}
 	runs = append(runs, liveRuns(lanes, runs, allocations)...)
-	candidates, err := readCandidates(r)
+	candidates, err := readCandidatesForItems(r, openItemIDs)
 	if err != nil && !isMissingTable(err) {
 		return nil, err
 	}
-	attempts, err := readAllAttempts(r)
+	candidateIDs := make([]string, len(candidates))
+	for i, c := range candidates {
+		candidateIDs[i] = c.CandidateID
+	}
+	attempts, err := readAttemptsForCandidates(r, candidateIDs)
 	if err != nil && !isMissingTable(err) {
 		return nil, err
 	}
@@ -350,7 +375,7 @@ func assembleWaitingAt(r *store.Reader, questions vantage.QuestionSource, storeP
 	for _, item := range items {
 		states[item.ItemID] = item.State
 	}
-	splits, err := readAllSplits(r)
+	splits, err := readSplitsForItems(r, openItemIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -358,14 +383,45 @@ func assembleWaitingAt(r *store.Reader, questions vantage.QuestionSource, storeP
 	var splitMeta map[string]splitItemMeta
 	var closingStates map[string]splitClosingState
 	if len(splits) > 0 {
-		splitMeta, err = readSplitItemMeta(r)
+		parentIDs := make([]string, 0, len(splits))
+		metaSeen := map[string]bool{}
+		var metaIDs []string
+		for parentID, st := range splits {
+			parentIDs = append(parentIDs, parentID)
+			if !metaSeen[parentID] {
+				metaSeen[parentID] = true
+				metaIDs = append(metaIDs, parentID)
+			}
+			for _, p := range st.Parts {
+				partID := splitPartID(parentID, p.Label)
+				if !metaSeen[partID] {
+					metaSeen[partID] = true
+					metaIDs = append(metaIDs, partID)
+				}
+			}
+		}
+		splitMeta, err = readSplitItemMetaFor(r, metaIDs)
 		if err != nil {
 			return nil, err
 		}
-		closingStates, err = readSplitClosingStates(r)
+		closingStates, err = readSplitClosingStatesFor(r, parentIDs)
 		if err != nil {
 			return nil, err
 		}
+		for id, meta := range splitMeta {
+			if _, ok := states[id]; !ok {
+				states[id] = meta.State
+			}
+		}
+	}
+	var waiterIDs []string
+	for _, item := range items {
+		if depID, ok := strings.CutPrefix(item.Waiter, "item:"); ok && depID != "" {
+			waiterIDs = append(waiterIDs, depID)
+		}
+	}
+	if err := ensureItemStates(r, states, waiterIDs); err != nil {
+		return nil, err
 	}
 	sort.Slice(items, func(i, j int) bool {
 		if items[i].Rank != items[j].Rank {
@@ -379,11 +435,11 @@ func assembleWaitingAt(r *store.Reader, questions vantage.QuestionSource, storeP
 		}
 		return items[i].ItemID < items[j].ItemID
 	})
-	itemFaults, err := faults.Read(r)
+	itemFaults, err := faults.ReadForItems(r, openItemIDs, openRunIDs)
 	if err != nil {
 		return nil, err
 	}
-	obstacleHolds, _, err := obstacles.Read(r)
+	obstacleHolds, _, err := obstacles.ReadForItems(r, openItemIDs, openRunIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -483,6 +539,9 @@ func assembleWaitingAt(r *store.Reader, questions vantage.QuestionSource, storeP
 			if last.Reason == "blocked" {
 				edges, err := readEdges(r, item.ItemID)
 				if err != nil && !isMissingTable(err) {
+					return nil, err
+				}
+				if err := ensureEdgeStates(r, states, edges); err != nil {
 					return nil, err
 				}
 				var blockers, closedBlockers []string
@@ -607,6 +666,9 @@ func assembleWaitingAt(r *store.Reader, questions vantage.QuestionSource, storeP
 		} else if !found && item.State == "in-queue" {
 			edges, err := readEdges(r, item.ItemID)
 			if err != nil && !isMissingTable(err) {
+				return nil, err
+			}
+			if err := ensureEdgeStates(r, states, edges); err != nil {
 				return nil, err
 			}
 			var blockers, closedBlockers []string
@@ -1231,4 +1293,139 @@ func appendPostLandingWaiting(r *store.Reader, out []waitingRow) ([]waitingRow, 
 			Why: why + " at " + tip + ": " + strings.Join(strings.Fields(detail), " "), Mover: mover, Since: "—", ClassSource: "store"})
 	}
 	return out, rows.Err()
+}
+
+func readWaitingLaneCapacityRows(ctx context.Context, path, loop string) ([]laneRow, error) {
+	db, err := store.OpenRead(ctx, path)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	var rows []laneRow
+	err = db.ReadTx(ctx, func(r *store.Reader) error {
+		version, err := r.SchemaVersion()
+		if err != nil {
+			return err
+		}
+		if !schemaSupported(version) {
+			return schemaMismatch{version: version}
+		}
+		rows, err = assembleWaitingLaneCapacityRows(r, loop)
+		return err
+	})
+	return rows, err
+}
+
+func assembleWaitingLaneCapacityRows(r *store.Reader, loop string) ([]laneRow, error) {
+	lanes, err := readLanesIn(r, loop)
+	if err != nil && !isMissingTable(err) {
+		return nil, err
+	}
+	configured, _ := readConfiguredSessionLanes(r)
+	heldByLane, err := readHeldByLaneForOpenItems(r)
+	if err != nil {
+		return nil, err
+	}
+	lanes = ensureConfiguredStoreLanes(lanes, configured, heldByLane)
+	seenRun := map[string]bool{}
+	var leasedRunIDs []string
+	for _, lane := range lanes {
+		if lane.State != laneStateLeased {
+			continue
+		}
+		runID := lane.RunID
+		if len(lane.ActiveNodes) > 0 {
+			runID = lane.ActiveNodes[0]
+		}
+		if runID != "" && !seenRun[runID] {
+			seenRun[runID] = true
+			leasedRunIDs = append(leasedRunIDs, runID)
+		}
+	}
+	runs, err := readRunsByIDs(r, leasedRunIDs)
+	if err != nil {
+		return nil, err
+	}
+	rows := make([]laneRow, 0, len(lanes))
+	for _, lane := range lanes {
+		row := laneRow{LaneID: lane.LaneID, State: "idle", RunningNodes: len(lane.ActiveNodes)}
+		var run storeRun
+		if lane.State == laneStateLeased {
+			if len(lane.ActiveNodes) > 0 {
+				run = runs[lane.ActiveNodes[0]]
+			} else {
+				run = runs[lane.RunID]
+			}
+		}
+		row.State = laneWorkState(lane, run)
+		rows = append(rows, row)
+	}
+	applyLaneGroups(rows, configured, heldByLane)
+	return rows, nil
+}
+
+func sqlPlaceholders(n int) string {
+	return strings.TrimSuffix(strings.Repeat("?,", n), ",")
+}
+
+func ensureEdgeStates(r *store.Reader, states map[string]string, edges []storeEdge) error {
+	if len(edges) == 0 {
+		return nil
+	}
+	ids := make([]string, len(edges))
+	for i, e := range edges {
+		ids[i] = e.BlockedBy
+	}
+	return ensureItemStates(r, states, ids)
+}
+
+func ensureItemStates(r *store.Reader, states map[string]string, ids []string) error {
+	var missing []string
+	seen := map[string]bool{}
+	for _, id := range ids {
+		if id == "" || seen[id] {
+			continue
+		}
+		if _, ok := states[id]; ok {
+			continue
+		}
+		seen[id] = true
+		missing = append(missing, id)
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	const chunk = 400
+	for start := 0; start < len(missing); start += chunk {
+		end := start + chunk
+		if end > len(missing) {
+			end = len(missing)
+		}
+		batch := missing[start:end]
+		args := make([]any, len(batch))
+		for i, id := range batch {
+			args[i] = id
+		}
+		rows, err := r.Query(`SELECT item_id, state FROM items WHERE item_id IN (`+sqlPlaceholders(len(batch))+`)`, args...)
+		if err != nil {
+			if isMissingTable(err) {
+				return nil
+			}
+			return err
+		}
+		for rows.Next() {
+			var id, state string
+			if err := rows.Scan(&id, &state); err != nil {
+				rows.Close()
+				return err
+			}
+			states[id] = state
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return err
+		}
+		rows.Close()
+	}
+	return nil
 }

@@ -15,7 +15,10 @@ type waitingRepair struct {
 // The event is the cause, not the original successful run's termination. Keep it
 // visible even before the next pass records its hold decision; examination clears it.
 func waitingRepairHold(r *store.Reader, itemID, runID string) (*waitingRepair, int64, error) {
-	events, err := r.Events(0)
+	if runID == "" {
+		return nil, 0, nil
+	}
+	events, err := r.EventsForObjects(0, []string{runID}, "drain.repair-held", "drain.examined")
 	if err != nil {
 		return nil, 0, err
 	}

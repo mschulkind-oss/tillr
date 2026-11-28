@@ -246,6 +246,147 @@ func readItems(r *store.Reader) ([]storeItem, error) {
 	return items, nil
 }
 
+func readOpenItems(r *store.Reader) ([]storeItem, error) {
+	finished := definitionFinished(r)
+	var finishedStates []string
+	for s, isFin := range finished {
+		if isFin {
+			finishedStates = append(finishedStates, s)
+		}
+	}
+	if len(finishedStates) == 0 {
+		return readItems(r)
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(finishedStates)), ",")
+	args := make([]any, len(finishedStates))
+	for i, s := range finishedStates {
+		args[i] = s
+	}
+	rows, err := r.Query(`SELECT item_id, title, COALESCE(body_ref, ''), state,
+		COALESCE(design_doc, ''), updated_at, COALESCE(allowed_paths, ''), COALESCE(rank, '') FROM items
+		WHERE state NOT IN (`+placeholders+`) ORDER BY item_id`, args...)
+	if isMissingColumn(err) {
+		rows, err = r.Query(`SELECT item_id, title, COALESCE(body_ref, ''), state,
+			COALESCE(design_doc, ''), updated_at, COALESCE(allowed_paths, '') FROM items
+			WHERE state NOT IN (`+placeholders+`) ORDER BY item_id`, args...)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		var items []storeItem
+		for rows.Next() {
+			var it storeItem
+			var paths string
+			if err := rows.Scan(&it.ItemID, &it.Title, &it.BodyRef, &it.State, &it.DesignDoc,
+				&it.UpdatedAtMS, &paths); err != nil {
+				return nil, err
+			}
+			if it.AllowedPaths, err = decodeAllowedPaths(paths); err != nil {
+				return nil, fmt.Errorf("item %s: %w", it.ItemID, err)
+			}
+			items = append(items, it)
+		}
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+		return enrichOpenItems(r, items, finished)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []storeItem
+	for rows.Next() {
+		var it storeItem
+		var paths string
+		if err := rows.Scan(&it.ItemID, &it.Title, &it.BodyRef, &it.State, &it.DesignDoc,
+			&it.UpdatedAtMS, &paths, &it.Rank); err != nil {
+			return nil, err
+		}
+		if it.AllowedPaths, err = decodeAllowedPaths(paths); err != nil {
+			return nil, fmt.Errorf("item %s: %w", it.ItemID, err)
+		}
+		items = append(items, it)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return enrichOpenItems(r, items, finished)
+}
+
+func enrichOpenItems(r *store.Reader, items []storeItem, finished map[string]bool) ([]storeItem, error) {
+	if len(items) == 0 {
+		return items, nil
+	}
+	itemIDs := make([]string, len(items))
+	var blockedIDs []string
+	for i, it := range items {
+		itemIDs[i] = it.ItemID
+		items[i].Finished = finished[it.State]
+		if it.State == "blocked" {
+			blockedIDs = append(blockedIDs, it.ItemID)
+		}
+	}
+	owed, err := ownercriteria.ReadOwnerCriteriaForItems(r, itemIDs)
+	if err != nil {
+		return nil, err
+	}
+	for i := range items {
+		items[i].OwnerOwed = owed[items[i].ItemID]
+	}
+	if len(blockedIDs) > 0 {
+		waiting := map[string]struct {
+			Waiter string `json:"waiter"`
+			Reason string `json:"reason"`
+		}{}
+		const chunk = 400
+		for start := 0; start < len(blockedIDs); start += chunk {
+			end := start + chunk
+			if end > len(blockedIDs) {
+				end = len(blockedIDs)
+			}
+			batch := blockedIDs[start:end]
+			args := make([]any, len(batch))
+			for i, id := range batch {
+				args[i] = id
+			}
+			placeholders := strings.TrimSuffix(strings.Repeat("?,", len(batch)), ",")
+			rows, err := r.Query(`SELECT item_id, waiting_on FROM items WHERE item_id IN (`+placeholders+`) AND state = 'blocked'`, args...)
+			if isMissingColumn(err) {
+				return items, nil
+			}
+			if err != nil {
+				return nil, err
+			}
+			for rows.Next() {
+				var id, raw string
+				if err := rows.Scan(&id, &raw); err != nil {
+					rows.Close()
+					return nil, err
+				}
+				if raw == "" {
+					continue
+				}
+				w := waiting[id]
+				if err := json.Unmarshal([]byte(raw), &w); err != nil {
+					rows.Close()
+					return nil, fmt.Errorf("item %s blocked metadata: %w", id, err)
+				}
+				waiting[id] = w
+			}
+			if err := rows.Err(); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			rows.Close()
+		}
+		for i := range items {
+			items[i].Waiter, items[i].WaitingReason = waiting[items[i].ItemID].Waiter, waiting[items[i].ItemID].Reason
+		}
+	}
+	return items, nil
+}
+
 func readItemsBase(r *store.Reader) ([]storeItem, error) {
 	rows, err := r.Query(`SELECT item_id, title, COALESCE(body_ref, ''), state,
 		COALESCE(design_doc, ''), updated_at, COALESCE(allowed_paths, ''), COALESCE(rank, '') FROM items ORDER BY item_id`)
@@ -693,7 +834,91 @@ func readRuns(r *store.Reader) ([]storeRun, error) {
 	return out, rows.Err()
 }
 
-// readRunOrLive answers one run from the store, or the run a lane is still holding. The
+func readRunsForItems(r *store.Reader, itemIDs []string) ([]storeRun, error) {
+	if len(itemIDs) == 0 {
+		return nil, nil
+	}
+	var out []storeRun
+	const chunk = 400
+	for start := 0; start < len(itemIDs); start += chunk {
+		end := start + chunk
+		if end > len(itemIDs) {
+			end = len(itemIDs)
+		}
+		batch := itemIDs[start:end]
+		args := make([]any, len(batch))
+		for i, id := range batch {
+			args[i] = id
+		}
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(batch)), ",")
+		rows, err := queryRuns(r, `SELECT `+runsSelectColumns+` FROM runs WHERE item_id IN (`+placeholders+`) ORDER BY started_at, run_id`, args...)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			run, err := scanRun(rows)
+			if err != nil {
+				rows.Close()
+				return nil, err
+			}
+			out = append(out, run)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		rows.Close()
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].StartedAtMS != out[j].StartedAtMS {
+			return out[i].StartedAtMS < out[j].StartedAtMS
+		}
+		return out[i].RunID < out[j].RunID
+	})
+	return out, nil
+}
+
+func readRunsByIDs(r *store.Reader, runIDs []string) (map[string]storeRun, error) {
+	out := map[string]storeRun{}
+	if len(runIDs) == 0 {
+		return out, nil
+	}
+	const chunk = 400
+	for start := 0; start < len(runIDs); start += chunk {
+		end := start + chunk
+		if end > len(runIDs) {
+			end = len(runIDs)
+		}
+		batch := runIDs[start:end]
+		args := make([]any, len(batch))
+		for i, id := range batch {
+			args[i] = id
+		}
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(batch)), ",")
+		rows, err := queryRuns(r, `SELECT `+runsSelectColumns+` FROM runs WHERE run_id IN (`+placeholders+`)`, args...)
+		if isMissingTable(err) {
+			return out, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			run, err := scanRun(rows)
+			if err != nil {
+				rows.Close()
+				return nil, err
+			}
+			out[run.RunID] = run
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		rows.Close()
+	}
+	return out, nil
+}
+
 // `runs` row is written by the terminal write, so a run that is going has none — and the one
 // moment a reader wants a run's transcript is while it is working. The projection is the
 // snapshot's own (`liveRuns`), so the two answers agree rather than being two readings of a
@@ -850,7 +1075,45 @@ func readCandidates(r *store.Reader) ([]storeCandidate, error) {
 	return out, rows.Err()
 }
 
-// readAllAttempts answers every landing attempt in the store.
+func readCandidatesForItems(r *store.Reader, itemIDs []string) ([]storeCandidate, error) {
+	if len(itemIDs) == 0 {
+		return nil, nil
+	}
+	var out []storeCandidate
+	const chunk = 400
+	for start := 0; start < len(itemIDs); start += chunk {
+		end := start + chunk
+		if end > len(itemIDs) {
+			end = len(itemIDs)
+		}
+		batch := itemIDs[start:end]
+		args := make([]any, len(batch))
+		for i, id := range batch {
+			args[i] = id
+		}
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(batch)), ",")
+		rows, err := r.Query(`SELECT candidate_id, item_id, base_ref, base_sha, head_sha, tree_sha, state, enqueued_at
+			FROM candidates WHERE item_id IN (`+placeholders+`) ORDER BY enqueued_at, candidate_id`, args...)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var c storeCandidate
+			if err := rows.Scan(&c.CandidateID, &c.ItemID, &c.BaseRef, &c.BaseSHA, &c.HeadSHA,
+				&c.TreeSHA, &c.State, &c.EnqueuedMS); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			out = append(out, c)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		rows.Close()
+	}
+	return out, nil
+}
 func readAllAttempts(r *store.Reader) ([]storeAttempt, error) {
 	rows, err := r.Query(`SELECT attempt_id, candidate_id, verdict_id, result, COALESCE(reason, ''),
 		trunk_before, trunk_after FROM landing_attempts ORDER BY event_seq, attempt_id`)
@@ -870,7 +1133,45 @@ func readAllAttempts(r *store.Reader) ([]storeAttempt, error) {
 	return out, rows.Err()
 }
 
-// readAllDispatches answers every decision the loop wrote, oldest first.
+func readAttemptsForCandidates(r *store.Reader, candidateIDs []string) ([]storeAttempt, error) {
+	if len(candidateIDs) == 0 {
+		return nil, nil
+	}
+	var out []storeAttempt
+	const chunk = 400
+	for start := 0; start < len(candidateIDs); start += chunk {
+		end := start + chunk
+		if end > len(candidateIDs) {
+			end = len(candidateIDs)
+		}
+		batch := candidateIDs[start:end]
+		args := make([]any, len(batch))
+		for i, id := range batch {
+			args[i] = id
+		}
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(batch)), ",")
+		rows, err := r.Query(`SELECT attempt_id, candidate_id, verdict_id, result, COALESCE(reason, ''),
+			trunk_before, trunk_after FROM landing_attempts WHERE candidate_id IN (`+placeholders+`) ORDER BY event_seq, attempt_id`, args...)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var a storeAttempt
+			if err := rows.Scan(&a.AttemptID, &a.CandidateID, &a.VerdictID, &a.Result, &a.Reason,
+				&a.TrunkBefore, &a.TrunkAfter); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			out = append(out, a)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		rows.Close()
+	}
+	return out, nil
+}
 func readAllDispatches(r *store.Reader) ([]storeDispatch, error) {
 	rows, err := r.Query(`SELECT decision_id, item_id, COALESCE(lane_id, ''), COALESCE(run_id, ''),
 		action, reason, dispatched_at, COALESCE(pass_id, '') FROM dispatches ORDER BY dispatched_at, rowid`)
@@ -1412,7 +1713,67 @@ func readAllocations(r *store.Reader) (map[string]allocation, error) {
 	return out, rows.Err()
 }
 
-// storeGateSpan is one row of the `gate_spans` table: a gate check's measurement, keyed by
+func readAllocationsFor(r *store.Reader, runIDs []string) (map[string]allocation, error) {
+	out := map[string]allocation{}
+	if len(runIDs) == 0 {
+		return out, nil
+	}
+	const chunk = 400
+	for start := 0; start < len(runIDs); start += chunk {
+		end := start + chunk
+		if end > len(runIDs) {
+			end = len(runIDs)
+		}
+		batch := runIDs[start:end]
+		args := make([]any, 0, len(batch)+1)
+		args = append(args, allocateKind)
+		for _, id := range batch {
+			args = append(args, id)
+		}
+		rows, err := r.Query(`SELECT payload FROM events WHERE kind = ? AND json_valid(payload) AND json_extract(payload, '$.run_id') IN (`+sqlPlaceholders(len(batch))+`) ORDER BY seq`, args...)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var payload string
+			if err := rows.Scan(&payload); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			var body struct {
+				RunID     string `json:"run_id"`
+				ItemID    string `json:"item_id"`
+				Backend   string `json:"backend"`
+				Seat      string `json:"seat"`
+				Workflow  string `json:"workflow"`
+				Node      string `json:"node"`
+				LaneID    string `json:"lane_id"`
+				StartedAt string `json:"started_at"`
+			}
+			if err := json.Unmarshal([]byte(payload), &body); err != nil {
+				continue
+			}
+			started, _ := time.Parse(time.RFC3339, body.StartedAt)
+			out[body.RunID] = allocation{
+				RunID:       body.RunID,
+				ItemID:      body.ItemID,
+				Backend:     body.Backend,
+				Seat:        body.Seat,
+				Workflow:    body.Workflow,
+				Node:        body.Node,
+				LaneID:      body.LaneID,
+				StartedAtMS: started.UnixMilli(),
+			}
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		rows.Close()
+	}
+	return out, nil
+}
+
 // the verdict it belongs to. The nanosecond bounds are read as int64 and serialized as
 // decimal strings by the payload; a JSON number above 2^53 would lose precision in the
 // browser, and the whole point of the column is the exact instant.

@@ -85,8 +85,14 @@ func plannerWhyAt(ctx context.Context, program plannerProgram, self buildStamp, 
 			return nil, nil, err
 		}
 		defer s.Close()
+		itemIDs := make([]string, 0, len(answer.Rows))
+		for _, row := range answer.Rows {
+			if row.ItemID != "" {
+				itemIDs = append(itemIDs, row.ItemID)
+			}
+		}
 		if err := s.ReadTx(ctx, func(r *store.Reader) error {
-			conflicts, err := waitingConflicts(r)
+			conflicts, err := waitingConflictsForItems(r, itemIDs)
 			if err != nil {
 				return err
 			}

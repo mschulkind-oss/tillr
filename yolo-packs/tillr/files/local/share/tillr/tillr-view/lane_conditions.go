@@ -23,32 +23,54 @@ type laneCondition struct {
 // or one that never recorded a lane condition, answers none.
 func readLaneConditions(r *store.Reader) (map[string]laneCondition, error) {
 	out := map[string]laneCondition{}
-	rows, err := r.Query(`SELECT kind, object_id, payload, ts FROM events WHERE kind IN ('drain.lane-refused', 'drain.lane-restored') AND object_type = 'lane' ORDER BY seq`)
+	laneRows, err := r.Query(`SELECT lane_id FROM lanes`)
 	if isMissingTable(err) {
 		return out, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var kind, lane, raw string
-		var ts int64
-		if err := rows.Scan(&kind, &lane, &raw, &ts); err != nil {
+	var laneIDs []string
+	for laneRows.Next() {
+		var id string
+		if err := laneRows.Scan(&id); err != nil {
+			laneRows.Close()
 			return nil, err
 		}
-		if kind == "drain.lane-restored" {
+		laneIDs = append(laneIDs, id)
+	}
+	if err := laneRows.Err(); err != nil {
+		laneRows.Close()
+		return nil, err
+	}
+	laneRows.Close()
+	if len(laneIDs) == 0 {
+		return out, nil
+	}
+	events, err := r.EventsForObjects(0, laneIDs, "drain.lane-refused", "drain.lane-restored")
+	if isMissingTable(err) {
+		return out, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	for _, e := range events {
+		if e.ObjectType != "lane" || e.ObjectID == nil {
+			continue
+		}
+		lane := *e.ObjectID
+		if e.Kind == "drain.lane-restored" {
 			delete(out, lane)
 			continue
 		}
-		c := laneCondition{LaneID: lane, AtMS: ts}
-		if err := json.Unmarshal([]byte(raw), &c); err != nil {
+		c := laneCondition{LaneID: lane, AtMS: e.At.UnixMilli()}
+		if err := json.Unmarshal(e.Payload, &c); err != nil {
 			return nil, err
 		}
-		c.AtMS = ts
+		c.AtMS = e.At.UnixMilli()
 		out[lane] = c
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 // waitingLaneConditions is one waiting row per lane out of rotation. Its mover is the

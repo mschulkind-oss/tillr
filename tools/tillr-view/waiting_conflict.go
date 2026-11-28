@@ -192,6 +192,38 @@ func waitingConflicts(r *store.Reader) (map[string]waitingConflict, error) {
 	return out, nil
 }
 
+func waitingConflictsForItems(r *store.Reader, itemIDs []string) (map[string]waitingConflict, error) {
+	out := map[string]waitingConflict{}
+	if len(itemIDs) == 0 {
+		return out, nil
+	}
+	evList, err := r.EventsForObjects(0, itemIDs, "item.conflict")
+	if err != nil {
+		return nil, err
+	}
+	events := make([]eventRecord, 0, len(evList))
+	for _, ev := range evList {
+		events = append(events, eventRecord{
+			Seq:     ev.Seq,
+			Kind:    ev.Kind,
+			Payload: ev.Payload,
+			At:      ev.At,
+		})
+	}
+	groups, err := conflictHistories(events)
+	if err != nil {
+		return nil, err
+	}
+	for _, g := range groups {
+		c := g.last
+		c.History = g.Transitions
+		if prior, ok := out[c.ItemID]; !ok || prior.History[len(prior.History)-1].Seq < g.Transitions[len(g.Transitions)-1].Seq {
+			out[c.ItemID] = c
+		}
+	}
+	return out, nil
+}
+
 func conflictSummary(c waitingConflict) string {
 	labels := make([]string, 0, len(c.History))
 	for _, tr := range c.History {

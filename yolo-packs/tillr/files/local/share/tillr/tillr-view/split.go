@@ -83,6 +83,61 @@ func readAllSplits(r *store.Reader) (map[string]splitStatement, error) {
 	return out, rows.Err()
 }
 
+func readSplitsForItems(r *store.Reader, itemIDs []string) (map[string]splitStatement, error) {
+	out := map[string]splitStatement{}
+	if len(itemIDs) == 0 {
+		return out, nil
+	}
+	const chunk = 400
+	for start := 0; start < len(itemIDs); start += chunk {
+		end := start + chunk
+		if end > len(itemIDs) {
+			end = len(itemIDs)
+		}
+		batch := itemIDs[start:end]
+		args := make([]any, len(batch))
+		for i, id := range batch {
+			args[i] = id
+		}
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(batch)), ",")
+		rows, err := r.Query(`SELECT parent_id, statement FROM item_splits WHERE parent_id IN (`+placeholders+`)`, args...)
+		if isMissingTable(err) {
+			return out, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var parentID string
+			var raw []byte
+			if err := rows.Scan(&parentID, &raw); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			var st splitStatement
+			if err := json.Unmarshal(raw, &st); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			out[parentID] = st
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		rows.Close()
+	}
+	partIdx := splitPartIndex(out)
+	for _, id := range itemIDs {
+		if strings.HasPrefix(id, "item-part-") {
+			if _, ok := partIdx[id]; !ok {
+				return readAllSplits(r)
+			}
+		}
+	}
+	return out, nil
+}
+
 func splitPartIndex(splits map[string]splitStatement) map[string]splitPartMembership {
 	out := make(map[string]splitPartMembership)
 	for parentID, st := range splits {
@@ -298,6 +353,85 @@ func readSplitClosingStates(r *store.Reader) (map[string]splitClosingState, erro
 	return out, erows.Err()
 }
 
+func readSplitClosingStatesFor(r *store.Reader, parentIDs []string) (map[string]splitClosingState, error) {
+	out := map[string]splitClosingState{}
+	if len(parentIDs) == 0 {
+		return out, nil
+	}
+	hashes := map[string]string{}
+	const chunk = 400
+	for start := 0; start < len(parentIDs); start += chunk {
+		end := start + chunk
+		if end > len(parentIDs) {
+			end = len(parentIDs)
+		}
+		batch := parentIDs[start:end]
+		args := make([]any, len(batch))
+		for i, id := range batch {
+			args[i] = id
+		}
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(batch)), ",")
+		srows, err := r.Query(`SELECT parent_id, statement FROM item_splits WHERE parent_id IN (`+placeholders+`)`, args...)
+		if isMissingTable(err) {
+			return out, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		for srows.Next() {
+			var parentID string
+			var raw []byte
+			if err := srows.Scan(&parentID, &raw); err != nil {
+				srows.Close()
+				return nil, err
+			}
+			hashes[parentID] = fmt.Sprintf("%x", sha256.Sum256(raw))
+		}
+		if err := srows.Err(); err != nil {
+			srows.Close()
+			return nil, err
+		}
+		srows.Close()
+	}
+	if len(hashes) == 0 {
+		return out, nil
+	}
+	events, err := r.EventsForObjects(0, parentIDs, "drain.split-closing-held", "drain.split-closing-refused")
+	if isMissingTable(err) {
+		return out, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	for _, e := range events {
+		if e.ObjectType != "item" || e.ObjectID == nil {
+			continue
+		}
+		parentID := *e.ObjectID
+		wantHash, ok := hashes[parentID]
+		if !ok {
+			continue
+		}
+		var payload struct {
+			StatementHash string `json:"statement_hash"`
+			Reason        string `json:"reason"`
+			Mover         string `json:"mover"`
+		}
+		if err := json.Unmarshal(e.Payload, &payload); err != nil || payload.StatementHash != wantHash {
+			continue
+		}
+		st := out[parentID]
+		switch e.Kind {
+		case "drain.split-closing-held":
+			st.Held = &splitClosingHold{Mover: payload.Mover, Reason: payload.Reason}
+		case "drain.split-closing-refused":
+			st.RefusedReason = payload.Reason
+		}
+		out[parentID] = st
+	}
+	return out, nil
+}
+
 func readSplitItemMeta(r *store.Reader) (map[string]splitItemMeta, error) {
 	out := map[string]splitItemMeta{}
 	rows, err := r.Query(`SELECT item_id, title, state, close_reason FROM items`)
@@ -328,6 +462,64 @@ func readSplitItemMeta(r *store.Reader) (map[string]splitItemMeta, error) {
 		out[id] = splitItemMeta{Title: title, State: state, CloseReason: closeReason}
 	}
 	return out, rows.Err()
+}
+
+func readSplitItemMetaFor(r *store.Reader, itemIDs []string) (map[string]splitItemMeta, error) {
+	out := map[string]splitItemMeta{}
+	if len(itemIDs) == 0 {
+		return out, nil
+	}
+	const chunk = 400
+	for start := 0; start < len(itemIDs); start += chunk {
+		end := start + chunk
+		if end > len(itemIDs) {
+			end = len(itemIDs)
+		}
+		batch := itemIDs[start:end]
+		args := make([]any, len(batch))
+		for i, id := range batch {
+			args[i] = id
+		}
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(batch)), ",")
+		rows, err := r.Query(`SELECT item_id, title, state, close_reason FROM items WHERE item_id IN (`+placeholders+`)`, args...)
+		if err != nil && strings.Contains(err.Error(), "no such column: close_reason") {
+			rows, err = r.Query(`SELECT item_id, title, state FROM items WHERE item_id IN (`+placeholders+`)`, args...)
+			if err != nil {
+				return nil, err
+			}
+			for rows.Next() {
+				var id, title, state string
+				if err := rows.Scan(&id, &title, &state); err != nil {
+					rows.Close()
+					return nil, err
+				}
+				out[id] = splitItemMeta{Title: title, State: state}
+			}
+			if err := rows.Err(); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			rows.Close()
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var id, title, state, closeReason string
+			if err := rows.Scan(&id, &title, &state, &closeReason); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			out[id] = splitItemMeta{Title: title, State: state, CloseReason: closeReason}
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		rows.Close()
+	}
+	return out, nil
 }
 
 func readLandedCommits(r *store.Reader) (map[string]struct{ landingID, sha string }, error) {
