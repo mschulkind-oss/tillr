@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -456,4 +457,31 @@ func (s *stageLaunchTestSteps) Run(ctx context.Context, req run.Request) (run.Re
 		}
 	}
 	return rec, "RESULT: done\n", nil
+}
+
+func TestStageAssignedRunRequiresLaneRoot(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	l := &Loop{cfg: LoopConfig{Root: dir}}
+	d := Decision{
+		ItemID: "item-a",
+		LaneID: "lane-1",
+		RunRequest: &run.Request{
+			ItemID:  "item-a",
+			RunID:   "run-item-a-a1",
+			Backend: "fixture",
+			Command: []string{"true"},
+		},
+	}
+	var result LoopResult
+	ready, cancelled, err := l.stageAssignedRun(context.Background(), d, "deadbeef", time.Date(2026, 11, 28, 0, 0, 0, 0, time.UTC), &result)
+	if err == nil || !strings.Contains(err.Error(), "LaneRoot") {
+		t.Fatalf("stageAssignedRun without LaneRoot = ready=%v cancelled=%v err=%v, want LaneRoot usage error", ready != nil, cancelled, err)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, ".requests")); !os.IsNotExist(statErr) {
+		t.Fatalf("stageAssignedRun without LaneRoot created .requests in cwd: %v", statErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, d.LaneID)); !os.IsNotExist(statErr) {
+		t.Fatalf("stageAssignedRun without LaneRoot created lane directory in cwd: %v", statErr)
+	}
 }

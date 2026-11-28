@@ -302,6 +302,9 @@ func (l *Loop) runCoordinatedStage(ctx context.Context, itemID, runID string, wo
 // without holding the scheduling lock or restartMechanical, renders the
 // run.request file, and commits drain.staged guarded by unlaunched/unstaged.
 func (l *Loop) stageAssignedRun(ctx context.Context, d Decision, base string, at time.Time, result *LoopResult) (*Decision, bool, error) {
+	if l.cfg.LaneRoot == "" {
+		return nil, false, Usagef("stageAssignedRun requires LaneRoot")
+	}
 	unlockLock, acquired, lockErr := stagelaunch.AcquireStageLock(l.lanePath(d.LaneID))
 	if lockErr != nil {
 		return nil, false, lockErr
