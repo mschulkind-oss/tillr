@@ -4020,14 +4020,10 @@ func liveForksForItems(r *store.Reader, at time.Time, works map[string]*pendingW
 		return nil, err
 	}
 	forks := map[string]string{}
+	itemStates := make(map[string]string, len(items))
 	for _, item := range items {
 		forks[item.ItemID] = item.Delivery.ActiveFork()
-	}
-	var out []plannedFork
-	for id, work := range works {
-		if !work.Done && forks[id] != "" && !awaitingForkClaim(work) {
-			out = append(out, plannedFork{id, forks[id]})
-		}
+		itemStates[item.ItemID] = item.State
 	}
 	var heldLanes []string
 	for lane, isHeld := range held {
@@ -4035,83 +4031,117 @@ func liveForksForItems(r *store.Reader, at time.Time, works map[string]*pendingW
 			heldLanes = append(heldLanes, lane)
 		}
 	}
-	if len(heldLanes) == 0 {
-		return out, nil
-	}
-	laneRun := map[string]string{}
-	var heldRunIDs []string
-	for _, lane := range heldLanes {
-		var current sql.NullString
-		if err := r.QueryRow(`SELECT run_id FROM lanes WHERE lane_id = ?`, lane).Scan(&current); err != nil {
-			return nil, err
-		}
-		if current.Valid && current.String != "" {
-			laneRun[lane] = current.String
-			heldRunIDs = append(heldRunIDs, current.String)
-		}
-	}
-	if len(heldRunIDs) == 0 {
-		return out, nil
-	}
-	var missingForkItems []string
 	type laneOwner struct{ run, item string }
 	owners := map[string]laneOwner{}
-	const chunk = 400
-	for start := 0; start < len(heldRunIDs); start += chunk {
-		end := start + chunk
-		if end > len(heldRunIDs) {
-			end = len(heldRunIDs)
-		}
-		batch := heldRunIDs[start:end]
-		args := make([]any, 0, 1+len(batch))
-		args = append(args, run.AllocateKind)
-		for _, id := range batch {
-			args = append(args, id)
-		}
-		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(batch)), ",")
-		rows, err := r.Query(
-			`SELECT payload FROM events WHERE kind = ? AND json_valid(payload) AND json_extract(payload, '$.run_id') IN (`+placeholders+`) ORDER BY seq ASC`,
-			args...,
-		)
-		if err != nil {
-			return nil, err
-		}
-		for rows.Next() {
-			var payload []byte
-			if err := rows.Scan(&payload); err != nil {
-				rows.Close()
+	liveItems := map[string]bool{}
+	if len(heldLanes) > 0 {
+		laneRun := map[string]string{}
+		var heldRunIDs []string
+		for _, lane := range heldLanes {
+			var current sql.NullString
+			if err := r.QueryRow(`SELECT run_id FROM lanes WHERE lane_id = ?`, lane).Scan(&current); err != nil {
 				return nil, err
 			}
-			var claim struct {
-				LaneID string `json:"lane_id"`
-				RunID  string `json:"run_id"`
-				ItemID string `json:"item_id"`
+			if current.Valid && current.String != "" {
+				laneRun[lane] = current.String
+				heldRunIDs = append(heldRunIDs, current.String)
 			}
-			if err := json.Unmarshal(payload, &claim); err != nil {
-				rows.Close()
+		}
+		var missingForkItems []string
+		const chunk = 400
+		for start := 0; start < len(heldRunIDs); start += chunk {
+			end := start + chunk
+			if end > len(heldRunIDs) {
+				end = len(heldRunIDs)
+			}
+			batch := heldRunIDs[start:end]
+			args := make([]any, 0, 1+len(batch))
+			args = append(args, run.AllocateKind)
+			for _, id := range batch {
+				args = append(args, id)
+			}
+			placeholders := strings.TrimSuffix(strings.Repeat("?,", len(batch)), ",")
+			rows, err := r.Query(
+				`SELECT payload FROM events WHERE kind = ? AND json_valid(payload) AND json_extract(payload, '$.run_id') IN (`+placeholders+`) ORDER BY seq ASC`,
+				args...,
+			)
+			if err != nil {
 				return nil, err
 			}
-			if laneRun[claim.LaneID] == claim.RunID {
-				owners[claim.LaneID] = laneOwner{claim.RunID, claim.ItemID}
-				if _, ok := forks[claim.ItemID]; !ok && claim.ItemID != "" {
-					missingForkItems = append(missingForkItems, claim.ItemID)
+			for rows.Next() {
+				var payload []byte
+				if err := rows.Scan(&payload); err != nil {
+					rows.Close()
+					return nil, err
+				}
+				var claim struct {
+					LaneID string `json:"lane_id"`
+					RunID  string `json:"run_id"`
+					ItemID string `json:"item_id"`
+				}
+				if err := json.Unmarshal(payload, &claim); err != nil {
+					rows.Close()
+					return nil, err
+				}
+				if laneRun[claim.LaneID] == claim.RunID {
+					owners[claim.LaneID] = laneOwner{claim.RunID, claim.ItemID}
+					if claim.ItemID != "" {
+						liveItems[claim.ItemID] = true
+					}
+					if _, ok := forks[claim.ItemID]; !ok && claim.ItemID != "" {
+						missingForkItems = append(missingForkItems, claim.ItemID)
+					}
 				}
 			}
-		}
-		if err := rows.Err(); err != nil {
+			if err := rows.Err(); err != nil {
+				rows.Close()
+				return nil, err
+			}
 			rows.Close()
-			return nil, err
 		}
-		rows.Close()
+		if len(missingForkItems) > 0 {
+			deliveries, err := readDeliveriesForItems(r, missingForkItems)
+			if err != nil {
+				return nil, err
+			}
+			for _, id := range missingForkItems {
+				forks[id] = deliveries[id].ActiveFork()
+			}
+		}
 	}
-	if len(missingForkItems) > 0 {
-		deliveries, err := readDeliveriesForItems(r, missingForkItems)
-		if err != nil {
-			return nil, err
+	var out []plannedFork
+	var declared *definition.Definition
+	for id, work := range works {
+		if work.Done || forks[id] == "" || awaitingForkClaim(work) {
+			continue
 		}
-		for _, id := range missingForkItems {
-			forks[id] = deliveries[id].ActiveFork()
+		// A blocked item with no live run and no recorded reason to keep its
+		// checkout does not hold its fork once its prior step is settled and pinned.
+		if !liveItems[id] && !work.BoundaryFailed && work.LaneKeepReason == "" && (work.Ready || work.Candidate != nil) {
+			if declared == nil {
+				d, err := definition.ForReader(r)
+				if err != nil {
+					return nil, err
+				}
+				declared = &d.Parsed
+			}
+			state := itemStates[id]
+			if state == "" {
+				_ = r.QueryRow(`SELECT state FROM items WHERE item_id = ?`, id).Scan(&state)
+			}
+			blocked := state == declared.Blocked
+			if !blocked {
+				var depErr error
+				blocked, depErr = itemDependencyBlocked(r, id)
+				if depErr != nil {
+					return nil, depErr
+				}
+			}
+			if blocked {
+				continue
+			}
 		}
+		out = append(out, plannedFork{id, forks[id]})
 	}
 	for _, owner := range owners {
 		if forks[owner.item] != "" && !awaitingForkClaim(works[owner.item]) {

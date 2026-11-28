@@ -1097,11 +1097,11 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 			// run without owning its fork. Check before it can take a free lane,
 			// just as for a fresh dispatch. Running work and settlement still proceed.
 			var fork, forkHolder string
-			if err == nil && !depHold && p.lands() && isDispatch(decision) &&
+			if err == nil && !depHold && p.lands() && (isDispatch(decision) || decision.Action == ActionJudge) &&
 				!(decision.Workflow != nil && classificationNode(decision.Workflow.Stages[decision.NodeIndex])) {
 				fork = item.Delivery.ActiveFork()
 				self := ""
-				if work.Ready || decision.WorkflowRestart {
+				if work.Ready || decision.WorkflowRestart || decision.Action == ActionJudge {
 					self = item.ItemID
 				}
 				forkHolder, _ = p.forkHeldBy(fork, self)
@@ -1243,7 +1243,7 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 				decision = Decision{ItemID: item.ItemID, Attempt: decision.Attempt, From: "held", Action: ActionHold, Reason: ReasonBlocked}
 				identifyDecision(&decision)
 			}
-			if forkHolder != "" && isDispatch(decision) {
+			if forkHolder != "" && (isDispatch(decision) || decision.Action == ActionJudge) {
 				decision = Decision{ItemID: item.ItemID, Attempt: decision.Attempt, From: "held", Action: ActionHold, Reason: ReasonForkHeld, DeferredBy: forkHolder}
 				identifyDecision(&decision)
 			}

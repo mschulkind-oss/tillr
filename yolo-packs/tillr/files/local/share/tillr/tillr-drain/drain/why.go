@@ -1317,6 +1317,7 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 		answer.Rows = append(answer.Rows, row)
 	}
 	decorateSplitParents(&answer, splits, states, closeReasons, splitStates, def)
+	decorateForkHolds(&answer, items, works)
 	current := make([]alarms.Hold, 0, len(answer.Rows))
 	for _, row := range answer.Rows {
 		d := row.Decision
@@ -2144,4 +2145,120 @@ func shadowRotation(r *store.Reader, tick *Pass) (map[string]laneRefusal, error)
 	}
 	tick.AvailableLanes = &lanes
 	return refused, nil
+}
+
+// decorateForkHolds ensures every fork-held row names what holds the fork and
+// who can release it (landing principle 13), rather than showing a bare item ID.
+func decorateForkHolds(answer *WhyAnswer, items []itemRow, works map[string]*pendingWork) {
+	hasForkHold := false
+	for _, row := range answer.Rows {
+		if row.Reason == ReasonForkHeld && row.Decision.DeferredBy != "" {
+			hasForkHold = true
+			break
+		}
+	}
+	if !hasForkHold {
+		return
+	}
+	forkByItem := make(map[string]string, len(items))
+	for _, it := range items {
+		if f := it.Delivery.ActiveFork(); f != "" {
+			forkByItem[it.ItemID] = f
+		}
+	}
+	rowByItem := make(map[string]WhyRow, len(answer.Rows))
+	for _, row := range answer.Rows {
+		rowByItem[row.ItemID] = row
+	}
+	for i := range answer.Rows {
+		row := &answer.Rows[i]
+		if row.Reason != ReasonForkHeld || row.Decision.DeferredBy == "" {
+			continue
+		}
+		holderID := row.Decision.DeferredBy
+		fork := forkByItem[row.ItemID]
+		if fork == "" {
+			fork = forkByItem[holderID]
+		}
+		forkLabel := "fork"
+		if fork != "" {
+			forkLabel = "fork " + fork
+		}
+		holder, hasHolder := rowByItem[holderID]
+		var what, mover string
+		switch {
+		case hasHolder && (holder.Class == "running" || holder.Decision.From == "running"):
+			runID := ""
+			if holder.Decision.RunRequest != nil {
+				runID = holder.Decision.RunRequest.RunID
+			}
+			if runID == "" && works[holderID] != nil && works[holderID].Decision.RunRequest != nil {
+				runID = works[holderID].Decision.RunRequest.RunID
+			}
+			laneID := holder.Decision.LaneID
+			if laneID == "" && works[holderID] != nil {
+				laneID = works[holderID].Decision.LaneID
+			}
+			switch {
+			case runID != "" && laneID != "":
+				what = fmt.Sprintf("%s held by %s (live run %s on %s)", forkLabel, holderID, runID, laneID)
+				mover = fmt.Sprintf("live run %s on %s finishing", runID, holderID)
+			case runID != "":
+				what = fmt.Sprintf("%s held by %s (live run %s)", forkLabel, holderID, runID)
+				mover = fmt.Sprintf("live run %s on %s finishing", runID, holderID)
+			default:
+				what = fmt.Sprintf("%s held by %s (live run)", forkLabel, holderID)
+				mover = fmt.Sprintf("live run on %s finishing", holderID)
+			}
+		case hasHolder && holder.Decision.Action != ActionHold:
+			detail := holder.Why
+			if detail == "" {
+				detail = string(holder.Decision.Action)
+			}
+			what = fmt.Sprintf("%s held by %s (%s)", forkLabel, holderID, detail)
+			if holder.Mover != "" {
+				mover = fmt.Sprintf("drain; %s (%s)", holderID, holder.Mover)
+			} else {
+				mover = fmt.Sprintf("drain; finish %s", holderID)
+			}
+		case hasHolder:
+			holderWork := works[holderID]
+			if holderWork != nil && (holderWork.BoundaryFailed || holderWork.LaneKeepReason != "") {
+				keep := holder.LaneReason
+				if keep == "" {
+					keep = holderWork.LaneKeepReason
+				}
+				if keep == "" {
+					keep = "boundary violation needs inspection"
+				}
+				what = fmt.Sprintf("%s held by %s (lane kept: %s)", forkLabel, holderID, keep)
+				if laneID := holderWork.Decision.LaneID; laneID != "" {
+					mover = fmt.Sprintf("operator; inspect %s on %s (%s) to release %s", laneID, holderID, keep, forkLabel)
+				} else {
+					mover = fmt.Sprintf("operator; inspect %s (%s) to release %s", holderID, keep, forkLabel)
+				}
+				break
+			}
+			detail := holder.Why
+			if detail == "" {
+				detail = holder.Reason
+			}
+			what = fmt.Sprintf("%s held by %s (%s)", forkLabel, holderID, detail)
+			if holder.Mover != "" {
+				mover = fmt.Sprintf("%s (to release %s)", holder.Mover, holderID)
+			} else {
+				mover = fmt.Sprintf("operator; release %s", holderID)
+			}
+		default:
+			what = fmt.Sprintf("%s held by %s", forkLabel, holderID)
+			mover = fmt.Sprintf("operator; inspect %s to release %s", holderID, forkLabel)
+		}
+		if suffix, ok := strings.CutPrefix(row.Why, ReasonForkHeld); ok {
+			row.Why = ReasonForkHeld + ": " + what + suffix
+		} else {
+			row.Why = ReasonForkHeld + ": " + what
+		}
+		row.tableReason = ReasonForkHeld + ": " + what
+		row.Mover = mover
+	}
 }

@@ -3,6 +3,7 @@ package drain
 import (
 	"context"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -57,8 +58,8 @@ func TestForkHeldContinuationLeavesLaneForNextItem(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if row := answer.Rows[0]; row.ItemID != "item-a" || row.Class != "waits on work" || row.Mover != "item-b" || !slices.Equal(row.WaitingOn, []string{"item-b"}) {
-			t.Fatalf("why should name item-b as the mover: %+v", row)
+		if row := answer.Rows[0]; row.ItemID != "item-a" || row.Class != "waits on work" || !strings.Contains(row.Why, "fork pi held by item-b") || !strings.Contains(row.Mover, "item-b") || !strings.Contains(row.Mover, holder.decision.RunRequest.RunID) || !slices.Equal(row.WaitingOn, []string{"item-b"}) {
+			t.Fatalf("why should name what holds the fork and who can release it: %+v", row)
 		}
 		return nil
 	}); err != nil {
