@@ -487,7 +487,10 @@ func TestUncommittedWorkLaneCleanedOutsideTheLoopReturnsAcrossRestart(t *testing
 
 	// Restart the loop in its normal fast-start mode with only lane-1 offered.
 	// The loop must restore lane-1, record drain.lane-restored, and offer it item-a.
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// The deadline is a hang guard, not a time limit: the loop reads any cancelled context,
+	// its deadline included, as an operator stop, so a short deadline under load ends a
+	// passing run as "operator-stop".
+	ctx, cancel := context.WithTimeout(context.Background(), hangGuard)
 	defer cancel()
 	steps := &startupHeldSteps{cancel: cancel}
 	restarted := f.loop(t, steps, stager)

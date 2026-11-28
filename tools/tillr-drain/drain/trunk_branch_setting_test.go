@@ -525,7 +525,10 @@ func TestExitWhenDrainedWaitsForInFlightHeavyProofBeforeCancel(t *testing.T) {
 	initialDev := git("rev-parse", "refs/heads/dev")
 	git("update-ref", GreenRef, initialDev)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	// The deadline is a hang guard, not a time limit: the loop reads any cancelled context,
+	// its deadline included, as an operator stop, so a short deadline under load ends a
+	// passing run as "operator-stop".
+	ctx, cancel := context.WithTimeout(context.Background(), hangGuard)
 	defer cancel()
 	dbPath := filepath.Join(t.TempDir(), "state.db")
 	s, err := store.InitFixture(ctx, dbPath)

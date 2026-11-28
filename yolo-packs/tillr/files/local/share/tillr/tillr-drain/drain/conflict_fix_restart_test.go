@@ -342,7 +342,10 @@ esac
 	// Second loop (after restart): must reap the vanished -cfix run, restore the built
 	// candidate, run a fresh -cfix run on that candidate, and land it without restarting plan.
 	var out2 strings.Builder
-	ctx2, cancel2 := context.WithTimeout(context.Background(), 30*time.Second)
+	// The deadline is a hang guard, not a time limit: the loop reads any cancelled context,
+	// its deadline included, as an operator stop, so a short deadline under load ends a
+	// passing run as "operator-stop".
+	ctx2, cancel2 := context.WithTimeout(context.Background(), hangGuard)
 	defer cancel2()
 	loop2 := f.newLoopWith(t, 1, baseSteps, stage, &out2)
 	_, err = loop2.Run(ctx2)

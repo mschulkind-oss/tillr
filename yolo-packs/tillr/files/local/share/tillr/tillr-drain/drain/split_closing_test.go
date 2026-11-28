@@ -1072,7 +1072,10 @@ func TestSplitClosingDefectiveRequiredPartOwnerDecision(t *testing.T) {
 
 func TestSplitClosingCheckNonBlockingLetsSecondItemLand(t *testing.T) {
 	f, l, steps, parent, parts := splitClosingFixture(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	// The deadline is a hang guard, not a time limit: the loop reads any cancelled context,
+	// its deadline included, as an operator stop, so a short deadline under load ends a
+	// passing run as "operator-stop".
+	ctx, cancel := context.WithTimeout(context.Background(), hangGuard)
 	defer cancel()
 
 	// Land both required parts so parent is ready for its closing check.

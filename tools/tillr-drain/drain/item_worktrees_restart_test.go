@@ -105,7 +105,10 @@ func TestItemWorktreesOrphanedRunPreservedAndReplacementJudgesOnce(t *testing.T)
 	if err != nil {
 		t.Fatalf("NewLoop replacement: %v", err)
 	}
-	runCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	// The deadline is a hang guard, not a time limit: the loop reads any cancelled context,
+	// its deadline included, as an operator stop, so a short deadline under load ends a
+	// passing run as "operator-stop".
+	runCtx, cancel := context.WithTimeout(ctx, hangGuard)
 	defer cancel()
 	result, err := replacement.Run(runCtx)
 	if err != nil {
