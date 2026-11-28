@@ -550,6 +550,14 @@ Wanted, not now, by the owner's call. Picking one up means giving it a place abo
   small design that says whether work waits on a capped backend or spills to another, ruled
   before it is built.
 
+- **One clean way to run only the rescue work, hold the rest, and put it all back**
+  ([design](../design/tillr-queue-rescue.md)). Listed here unplaced until the owner sets its
+  roadmap order above. Four slices of `tillr drain rescue` and non-closing `tillr drain hold` wait
+  on no question once placed; automatic red-trunk rescue entry, default express intake during a
+  rescue, and post-filing lane-class edits wait on
+  [`OQ-QR1`](../design/tillr-queue-rescue.md#OQ-QR1) to
+  [`OQ-QR3`](../design/tillr-queue-rescue.md#OQ-QR3).
+
 ## What this page does not cover
 
 - **What is built.** The references under [`docs/reference/`](../reference/) and each module's
