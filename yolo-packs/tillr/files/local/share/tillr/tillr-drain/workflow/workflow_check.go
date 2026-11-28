@@ -881,6 +881,186 @@ func buildPieceEdges(stageID string, pieces []WorkflowPiece, pieceByID map[strin
 	return edges, nil
 }
 
+type workflowConcurrency struct {
+	reachAll    map[string]map[string]bool
+	reachPass   map[string]map[string]bool
+	must        map[string]map[string]string
+	unreachable map[string]bool
+}
+
+func analyzeWorkflowConcurrency(w *Workflow) workflowConcurrency {
+	adjAll := make(map[string][]string, len(w.Stages))
+	adjPass := make(map[string][]string, len(w.Stages))
+	incoming := make(map[string][]WorkflowEdge, len(w.Stages))
+	inDeg := make(map[string]int, len(w.Stages))
+	stagePresent := make(map[string]bool, len(w.Stages))
+	for _, s := range w.Stages {
+		stagePresent[s.ID] = true
+		inDeg[s.ID] = 0
+	}
+	depSeen := make(map[string]bool, len(w.Edges))
+	addDep := func(from, to string) {
+		if !stagePresent[from] || !stagePresent[to] {
+			return
+		}
+		k := from + "\x00" + to
+		if depSeen[k] {
+			return
+		}
+		depSeen[k] = true
+		adjAll[from] = append(adjAll[from], to)
+		inDeg[to]++
+	}
+	for _, e := range w.Edges {
+		incoming[e.To] = append(incoming[e.To], e)
+		addDep(e.From, e.To)
+		for _, req := range e.RequiresPassed {
+			addDep(req, e.To)
+		}
+		if e.WhenOutcome != "fail" {
+			adjPass[e.From] = append(adjPass[e.From], e.To)
+		}
+	}
+
+	computeReach := func(adj map[string][]string) map[string]map[string]bool {
+		reach := make(map[string]map[string]bool, len(w.Stages))
+		for _, s := range w.Stages {
+			seen := map[string]bool{}
+			stack := append([]string(nil), adj[s.ID]...)
+			for len(stack) > 0 {
+				cur := stack[len(stack)-1]
+				stack = stack[:len(stack)-1]
+				if seen[cur] {
+					continue
+				}
+				seen[cur] = true
+				stack = append(stack, adj[cur]...)
+			}
+			reach[s.ID] = seen
+		}
+		return reach
+	}
+
+	var order []string
+	var queue []string
+	for _, s := range w.Stages {
+		if inDeg[s.ID] == 0 {
+			queue = append(queue, s.ID)
+		}
+	}
+	ordered := make(map[string]bool, len(w.Stages))
+	for len(queue) > 0 {
+		cur := queue[0]
+		queue = queue[1:]
+		ordered[cur] = true
+		order = append(order, cur)
+		for _, nxt := range adjAll[cur] {
+			inDeg[nxt]--
+			if inDeg[nxt] == 0 {
+				queue = append(queue, nxt)
+			}
+		}
+	}
+	for _, s := range w.Stages {
+		if !ordered[s.ID] {
+			order = append(order, s.ID)
+		}
+	}
+
+	must := make(map[string]map[string]string, len(w.Stages))
+	unreachable := make(map[string]bool, len(w.Stages))
+	for _, id := range order {
+		edges := incoming[id]
+		if len(edges) == 0 {
+			must[id] = map[string]string{}
+			continue
+		}
+		var edgeMusts []map[string]string
+		for _, e := range edges {
+			if unreachable[e.From] {
+				continue
+			}
+			em := make(map[string]string, len(must[e.From])+1+len(e.RequiresPassed))
+			for k, v := range must[e.From] {
+				em[k] = v
+			}
+			want := "pass"
+			if e.WhenOutcome == "fail" {
+				want = "fail"
+			}
+			if prev, ok := em[e.From]; ok && prev != want {
+				continue
+			}
+			em[e.From] = want
+			valid := true
+			for _, req := range e.RequiresPassed {
+				if unreachable[req] {
+					valid = false
+					break
+				}
+				for k, v := range must[req] {
+					if prev, ok := em[k]; ok && prev != v {
+						valid = false
+						break
+					}
+					em[k] = v
+				}
+				if !valid {
+					break
+				}
+				if prev, ok := em[req]; ok && prev != "pass" {
+					valid = false
+					break
+				}
+				em[req] = "pass"
+			}
+			if valid {
+				edgeMusts = append(edgeMusts, em)
+			}
+		}
+		if len(edgeMusts) == 0 {
+			unreachable[id] = true
+			continue
+		}
+		inter := make(map[string]string, len(edgeMusts[0]))
+		for k, v := range edgeMusts[0] {
+			allMatch := true
+			for _, em := range edgeMusts[1:] {
+				if em[k] != v {
+					allMatch = false
+					break
+				}
+			}
+			if allMatch {
+				inter[k] = v
+			}
+		}
+		must[id] = inter
+	}
+
+	return workflowConcurrency{
+		reachAll:    computeReach(adjAll),
+		reachPass:   computeReach(adjPass),
+		must:        must,
+		unreachable: unreachable,
+	}
+}
+
+func (c workflowConcurrency) canRunConcurrently(a, b string) bool {
+	if a == b || c.unreachable[a] || c.unreachable[b] {
+		return false
+	}
+	if c.reachAll[a][b] || c.reachAll[b][a] {
+		return false
+	}
+	for k, va := range c.must[a] {
+		if vb, ok := c.must[b][k]; ok && vb != va {
+			return false
+		}
+	}
+	return true
+}
+
 // SynthesizeJoinStages inserts a built-in kind: "join" stage whenever two or more "write"
 // stages are unordered in a parallel fan-out without an explicit reconverging join stage.
 func SynthesizeJoinStages(w *Workflow) {
@@ -902,39 +1082,18 @@ func SynthesizeJoinStages(w *Workflow) {
 		return
 	}
 
-	adj := make(map[string][]string, len(w.Stages))
-	for _, e := range w.Edges {
-		if e.WhenOutcome == "fail" {
-			continue
-		}
-		adj[e.From] = append(adj[e.From], e.To)
-	}
-	reach := make(map[string]map[string]bool, len(w.Stages))
-	for _, s := range w.Stages {
-		seen := map[string]bool{}
-		stack := append([]string(nil), adj[s.ID]...)
-		for len(stack) > 0 {
-			cur := stack[len(stack)-1]
-			stack = stack[:len(stack)-1]
-			if seen[cur] {
-				continue
-			}
-			seen[cur] = true
-			stack = append(stack, adj[cur]...)
-		}
-		reach[s.ID] = seen
-	}
+	conc := analyzeWorkflowConcurrency(w)
 
 	unreconverged := make(map[string]map[string]bool, len(writeIDs))
 	for i := 0; i < len(writeIDs); i++ {
 		for j := i + 1; j < len(writeIDs); j++ {
 			a, b := writeIDs[i], writeIDs[j]
-			if reach[a][b] || reach[b][a] {
+			if !conc.canRunConcurrently(a, b) {
 				continue
 			}
 			hasJoin := false
 			for _, jID := range joinIDs {
-				if reach[a][jID] && reach[b][jID] {
+				if conc.reachPass[a][jID] && conc.reachPass[b][jID] {
 					hasJoin = true
 					break
 				}
@@ -1081,7 +1240,7 @@ func SynthesizeJoinStages(w *Workflow) {
 }
 
 // HasConcurrentWriter reports whether stageID is a non-join "write" stage in w that has
-// at least one other non-join "write" stage with no ordering path between them.
+// at least one other non-join "write" stage that can run concurrently with it.
 func HasConcurrentWriter(w *Workflow, stageID string) bool {
 	if w == nil || stageID == "" {
 		return false
@@ -1096,35 +1255,12 @@ func HasConcurrentWriter(w *Workflow, stageID string) bool {
 	if target == nil || target.Access != "write" || target.Kind == "join" {
 		return false
 	}
-	adj := make(map[string][]string, len(w.Stages))
-	for _, e := range w.Edges {
-		if e.WhenOutcome == "fail" {
-			continue
-		}
-		adj[e.From] = append(adj[e.From], e.To)
-	}
-	reaches := func(from, to string) bool {
-		seen := map[string]bool{}
-		stack := append([]string(nil), adj[from]...)
-		for len(stack) > 0 {
-			cur := stack[len(stack)-1]
-			stack = stack[:len(stack)-1]
-			if cur == to {
-				return true
-			}
-			if seen[cur] {
-				continue
-			}
-			seen[cur] = true
-			stack = append(stack, adj[cur]...)
-		}
-		return false
-	}
+	conc := analyzeWorkflowConcurrency(w)
 	for _, s := range w.Stages {
 		if s.ID == stageID || s.Access != "write" || s.Kind == "join" {
 			continue
 		}
-		if !reaches(stageID, s.ID) && !reaches(s.ID, stageID) {
+		if conc.canRunConcurrently(stageID, s.ID) {
 			return true
 		}
 	}

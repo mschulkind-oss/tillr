@@ -334,3 +334,113 @@ func TestWorkflowPieceAfterAndJoinSynthesis(t *testing.T) {
 		}
 	})
 }
+
+func TestConcurrentWriterAndJoinRespectFailAndExclusiveBranches(t *testing.T) {
+	t.Run("fail edge orders repair after edit", func(t *testing.T) {
+		w := &Workflow{
+			Stages: []WorkflowStage{
+				{ID: "edit", Kind: "agent", Seat: "build", Access: "write"},
+				{ID: "check", Kind: "agent", Seat: "build", Access: "read_only"},
+				{ID: "repair", Kind: "agent", Seat: "build", Access: "write"},
+				{ID: "check-again", Kind: "agent", Seat: "build", Access: "read_only"},
+			},
+			Edges: []WorkflowEdge{
+				{From: "edit", To: "check"},
+				{From: "check", To: "repair", WhenOutcome: "fail"},
+				{From: "repair", To: "check-again"},
+			},
+			Exit: &WorkflowExit{RequiresNodes: []string{"check"}},
+		}
+		if HasConcurrentWriter(w, "edit") || HasConcurrentWriter(w, "repair") {
+			t.Fatalf("expected edit and repair not to be concurrent")
+		}
+		SynthesizeJoinStages(w)
+		for _, s := range w.Stages {
+			if s.Kind == "join" {
+				t.Fatalf("unexpected synthesized join: %+v", w.Stages)
+			}
+		}
+		if err := ValidateWorkflowExit(w); err != nil {
+			t.Fatalf("ValidateWorkflowExit failed: %v", err)
+		}
+	})
+
+	t.Run("mutually exclusive pass and fail branches are not concurrent", func(t *testing.T) {
+		w := &Workflow{
+			Stages: []WorkflowStage{
+				{ID: "work", Kind: "agent", Seat: "build", Access: "write"},
+				{ID: "check", Kind: "agent", Seat: "build", Access: "read_only"},
+				{ID: "s1", Kind: "agent", Seat: "build", Access: "read_only"},
+				{ID: "success", Kind: "agent", Seat: "build", Access: "write"},
+				{ID: "r1", Kind: "agent", Seat: "build", Access: "read_only"},
+				{ID: "recover", Kind: "agent", Seat: "build", Access: "write"},
+			},
+			Edges: []WorkflowEdge{
+				{From: "work", To: "check"},
+				{From: "check", To: "s1", WhenOutcome: "pass"},
+				{From: "s1", To: "success"},
+				{From: "check", To: "r1", WhenOutcome: "fail"},
+				{From: "r1", To: "recover"},
+			},
+		}
+		for _, id := range []string{"work", "success", "recover"} {
+			if HasConcurrentWriter(w, id) {
+				t.Fatalf("expected %s not to have a concurrent writer", id)
+			}
+		}
+		SynthesizeJoinStages(w)
+		for _, s := range w.Stages {
+			if s.Kind == "join" {
+				t.Fatalf("unexpected synthesized join: %+v", w.Stages)
+			}
+		}
+	})
+
+	t.Run("spliced join reconcile is ordered after parallel writers", func(t *testing.T) {
+		w := &Workflow{
+			Stages: []WorkflowStage{
+				{ID: "a", Kind: "agent", Seat: "build", Access: "write"},
+				{ID: "b", Kind: "agent", Seat: "build", Access: "write"},
+				{ID: "join", Kind: "join", Access: "write"},
+			},
+			Edges: []WorkflowEdge{
+				{From: "a", To: "join"},
+				{From: "b", To: "join"},
+			},
+		}
+		spliced, recID := SpliceReconcileStage(w, "join", "reconcile", WorkflowScope{})
+		if !HasConcurrentWriter(spliced, "a") || !HasConcurrentWriter(spliced, "b") {
+			t.Fatalf("expected a and b to remain concurrent writers")
+		}
+		if HasConcurrentWriter(spliced, recID) {
+			t.Fatalf("expected %s not to be a concurrent writer", recID)
+		}
+	})
+
+	t.Run("parallel writers on the same outcome branch remain concurrent", func(t *testing.T) {
+		w := &Workflow{
+			Stages: []WorkflowStage{
+				{ID: "check", Kind: "agent", Seat: "build", Access: "read_only"},
+				{ID: "w1", Kind: "agent", Seat: "build", Access: "write"},
+				{ID: "w2", Kind: "agent", Seat: "build", Access: "write"},
+			},
+			Edges: []WorkflowEdge{
+				{From: "check", To: "w1", WhenOutcome: "pass"},
+				{From: "check", To: "w2", WhenOutcome: "pass"},
+			},
+		}
+		if !HasConcurrentWriter(w, "w1") || !HasConcurrentWriter(w, "w2") {
+			t.Fatalf("expected w1 and w2 to be concurrent writers")
+		}
+		SynthesizeJoinStages(w)
+		foundJoin := false
+		for _, s := range w.Stages {
+			if s.Kind == "join" {
+				foundJoin = true
+			}
+		}
+		if !foundJoin {
+			t.Fatalf("expected synthesized join for w1 and w2, got %+v", w.Stages)
+		}
+	})
+}
