@@ -84,31 +84,41 @@ func (f *VerdictFindings) UnmarshalJSON(raw []byte) error {
 		if len(entry.Paths) == 0 {
 			return fmt.Errorf("finding %d: at least one path is required", i+1)
 		}
-		for _, locator := range entry.Paths {
-			if !validFindingLocator(locator) {
+		for j, locator := range entry.Paths {
+			norm, ok := normalizeFindingLocator(locator)
+			if !ok {
 				return fmt.Errorf("finding %d: %q is not a file:<repo-relative-path>[:line] locator", i+1, locator)
 			}
+			entries[i].Paths[j] = norm
 		}
 	}
 	*f = entries
 	return nil
 }
 
-func validFindingLocator(locator string) bool {
-	ref, ok := strings.CutPrefix(locator, "file:")
-	if !ok || strings.ContainsAny(ref, "\x00\\") || strings.Join(strings.Fields(ref), "") != ref {
-		return false
+// normalizeFindingLocator accepts either the canonical file:<repo-relative-path>[:line]
+// form or a bare <repo-relative-path>[:line] and returns the canonical file: form.
+// Accepting bare repo-relative paths avoids discarding a complete verdict over a missing
+// prefix while still rejecting prose, whitespace, absolute paths, parent traversals,
+// non-file schemes, and non-positive line numbers.
+func normalizeFindingLocator(locator string) (string, bool) {
+	ref, _ := strings.CutPrefix(locator, "file:")
+	if strings.ContainsAny(ref, "\x00\\") || strings.Join(strings.Fields(ref), "") != ref {
+		return "", false
 	}
 	name, line, hasLine := strings.Cut(ref, ":")
 	name = strings.TrimPrefix(name, "./")
 	if name == "" || name == "." || name == ".." || strings.HasPrefix(name, "../") || path.IsAbs(name) || path.Clean(name) != name {
-		return false
+		return "", false
 	}
 	if !hasLine {
-		return true
+		return "file:" + name, true
 	}
 	n, err := strconv.ParseUint(line, 10, 64)
-	return err == nil && n > 0
+	if err != nil || n == 0 {
+		return "", false
+	}
+	return "file:" + name + ":" + line, true
 }
 
 // EarlierFindingFate records whether a finding returned by the previous verdict
@@ -144,10 +154,12 @@ func (f *EarlierFindingFates) UnmarshalJSON(raw []byte) error {
 		if strings.TrimSpace(entry.Finding) == "" {
 			return fmt.Errorf("earlier_finding_fates[%d]: finding must not be blank", i)
 		}
-		for _, locator := range entry.Paths {
-			if !validFindingLocator(locator) {
+		for j, locator := range entry.Paths {
+			norm, ok := normalizeFindingLocator(locator)
+			if !ok {
 				return fmt.Errorf("earlier_finding_fates[%d]: %q is not a file:<repo-relative-path>[:line] locator", i, locator)
 			}
+			entries[i].Paths[j] = norm
 		}
 	}
 	*f = entries
@@ -178,10 +190,12 @@ func (e *VerdictExamined) UnmarshalJSON(raw []byte) error {
 	if !decoded.Whole && len(decoded.UnexaminedPaths) == 0 {
 		return fmt.Errorf("examined: whole=false requires at least one path in unexamined_paths")
 	}
-	for _, locator := range decoded.UnexaminedPaths {
-		if !validFindingLocator(locator) {
+	for i, locator := range decoded.UnexaminedPaths {
+		norm, ok := normalizeFindingLocator(locator)
+		if !ok {
 			return fmt.Errorf("examined: %q is not a file:<repo-relative-path>[:line] locator", locator)
 		}
+		decoded.UnexaminedPaths[i] = norm
 	}
 	*e = VerdictExamined(decoded)
 	return nil

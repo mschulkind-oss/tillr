@@ -724,3 +724,53 @@ func TestExtendSplitReplacesDefectivePart(t *testing.T) {
 		t.Fatalf("re-replacing got %v, want split-replaces", err)
 	}
 }
+
+func TestVerdictLocatorAcceptsBareRepoRelativePath(t *testing.T) {
+	var findings item.VerdictFindings
+	raw := `[{"kind":"gap","case":"bare path locator","paths":["tools/tillr-drain/drain/pass.go","./tools/tillr-drain/drain/why.go:42","file:tools/tillr-item/item/verdict.go:10"]}]`
+	if err := json.Unmarshal([]byte(raw), &findings); err != nil {
+		t.Fatalf("Unmarshal bare paths: %v", err)
+	}
+	want := []string{
+		"file:tools/tillr-drain/drain/pass.go",
+		"file:tools/tillr-drain/drain/why.go:42",
+		"file:tools/tillr-item/item/verdict.go:10",
+	}
+	if !reflect.DeepEqual(findings[0].Paths, want) {
+		t.Fatalf("normalized paths = %v, want %v", findings[0].Paths, want)
+	}
+
+	var fates item.EarlierFindingFates
+	if err := json.Unmarshal([]byte(`[{"finding":"prior","paths":["tools/tillr-drain/drain/pass.go"],"fate":"fixed"}]`), &fates); err != nil {
+		t.Fatalf("Unmarshal earlier_finding_fates bare path: %v", err)
+	}
+	if !reflect.DeepEqual(fates[0].Paths, []string{"file:tools/tillr-drain/drain/pass.go"}) {
+		t.Fatalf("normalized fates paths = %v", fates[0].Paths)
+	}
+
+	var examined item.VerdictExamined
+	if err := json.Unmarshal([]byte(`{"whole":false,"unexamined_paths":["tools/tillr-drain/drain/pass.go"]}`), &examined); err != nil {
+		t.Fatalf("Unmarshal examined bare path: %v", err)
+	}
+	if !reflect.DeepEqual(examined.UnexaminedPaths, []string{"file:tools/tillr-drain/drain/pass.go"}) {
+		t.Fatalf("normalized unexamined_paths = %v", examined.UnexaminedPaths)
+	}
+
+	for _, bad := range []string{
+		"",
+		"   ",
+		"see tools/tillr-drain/drain/pass.go",
+		"/etc/passwd",
+		"../outside.go",
+		"tools/tillr-drain/drain/pass.go:0",
+		"tools/tillr-drain/drain/pass.go:abc",
+		"diff:candidate.diff",
+		"http://example.com/a.go",
+	} {
+		var badFindings item.VerdictFindings
+		badRaw, _ := json.Marshal([]map[string]any{{"kind": "gap", "case": "bad", "paths": []string{bad}}})
+		if err := json.Unmarshal(badRaw, &badFindings); err == nil {
+			t.Fatalf("expected %q to be rejected as finding path", bad)
+		}
+	}
+}

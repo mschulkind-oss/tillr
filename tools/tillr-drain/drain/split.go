@@ -155,6 +155,17 @@ func checkSplitJSONKeys(raw []byte) error {
 	return nil
 }
 
+func splitClosingHoldPresentation(held *splitclosing.HeldPayload) (class, mover string) {
+	switch {
+	case held.Mover == "owner":
+		return "needs you", "owner; " + held.Reason
+	case held.Mover == "operator" || held.Mover == "" || held.Mover == "review" || held.Mover == "design":
+		return "needs you", "operator; " + held.Reason
+	default:
+		return "waits on work", held.Mover
+	}
+}
+
 // splitWait describes a blocked parent without releasing it, reading the current
 // split-closing state when all required parts have landed.
 func splitWait(r *store.Reader, row *WhyRow, parent string, blockers []string, states map[string]string, def definition.Definition) error {
@@ -171,13 +182,7 @@ func splitWait(r *store.Reader, row *WhyRow, parent string, blockers []string, s
 			return err
 		}
 		if st.Held != nil {
-			if st.Held.Mover == "owner" {
-				row.Class = "needs you"
-				row.Mover = "owner; " + st.Held.Reason
-			} else {
-				row.Class = "waits on work"
-				row.Mover = st.Held.Mover
-			}
+			row.Class, row.Mover = splitClosingHoldPresentation(st.Held)
 			row.Why = st.Held.Reason
 			row.tableReason = row.Why
 			return nil
@@ -212,13 +217,7 @@ func splitWait(r *store.Reader, row *WhyRow, parent string, blockers []string, s
 					return err
 				}
 				if st.Held != nil {
-					if st.Held.Mover == "owner" {
-						row.Class = "needs you"
-						row.Mover = "owner; " + st.Held.Reason
-					} else {
-						row.Class = "waits on work"
-						row.Mover = st.Held.Mover
-					}
+					row.Class, row.Mover = splitClosingHoldPresentation(st.Held)
 					row.Why = st.Held.Reason
 					row.tableReason = row.Why
 					return nil
@@ -399,13 +398,7 @@ func decorateSplitParents(answer *WhyAnswer, splits map[string]item.SplitStateme
 			id := defectiveRequired[0]
 			cst := splitStates[row.ItemID]
 			if cst.Held != nil {
-				if cst.Held.Mover == "owner" {
-					row.Class = "needs you"
-					row.Mover = "owner; " + cst.Held.Reason
-				} else {
-					row.Class = "waits on work"
-					row.Mover = cst.Held.Mover
-				}
+				row.Class, row.Mover = splitClosingHoldPresentation(cst.Held)
 				row.Why = summary + "; " + cst.Held.Reason
 			} else {
 				row.Class = "waits on work"
@@ -417,7 +410,10 @@ func decorateSplitParents(answer *WhyAnswer, splits map[string]item.SplitStateme
 			}
 			row.tableReason = row.Why
 		case sp.RequiredLanded == sp.RequiredParts:
-			if row.Why != "" {
+			if cst := splitStates[row.ItemID]; cst.Held != nil {
+				row.Class, row.Mover = splitClosingHoldPresentation(cst.Held)
+				row.Why = summary + "; " + cst.Held.Reason
+			} else if row.Why != "" {
 				row.Why = summary + "; " + row.Why
 			} else {
 				row.Why = summary + "; waiting on the closing check"

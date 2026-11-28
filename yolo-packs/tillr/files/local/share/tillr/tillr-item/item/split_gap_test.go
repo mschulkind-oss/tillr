@@ -247,7 +247,7 @@ func TestSplitPartContextAndGaps(t *testing.T) {
 		// Malformed case / paths / evidence.
 		for _, bad := range []map[string]any{
 			{"sibling": "beta", "case": "   ", "paths": []string{"file:pkg/beta.go"}, "evidence": []string{"diff:candidate.diff"}},
-			{"sibling": "beta", "case": "Missing path.", "paths": []string{"pkg/beta.go"}, "evidence": []string{"diff:candidate.diff"}},
+			{"sibling": "beta", "case": "Escapes repo.", "paths": []string{"../pkg/beta.go"}, "evidence": []string{"diff:candidate.diff"}},
 			{"sibling": "beta", "case": "Bad evidence.", "paths": []string{"file:pkg/beta.go"}, "evidence": []string{"has space"}},
 		} {
 			badRaw, _ := json.Marshal(map[string]any{

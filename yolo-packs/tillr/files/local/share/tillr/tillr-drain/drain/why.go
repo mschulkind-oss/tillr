@@ -947,13 +947,7 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 				if allDefectiveSibling {
 					cst := splitStates[partMem.ParentID]
 					if cst.Held != nil {
-						if cst.Held.Mover == "owner" {
-							row.Class = "needs you"
-							row.Mover = "owner; " + cst.Held.Reason
-						} else {
-							row.Class = "waits on work"
-							row.Mover = cst.Held.Mover
-						}
+						row.Class, row.Mover = splitClosingHoldPresentation(cst.Held)
 						row.Why = cst.Held.Reason
 					} else {
 						row.Class = "waits on work"

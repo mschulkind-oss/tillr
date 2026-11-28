@@ -577,13 +577,7 @@ func assembleWaitingAt(r *store.Reader, questions vantage.QuestionSource, storeP
 						if allDefectiveSibling {
 							cs := closingStates[pm.ParentID]
 							if cs.Held != nil {
-								if cs.Held.Mover == "owner" {
-									row.Class = "needs you"
-									row.Mover = "owner; " + cs.Held.Reason
-								} else {
-									row.Class = "waits on work"
-									row.Mover = cs.Held.Mover
-								}
+								row.Class, row.Mover = splitClosingHoldPresentation(cs.Held)
 								row.Why = cs.Held.Reason
 							} else {
 								row.Class = "waits on work"
@@ -661,6 +655,93 @@ func assembleWaitingAt(r *store.Reader, questions vantage.QuestionSource, storeP
 				}
 				row.Mover = "operator; remove the dependency or reopen " + depID
 			}
+			if st, isSplitParent := splits[item.ItemID]; isSplitParent {
+				sp := &whySplitParent{}
+				var closedRequired, defectiveRequired, unlandedRequired []string
+				for _, p := range st.Parts {
+					if len(p.ReplacedBy) > 0 {
+						continue
+					}
+					sp.TotalParts++
+					partID := splitPartID(item.ItemID, p.Label)
+					req := p.Required != nil && *p.Required
+					if req {
+						sp.RequiredParts++
+					}
+					partState := states[partID]
+					if partState == "" {
+						partState = splitMeta[partID].State
+					}
+					switch {
+					case partState == "landed":
+						sp.Landed++
+						if req {
+							sp.RequiredLanded++
+						}
+					case waitingTerminal(partState):
+						sp.Closed++
+						if req {
+							if isDefectiveClose(partState, splitMeta[partID].CloseReason) {
+								defectiveRequired = append(defectiveRequired, partID)
+							} else {
+								closedRequired = append(closedRequired, partID)
+							}
+							unlandedRequired = append(unlandedRequired, partID)
+						}
+					default:
+						if req {
+							unlandedRequired = append(unlandedRequired, partID)
+						}
+						sp.Queued++
+					}
+				}
+				sp.ProgressSummary = fmt.Sprintf("%d of %d required parts landed", sp.RequiredLanded, sp.RequiredParts)
+				row.SplitParent = sp
+				summary := formatSplitCounts(sp.TotalParts, sp.Landed, sp.Working, sp.Held, sp.Queued, sp.Closed)
+				cs := closingStates[item.ItemID]
+				switch {
+				case len(closedRequired) > 0:
+					id := closedRequired[0]
+					row.Class = "needs you"
+					row.Mover = "owner; required part did not land: " + id
+					row.Why = summary + "; required part did not land: " + id + " (" + states[id] + ")"
+				case len(defectiveRequired) > 0:
+					id := defectiveRequired[0]
+					if cs.Held != nil {
+						row.Class, row.Mover = splitClosingHoldPresentation(cs.Held)
+						row.Why = summary + "; " + cs.Held.Reason
+					} else {
+						row.Class = "waits on work"
+						row.Mover = "design"
+						row.Why = summary + "; required part closed as defective: " + id + "; waiting on design seat"
+						if cs.RefusedReason != "" {
+							row.Why += "; prior extension refused: " + cs.RefusedReason
+						}
+					}
+				case sp.RequiredLanded == sp.RequiredParts:
+					if cs.Held != nil {
+						row.Class, row.Mover = splitClosingHoldPresentation(cs.Held)
+						row.Why = summary + "; " + cs.Held.Reason
+					} else if cs.Finding != "" {
+						row.Class = "waits on work"
+						row.Mover = "design"
+						row.Why = summary + "; " + cs.Finding
+						if cs.RefusedReason != "" {
+							row.Why += "; prior extension refused: " + cs.RefusedReason
+						}
+					} else {
+						row.Class = "waits on work"
+						row.Mover = "review"
+						row.Why = summary + "; required parts have landed; waiting on the closing check"
+					}
+				default:
+					row.Class = "waits on work"
+					row.Why = summary
+					if len(unlandedRequired) > 0 {
+						row.Mover = strings.Join(unlandedRequired, ", ")
+					}
+				}
+			}
 		} else if item.State == "blocked" && !found && row.Why == "not yet planned" {
 			row.Class, row.Mover, row.Why = "waits on work", "waiter not recorded", "waiter not recorded"
 		} else if !found && item.State == "in-queue" {
@@ -704,13 +785,7 @@ func assembleWaitingAt(r *store.Reader, questions vantage.QuestionSource, storeP
 					if allDefectiveSibling {
 						cs := closingStates[pm.ParentID]
 						if cs.Held != nil {
-							if cs.Held.Mover == "owner" {
-								row.Class = "needs you"
-								row.Mover = "owner; " + cs.Held.Reason
-							} else {
-								row.Class = "waits on work"
-								row.Mover = cs.Held.Mover
-							}
+							row.Class, row.Mover = splitClosingHoldPresentation(cs.Held)
 							row.Why = cs.Held.Reason
 						} else {
 							row.Class = "waits on work"
@@ -1134,6 +1209,9 @@ func normalizeWaitingMover(row *waitingRow) {
 		return
 	}
 	if strings.HasPrefix(row.Mover, "owner; answer ") && strings.Contains(row.Mover, "#OQ-") {
+		return
+	}
+	if row.SplitParent != nil && strings.HasPrefix(row.Mover, "owner;") {
 		return
 	}
 	for _, actor := range []string{"drain;", "design seat;", "operator;"} {

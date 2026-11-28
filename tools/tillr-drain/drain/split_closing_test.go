@@ -713,7 +713,7 @@ func TestSplitClosingExtensionRefusalAndMissingOutput(t *testing.T) {
 		}
 
 		whyHeld := parentWhyRow(t, ctx, l, f.storePath, parent)
-		if whyHeld.State != StateBlocked || whyHeld.Class != "waits on work" || !strings.HasPrefix(whyHeld.Mover, "design") {
+		if whyHeld.State != StateBlocked || whyHeld.Class != "needs you" || !strings.HasPrefix(whyHeld.Mover, "operator;") {
 			t.Fatalf("parent why after repeated refusal: %+v", whyHeld)
 		}
 
@@ -764,7 +764,7 @@ func TestSplitClosingExtensionRefusalAndMissingOutput(t *testing.T) {
 		}
 
 		whyHeld := parentWhyRow(t, ctx, l, f.storePath, parent)
-		if whyHeld.State != StateBlocked || whyHeld.Class != "waits on work" || !strings.HasPrefix(whyHeld.Mover, "design") || !strings.Contains(whyHeld.Why, "missing split-extension.json") {
+		if whyHeld.State != StateBlocked || whyHeld.Class != "needs you" || !strings.HasPrefix(whyHeld.Mover, "operator;") || !strings.Contains(whyHeld.Why, "missing split-extension.json") {
 			t.Fatalf("parent why after missing design output: %+v", whyHeld)
 		}
 
@@ -1520,8 +1520,225 @@ func TestSplitClosingCheckSurvivesLoopRestart(t *testing.T) {
 			t.Fatalf("expected 1 closing check run (no retry), got %d", len(steps.runs))
 		}
 		why := parentWhyRow(t, ctx, l, f.storePath, parent)
-		if why.State != StateBlocked || !strings.Contains(why.Why, "exited with code 1") {
+		if why.State != StateBlocked || why.Class != "needs you" || !strings.HasPrefix(why.Mover, "operator;") || !strings.Contains(why.Why, "exited with code 1") {
 			t.Fatalf("unexpected parent why after failed closing check: %+v", why)
 		}
 	})
+}
+
+func TestSplitClosingBarePathLocatorAcceptedAndBriefStatesForm(t *testing.T) {
+	f, l, steps, parent, parts := splitClosingFixture(t)
+	ctx := context.Background()
+
+	landPartOnTrunk(t, f, parts["first"], "run-first", "first.txt", "A works\n", 101)
+	landPartOnTrunk(t, f, parts["second"], "run-second", "second.txt", "B works\n", 102)
+
+	var reviewBrief string
+	steps.onReview = func(_ run.Request, brief string, evalOut string) error {
+		reviewBrief = brief
+		head := runGit(t, f.root, "rev-parse", TrunkRef)
+		tree := runGit(t, f.root, "rev-parse", head+"^{tree}")
+		// Write raw verdict JSON with bare repo-relative paths (no file: prefix).
+		type rawFinding struct {
+			Kind  string   `json:"kind"`
+			Case  string   `json:"case"`
+			Paths []string `json:"paths"`
+		}
+		type rawEntry struct {
+			CriterionID   string       `json:"criterion_id"`
+			CriterionHash string       `json:"criterion_hash"`
+			Verdict       string       `json:"verdict"`
+			ClaimClass    string       `json:"claim_class"`
+			Reason        string       `json:"reason"`
+			Evidence      []string     `json:"evidence"`
+			Findings      []rawFinding `json:"findings,omitempty"`
+		}
+		var entries []rawEntry
+		if err := l.readStore(ctx, func(r *store.Reader) error {
+			rows, err := r.Query(`SELECT criterion_id, text, claim_class FROM item_criteria WHERE item_id=? ORDER BY criterion_id`, parent)
+			if err != nil {
+				return err
+			}
+			defer rows.Close()
+			for rows.Next() {
+				var id, text, class string
+				if err := rows.Scan(&id, &text, &class); err != nil {
+					return err
+				}
+				e := rawEntry{
+					CriterionID:   id,
+					CriterionHash: item.CriterionHash(text),
+					Verdict:       item.VerdictDone,
+					ClaimClass:    class,
+					Reason:        "verified on trunk",
+					Evidence:      []string{"cmd:closing-check"},
+				}
+				if id == "c6" {
+					e.Verdict = item.VerdictNotDone
+					e.Reason = "missing seam between parts"
+					e.Findings = []rawFinding{{
+						Kind:  "gap",
+						Case:  "seam missing in pass.go",
+						Paths: []string{"tools/tillr-drain/drain/pass.go", "tools/tillr-drain/drain/why.go:42"},
+					}}
+				}
+				entries = append(entries, e)
+			}
+			return rows.Err()
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return splitclosing.WriteAtomicJSON(evalOut, map[string]any{
+			"evaluated_head": head,
+			"evaluated_tree": tree,
+			"outcome":        "fail",
+			"verdicts":       entries,
+		})
+	}
+
+	if worked, err := advanceSplitClosingAndSettle(t, ctx, l, "", &LoopResult{}); err != nil || !worked {
+		t.Fatalf("advanceSplitClosingChecks: worked=%v err=%v", worked, err)
+	}
+
+	if !strings.Contains(reviewBrief, "file:<repo-relative-path>") || !strings.Contains(reviewBrief, `"file:tools/tillr-drain/drain/pass.go"`) {
+		t.Fatalf("closing-check brief does not state locator form with example:\n%s", reviewBrief)
+	}
+
+	var st splitclosing.State
+	if err := l.readStore(ctx, func(r *store.Reader) error {
+		var err error
+		st, err = splitclosing.ReadState(r, parent)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if st.Held != nil {
+		t.Fatalf("expected parent to be judged, not held: %+v", st.Held)
+	}
+	if st.Finding == nil || len(st.Finding.Findings) != 1 || len(st.Finding.Findings[0].Findings) != 1 {
+		t.Fatalf("expected recorded closing-check finding, got %+v", st.Finding)
+	}
+	gotPaths := st.Finding.Findings[0].Findings[0].Paths
+	if len(gotPaths) != 2 || gotPaths[0] != "file:tools/tillr-drain/drain/pass.go" || gotPaths[1] != "file:tools/tillr-drain/drain/why.go:42" {
+		t.Fatalf("normalized finding paths = %v", gotPaths)
+	}
+
+	why := parentWhyRow(t, ctx, l, f.storePath, parent)
+	if why.Class != "waits on work" || !strings.HasPrefix(why.Mover, "design") || !strings.Contains(why.Why, "missing seam between parts") {
+		t.Fatalf("unexpected parent why after bare-path finding: %+v", why)
+	}
+}
+
+func TestSplitClosingHeldShowsRealReasonAndActionableMoverInWhy(t *testing.T) {
+	f, l, steps, parent, parts := splitClosingFixture(t)
+	ctx := context.Background()
+
+	landPartOnTrunk(t, f, parts["first"], "run-first", "first.txt", "A works\n", 101)
+	landPartOnTrunk(t, f, parts["second"], "run-second", "second.txt", "B works\n", 102)
+
+	steps.onReview = func(_ run.Request, _ string, evalOut string) error {
+		// Write invalid JSON so the closing check is genuinely held.
+		return os.WriteFile(evalOut, []byte("{not-json"), 0o644)
+	}
+
+	if worked, err := advanceSplitClosingAndSettle(t, ctx, l, "", &LoopResult{}); err != nil || !worked {
+		t.Fatalf("advanceSplitClosingChecks: worked=%v err=%v", worked, err)
+	}
+
+	var st splitclosing.State
+	if err := l.readStore(ctx, func(r *store.Reader) error {
+		var err error
+		st, err = splitclosing.ReadState(r, parent)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if st.Held == nil || st.Held.Mover != "operator" || !strings.Contains(st.Held.Reason, "invalid verdict") {
+		t.Fatalf("unexpected held state: %+v", st.Held)
+	}
+
+	why := parentWhyRow(t, ctx, l, f.storePath, parent)
+	if why.Class != "needs you" {
+		t.Fatalf("held closing check class = %q, want %q (row=%+v)", why.Class, "needs you", why)
+	}
+	if !strings.HasPrefix(why.Mover, "operator;") || !strings.Contains(why.Mover, "invalid verdict") {
+		t.Fatalf("held closing check mover = %q, want operator with real reason", why.Mover)
+	}
+	if !strings.Contains(why.Why, "invalid verdict") || strings.Contains(why.Why, "split parent; check its criteria") {
+		t.Fatalf("held closing check why = %q, want real reason", why.Why)
+	}
+
+	// Held item must not dispatch another closing check run.
+	if worked, err := l.advanceSplitClosingChecks(ctx, "", &LoopResult{}); err != nil || worked {
+		t.Fatalf("held parent re-dispatched: worked=%v err=%v", worked, err)
+	}
+}
+
+func TestSplitClosingAutoRerunsPreFixLocatorHoldWithoutOperatorCommand(t *testing.T) {
+	f, l, steps, parent, parts := splitClosingFixture(t)
+	ctx := context.Background()
+
+	landPartOnTrunk(t, f, parts["first"], "run-first", "first.txt", "A works\n", 101)
+	landPartOnTrunk(t, f, parts["second"], "run-second", "second.txt", "B works\n", 102)
+
+	// Record the exact pre-fix hold state: drain.split-closing-started + drain.split-closing-held
+	// with mover "review" and the bare-path locator rejection reason.
+	var stmtHash string
+	if err := l.readStore(ctx, func(r *store.Reader) error {
+		var raw []byte
+		if err := r.QueryRow(`SELECT statement FROM item_splits WHERE parent_id=?`, parent).Scan(&raw); err != nil {
+			return err
+		}
+		stmtHash = item.CriterionHash(string(raw))
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	oldRunID := "closing-" + parent + "-1"
+	ws, err := store.Open(ctx, f.storePath, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ws.WriteTx(ctx, func(tx *store.Tx) error {
+		if err := appendEffectOn(tx, splitClosingStartedKind, "item", parent, splitclosing.StartedPayload{
+			ItemID:        parent,
+			RunID:         oldRunID,
+			Kind:          splitclosing.RunKindCheck,
+			StatementHash: stmtHash,
+			Seat:          "review",
+			Workflow:      item.SplitClosingWorkflow,
+			NodeID:        item.SplitClosingNode,
+		}, l.cfg.Now().Add(-time.Hour)); err != nil {
+			return err
+		}
+		return appendEffectOn(tx, splitClosingHeldKind, "item", parent, splitclosing.HeldPayload{
+			ItemID:        parent,
+			RunID:         oldRunID,
+			StatementHash: stmtHash,
+			Reason:        `closing check ` + oldRunID + ` invalid verdict: reading verdict file: finding 1: "tools/tillr-drain/drain/pass.go" is not a file:<repo-relative-path>[:line] locator`,
+			Mover:         "review",
+		}, l.cfg.Now().Add(-30*time.Minute))
+	}); err != nil {
+		ws.Close()
+		t.Fatal(err)
+	}
+	ws.Close()
+
+	// Without any operator command, the loop reruns the closing check and lands the parent.
+	steps.onReview = func(_ run.Request, _ string, evalOut string) error {
+		head := runGit(t, f.root, "rev-parse", TrunkRef)
+		tree := runGit(t, f.root, "rev-parse", head+"^{tree}")
+		writeClosingEvalOutput(t, f, parent, evalOut, head, tree, "pass", nil)
+		return nil
+	}
+
+	if worked, err := advanceSplitClosingAndSettle(t, ctx, l, "", &LoopResult{}); err != nil || !worked {
+		t.Fatalf("auto-rerun advanceSplitClosingChecks: worked=%v err=%v", worked, err)
+	}
+	if len(steps.runs) != 1 || steps.runs[0].Seat != "review" {
+		t.Fatalf("expected 1 fresh closing check run, got %+v", steps.runs)
+	}
+	if got := itemStateInStore(t, f, parent); got != StateLanded {
+		t.Fatalf("parent state after auto-rerun = %q, want %q", got, StateLanded)
+	}
 }

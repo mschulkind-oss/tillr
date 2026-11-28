@@ -155,6 +155,14 @@ type Env struct {
 	BraceLiteralCount  func(brief string) int
 }
 
+// IsRetriableLocatorHold reports whether a recorded split-closing hold came from
+// the pre-fix bare-path locator rejection that parked on the dead "review" mover.
+// Post-fix holds record mover "operator" (never "review"), so clearing this hold
+// lets the loop re-run the closing check automatically without looping.
+func IsRetriableLocatorHold(h *HeldPayload) bool {
+	return h != nil && h.Mover == "review" && strings.Contains(h.Reason, "is not a file:<repo-relative-path>[:line] locator")
+}
+
 func ReadState(r *store.Reader, parent string) (State, error) {
 	var rawStmt []byte
 	err := r.QueryRow(`SELECT statement FROM item_splits WHERE parent_id=?`, parent).Scan(&rawStmt)
@@ -188,12 +196,14 @@ func ReadState(r *store.Reader, parent string) (State, error) {
 			if err := json.Unmarshal(raw, &p); err == nil && p.StatementHash == stmtHash {
 				cp := p
 				latestStarted = &cp
+				st.Held = nil
 			}
 		case FindingKind:
 			var p FindingPayload
 			if err := json.Unmarshal(raw, &p); err == nil && p.StatementHash == stmtHash {
 				cp := p
 				st.Finding = &cp
+				st.Held = nil
 				if p.RunID != "" {
 					settledRuns[p.RunID] = true
 				}
@@ -223,6 +233,9 @@ func ReadState(r *store.Reader, parent string) (State, error) {
 	}
 	if latestStarted != nil && !settledRuns[latestStarted.RunID] {
 		st.Started = latestStarted
+	}
+	if IsRetriableLocatorHold(st.Held) {
+		st.Held = nil
 	}
 	return st, nil
 }
@@ -363,6 +376,7 @@ func FormatClosingBrief(parent, runID, target, head, tree, evalOut, seats string
 	fmt.Fprintf(&b, "The object must have evaluated_head=%q, evaluated_tree=%q, outcome (\"pass\" or \"fail\"), and verdicts covering every criterion below.\n", head, tree)
 	fmt.Fprintf(&b, "Each entry has criterion_id, criterion_hash, verdict (done, not-done, blocked, defective), claim_class, reason, and evidence (non-empty single-token locator strings).\n")
 	fmt.Fprintf(&b, "Each not-done entry must include a non-empty findings array (kind: gap|regression|unasked-change, case, paths).\n")
+	fmt.Fprintf(&b, "Every entry in findings[].paths must be a file:<repo-relative-path> or file:<repo-relative-path>:<line> locator, for example \"file:tools/tillr-drain/drain/pass.go\" or \"file:tools/tillr-drain/drain/pass.go:42\".\n")
 	fmt.Fprintf(&b, "A blocked entry also needs waiting_on (waiter: owner|design|plan|item:<id>).\n")
 	fmt.Fprintf(&b, "Pass requires every criterion done.\n\n")
 	fmt.Fprintf(&b, "## Scope and boundaries\nDo not commit, edit the worktree, modify git refs, or write the store. %s is your only deliverable.\n\n", evalOut)
@@ -977,12 +991,12 @@ func settleCheck(ctx context.Context, env Env, s *store.Store, parent string, st
 		} else if rec.ExitCode != nil {
 			reason = fmt.Sprintf("closing check run %s exited with code %d", runID, *rec.ExitCode)
 		}
-		return hold(reason, "review")
+		return hold(reason, "operator")
 	}
 
 	rawEval, err := os.ReadFile(evalOut)
 	if err != nil {
-		return hold(fmt.Sprintf("closing check %s missing eval.output: %v", runID, err), "review")
+		return hold(fmt.Sprintf("closing check %s missing eval.output: %v", runID, err), "operator")
 	}
 
 	var checked item.JudgeResult
@@ -1004,7 +1018,7 @@ func settleCheck(ctx context.Context, env Env, s *store.Store, parent string, st
 		checked, err = item.CheckJudge(ctx, r, rawEval, judgeOpts)
 		return err
 	}); err != nil {
-		return hold(fmt.Sprintf("closing check %s invalid verdict: %v", runID, err), "review")
+		return hold(fmt.Sprintf("closing check %s invalid verdict: %v", runID, err), "operator")
 	}
 
 	switch checked.Outcome {
@@ -1089,7 +1103,7 @@ func settleCheck(ctx context.Context, env Env, s *store.Store, parent string, st
 		return hold("closing check defective: "+strings.Join(reasons, "; "), "owner")
 
 	case item.VerdictBlocked:
-		mover := "review"
+		mover := "operator"
 		var reasons []string
 		for _, v := range checked.Output.Verdicts {
 			if v.Verdict == item.VerdictBlocked {
@@ -1097,15 +1111,19 @@ func settleCheck(ctx context.Context, env Env, s *store.Store, parent string, st
 				var w struct {
 					Waiter string `json:"waiter"`
 				}
-				if len(v.WaitingOn) > 0 && json.Unmarshal(v.WaitingOn, &w) == nil && w.Waiter == "owner" {
-					mover = "owner"
+				if len(v.WaitingOn) > 0 && json.Unmarshal(v.WaitingOn, &w) == nil {
+					if w.Waiter == "owner" {
+						mover = "owner"
+					} else if strings.HasPrefix(w.Waiter, "item:") && mover != "owner" {
+						mover = w.Waiter
+					}
 				}
 			}
 		}
 		return hold("closing check blocked: "+strings.Join(reasons, "; "), mover)
 
 	default:
-		return hold(fmt.Sprintf("closing check %s unexpected outcome %q", runID, checked.Outcome), "review")
+		return hold(fmt.Sprintf("closing check %s unexpected outcome %q", runID, checked.Outcome), "operator")
 	}
 }
 
@@ -1208,17 +1226,17 @@ func settleExtend(ctx context.Context, env Env, s *store.Store, parent string, s
 		} else if rec.ExitCode != nil {
 			reason = fmt.Sprintf("design extension run %s exited with code %d", runID, *rec.ExitCode)
 		}
-		return hold(reason, "design")
+		return hold(reason, "operator")
 	}
 
 	rawExt, err := os.ReadFile(extOut)
 	if err != nil {
-		return hold(fmt.Sprintf("design extension run %s missing split-extension.json: %v", runID, err), "design")
+		return hold(fmt.Sprintf("design extension run %s missing split-extension.json: %v", runID, err), "operator")
 	}
 
 	refuseOrHold := func(reason string) (bool, error) {
 		if st.Refused != nil && st.Refused.Reason == reason {
-			return hold(reason, "design")
+			return hold(reason, "operator")
 		}
 		if err := storelog.AppendJudgment(ctx, env.Store, RefusedKind, "item", parent, RefusedPayload{
 			ItemID:        parent,

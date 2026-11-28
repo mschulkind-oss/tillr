@@ -285,7 +285,59 @@ type splitClosingHold struct {
 
 type splitClosingState struct {
 	Held          *splitClosingHold
+	Finding       string
 	RefusedReason string
+}
+
+func isRetriableSplitClosingLocatorHold(h *splitClosingHold) bool {
+	return h != nil && h.Mover == "review" && strings.Contains(h.Reason, "is not a file:<repo-relative-path>[:line] locator")
+}
+
+func splitClosingHoldPresentation(held *splitClosingHold) (class, mover string) {
+	switch {
+	case held.Mover == "owner":
+		return "needs you", "owner; " + held.Reason
+	case held.Mover == "operator" || held.Mover == "" || held.Mover == "review" || held.Mover == "design":
+		return "needs you", "operator; " + held.Reason
+	default:
+		return "waits on work", held.Mover
+	}
+}
+
+func formatSplitClosingFindingWhy(reasons []string) string {
+	parts := make([]string, 0, len(reasons))
+	for _, r := range reasons {
+		if trimmed := strings.TrimSpace(r); trimmed != "" {
+			parts = append(parts, trimmed)
+		}
+	}
+	if len(parts) == 0 {
+		return "closing check found missing work; waiting on design seat to add a part"
+	}
+	return "closing check found missing work: " + strings.Join(parts, "; ")
+}
+
+func applySplitClosingEvent(st *splitClosingState, kind string, raw []byte, wantHash string) {
+	var payload struct {
+		StatementHash string   `json:"statement_hash"`
+		Reason        string   `json:"reason"`
+		Mover         string   `json:"mover"`
+		Reasons       []string `json:"reasons"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil || payload.StatementHash != wantHash {
+		return
+	}
+	switch kind {
+	case "drain.split-closing-started":
+		st.Held = nil
+	case "drain.split-closing-finding":
+		st.Held = nil
+		st.Finding = formatSplitClosingFindingWhy(payload.Reasons)
+	case "drain.split-closing-held":
+		st.Held = &splitClosingHold{Mover: payload.Mover, Reason: payload.Reason}
+	case "drain.split-closing-refused":
+		st.RefusedReason = payload.Reason
+	}
 }
 
 func readSplitClosingStates(r *store.Reader) (map[string]splitClosingState, error) {
@@ -315,7 +367,7 @@ func readSplitClosingStates(r *store.Reader) (map[string]splitClosingState, erro
 	if len(hashes) == 0 {
 		return out, nil
 	}
-	erows, err := r.Query(`SELECT object_id, kind, payload FROM events WHERE object_type='item' AND kind IN ('drain.split-closing-held','drain.split-closing-refused') ORDER BY seq ASC`)
+	erows, err := r.Query(`SELECT object_id, kind, payload FROM events WHERE object_type='item' AND kind IN ('drain.split-closing-started','drain.split-closing-finding','drain.split-closing-held','drain.split-closing-refused') ORDER BY seq ASC`)
 	if isMissingTable(err) {
 		return out, nil
 	}
@@ -333,24 +385,20 @@ func readSplitClosingStates(r *store.Reader) (map[string]splitClosingState, erro
 		if !ok {
 			continue
 		}
-		var payload struct {
-			StatementHash string `json:"statement_hash"`
-			Reason        string `json:"reason"`
-			Mover         string `json:"mover"`
-		}
-		if err := json.Unmarshal(raw, &payload); err != nil || payload.StatementHash != wantHash {
-			continue
-		}
 		st := out[parentID]
-		switch kind {
-		case "drain.split-closing-held":
-			st.Held = &splitClosingHold{Mover: payload.Mover, Reason: payload.Reason}
-		case "drain.split-closing-refused":
-			st.RefusedReason = payload.Reason
-		}
+		applySplitClosingEvent(&st, kind, raw, wantHash)
 		out[parentID] = st
 	}
-	return out, erows.Err()
+	if err := erows.Err(); err != nil {
+		return nil, err
+	}
+	for id, st := range out {
+		if isRetriableSplitClosingLocatorHold(st.Held) {
+			st.Held = nil
+			out[id] = st
+		}
+	}
+	return out, nil
 }
 
 func readSplitClosingStatesFor(r *store.Reader, parentIDs []string) (map[string]splitClosingState, error) {
@@ -396,7 +444,7 @@ func readSplitClosingStatesFor(r *store.Reader, parentIDs []string) (map[string]
 	if len(hashes) == 0 {
 		return out, nil
 	}
-	events, err := r.EventsForObjects(0, parentIDs, "drain.split-closing-held", "drain.split-closing-refused")
+	events, err := r.EventsForObjects(0, parentIDs, "drain.split-closing-started", "drain.split-closing-finding", "drain.split-closing-held", "drain.split-closing-refused")
 	if isMissingTable(err) {
 		return out, nil
 	}
@@ -412,22 +460,15 @@ func readSplitClosingStatesFor(r *store.Reader, parentIDs []string) (map[string]
 		if !ok {
 			continue
 		}
-		var payload struct {
-			StatementHash string `json:"statement_hash"`
-			Reason        string `json:"reason"`
-			Mover         string `json:"mover"`
-		}
-		if err := json.Unmarshal(e.Payload, &payload); err != nil || payload.StatementHash != wantHash {
-			continue
-		}
 		st := out[parentID]
-		switch e.Kind {
-		case "drain.split-closing-held":
-			st.Held = &splitClosingHold{Mover: payload.Mover, Reason: payload.Reason}
-		case "drain.split-closing-refused":
-			st.RefusedReason = payload.Reason
-		}
+		applySplitClosingEvent(&st, e.Kind, e.Payload, wantHash)
 		out[parentID] = st
+	}
+	for id, st := range out {
+		if isRetriableSplitClosingLocatorHold(st.Held) {
+			st.Held = nil
+			out[id] = st
+		}
 	}
 	return out, nil
 }
@@ -860,13 +901,7 @@ func decorateWhyPassSplits(r *store.Reader, rows []whyPassRow) error {
 			id := defectiveRequired[0]
 			cs := closingStates[row.ItemID]
 			if cs.Held != nil {
-				if cs.Held.Mover == "owner" {
-					row.Class = "needs you"
-					row.Mover = "owner; " + cs.Held.Reason
-				} else {
-					row.Class = "waits on work"
-					row.Mover = cs.Held.Mover
-				}
+				row.Class, row.Mover = splitClosingHoldPresentation(cs.Held)
 				row.Why = summary + "; " + cs.Held.Reason
 			} else {
 				row.Class = "waits on work"
@@ -877,9 +912,22 @@ func decorateWhyPassSplits(r *store.Reader, rows []whyPassRow) error {
 				}
 			}
 		case sp.RequiredLanded == sp.RequiredParts:
-			row.Class = "needs you"
-			row.Mover = "operator; check the parent's criteria by hand"
-			row.Why = summary + "; check the parent's criteria by hand"
+			cs := closingStates[row.ItemID]
+			if cs.Held != nil {
+				row.Class, row.Mover = splitClosingHoldPresentation(cs.Held)
+				row.Why = summary + "; " + cs.Held.Reason
+			} else if cs.Finding != "" {
+				row.Class = "waits on work"
+				row.Mover = "design"
+				row.Why = summary + "; " + cs.Finding
+				if cs.RefusedReason != "" {
+					row.Why += "; prior extension refused: " + cs.RefusedReason
+				}
+			} else {
+				row.Class = "waits on work"
+				row.Mover = "review"
+				row.Why = summary + "; required parts have landed; waiting on the closing check"
+			}
 		case len(sp.HeldParts) > 0:
 			heldDetails := make([]string, 0, len(sp.HeldParts))
 			heldMovers := make([]string, 0, len(sp.HeldParts))

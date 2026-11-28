@@ -279,10 +279,12 @@ func (g *SiblingGaps) UnmarshalJSON(raw []byte) error {
 		if len(entry.Paths) == 0 {
 			return fmt.Errorf("sibling_gap %d: at least one path is required", i+1)
 		}
-		for _, locator := range entry.Paths {
-			if !validFindingLocator(locator) {
+		for j, locator := range entry.Paths {
+			norm, ok := normalizeFindingLocator(locator)
+			if !ok {
 				return fmt.Errorf("sibling_gap %d: %q is not a file:<repo-relative-path>[:line] locator", i+1, locator)
 			}
+			entries[i].Paths[j] = norm
 		}
 		if len(entry.Evidence) == 0 {
 			return fmt.Errorf("sibling_gap %d: at least one evidence locator is required", i+1)

@@ -3,8 +3,10 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -482,6 +484,114 @@ func TestSplitViewDefectiveRequiredPartAndWaiting(t *testing.T) {
 		}
 		if rows[0].Class != "needs you" || !strings.HasPrefix(rows[0].Mover, "owner; required part did not land: "+partBID) {
 			t.Fatalf("non-defective closed part row = %+v, want owner; required part did not land", rows[0])
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWaitingAndWhyPassShowHeldSplitClosingReasonAndActionableMover(t *testing.T) {
+	h := newServeHarness(t)
+	ctx := context.Background()
+
+	parentID := "item-seed-06"
+	partAID := splitPartID(parentID, "a")
+	st := splitStatement{
+		Parts: []splitPart{
+			{Label: "a", Title: "Part A", Share: "Do A", Required: boolPtr(true)},
+		},
+	}
+	rawStmt, err := json.Marshal(st)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stmtHash := fmt.Sprintf("%x", sha256.Sum256(rawStmt))
+	holdReason := "closing check closing-1 invalid verdict: malformed JSON"
+	holdPayload, _ := json.Marshal(map[string]any{
+		"item_id":        parentID,
+		"run_id":         "closing-1",
+		"statement_hash": stmtHash,
+		"reason":         holdReason,
+		"mover":          "operator",
+	})
+	waitingJSON, _ := json.Marshal(map[string]any{
+		"waiter": "owner",
+		"source": "split",
+		"reason": "split parent; check its criteria after the required parts land",
+	})
+
+	s, err := store.Open(ctx, h.store, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.WriteTx(ctx, func(tx *store.Tx) error {
+		if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS item_splits (parent_id TEXT PRIMARY KEY, statement BLOB NOT NULL)`); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`INSERT OR REPLACE INTO item_splits(parent_id, statement) VALUES (?, ?)`, parentID, rawStmt); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`ALTER TABLE items ADD COLUMN waiting_on TEXT NOT NULL DEFAULT ''`); err != nil && !strings.Contains(err.Error(), "duplicate column") {
+			return err
+		}
+		if _, err := tx.Exec(`UPDATE items SET state='blocked', waiting_on=? WHERE item_id=?`, string(waitingJSON), parentID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`INSERT OR REPLACE INTO items(item_id,title,state,updated_at) VALUES (?,?,?,?)`, partAID, "Part A", "landed", int64(1795770300000)); err != nil {
+			return err
+		}
+		_, err := tx.Exec(
+			`INSERT INTO events(ts, kind, object_type, object_id, payload) VALUES (?,?,?,?,?)`,
+			int64(1795770400000), "drain.split-closing-held", "item", parentID, string(holdPayload),
+		)
+		return err
+	}); err != nil {
+		s.Close()
+		t.Fatal(err)
+	}
+	s.Close()
+
+	// 1. waiting view shows the real held reason and actionable mover.
+	waitingRows, err := readWaiting(ctx, h.store, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found *waitingRow
+	for i := range waitingRows {
+		if waitingRows[i].ItemID == parentID {
+			found = &waitingRows[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("parent %s missing from waiting rows: %+v", parentID, waitingRows)
+	}
+	if found.Class != "needs you" || !strings.HasPrefix(found.Mover, "operator;") || !strings.Contains(found.Mover, holdReason) {
+		t.Fatalf("waiting row mover/class = %+v, want needs you / operator with real reason", *found)
+	}
+	if !strings.Contains(found.Why, holdReason) || strings.Contains(found.Why, "split parent; check its criteria") {
+		t.Fatalf("waiting row why = %q, want real reason", found.Why)
+	}
+
+	rs, err := store.OpenRead(ctx, h.store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rs.Close()
+	if err := rs.ReadTx(ctx, func(r *store.Reader) error {
+		// 2. whyFromPass decoration also shows the real held reason and actionable mover.
+		passRows := []whyPassRow{
+			{waitingRow: waitingRow{ItemID: parentID, Class: "waits on work", Why: "waiting", Mover: "review"}, State: "blocked", Reason: "blocked"},
+		}
+		if err := decorateWhyPassSplits(r, passRows); err != nil {
+			return err
+		}
+		if passRows[0].Class != "needs you" || !strings.HasPrefix(passRows[0].Mover, "operator;") || !strings.Contains(passRows[0].Mover, holdReason) {
+			t.Fatalf("whyPass row mover/class = %+v, want needs you / operator with real reason", passRows[0])
+		}
+		if !strings.Contains(passRows[0].Why, holdReason) || strings.Contains(passRows[0].Why, "check the parent's criteria by hand") {
+			t.Fatalf("whyPass row why = %q, want real reason", passRows[0].Why)
 		}
 		return nil
 	}); err != nil {
