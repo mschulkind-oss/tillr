@@ -1227,7 +1227,9 @@ func (l *Loop) Run(ctx context.Context) (result LoopResult, err error) {
 		l.actors.Active.Store(true)
 		defer l.actors.Active.Store(false)
 		stopSync = l.startSyncActor(ctx, &result)
-		stopTrunkProof = l.startTrunkProofActor(ctx, &result)
+		if !l.nonLanding {
+			stopTrunkProof = l.startTrunkProofActor(ctx, &result)
+		}
 		stopGC = l.startGCActor(ctx)
 		stopStage = l.startStageCoordinator(ctx, &result)
 		stopLaunch = l.startLaunchCoordinator(ctx, &result)
@@ -5432,8 +5434,12 @@ func (l *Loop) seedActorCaches(ctx context.Context, result *LoopResult) error {
 	if err := l.refreshQuotas(ctx); err != nil {
 		return err
 	}
-	if err := l.runTrunkProofStep(ctx, result, true); err != nil {
-		return err
+	if !l.nonLanding {
+		if err := l.runTrunkProofStep(ctx, result, true); err != nil {
+			return err
+		}
+	} else {
+		l.actors.SetCachedTrunk(bgactors.TrunkCache{Valid: true})
 	}
 	if err := l.runSyncStep(ctx, result, true); err != nil {
 		return err
@@ -5451,10 +5457,14 @@ func (l *Loop) runInlineHousekeeping(ctx context.Context, result *LoopResult) er
 	if err := l.runGCStep(ctx); err != nil {
 		return err
 	}
-	if err := l.runSyncStep(ctx, result, false); err != nil {
-		return err
+	if !l.nonLanding {
+		if err := l.runTrunkProofStep(ctx, result, false); err != nil {
+			return err
+		}
+	} else {
+		l.actors.SetCachedTrunk(bgactors.TrunkCache{Valid: true})
 	}
-	if err := l.runTrunkProofStep(ctx, result, false); err != nil {
+	if err := l.runSyncStep(ctx, result, false); err != nil {
 		return err
 	}
 	return nil
@@ -5474,8 +5484,10 @@ func (l *Loop) settleActorsBeforeDrained(ctx context.Context, result *LoopResult
 	if err := l.runGCStep(ctx); err != nil {
 		return false, err
 	}
-	if err := l.runTrunkProofStep(ctx, result, false); err != nil {
-		return false, err
+	if !l.nonLanding {
+		if err := l.runTrunkProofStep(ctx, result, false); err != nil {
+			return false, err
+		}
 	}
 	if err := l.runSyncStep(ctx, result, false); err != nil {
 		return false, err

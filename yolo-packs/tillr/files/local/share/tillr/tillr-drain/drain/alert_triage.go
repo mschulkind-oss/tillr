@@ -85,6 +85,7 @@ func (l *Loop) signalTriageWake() {
 	case l.triageWake <- struct{}{}:
 	default:
 	}
+	l.signalGCWake()
 }
 
 func (l *Loop) consumeTriageWake() bool {

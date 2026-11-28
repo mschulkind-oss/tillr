@@ -266,7 +266,7 @@ func (l *Loop) startSyncActor(ctx context.Context, result *LoopResult) func() {
 
 	var watcher bgactors.DocsWatcher
 	var watcherDone chan struct{}
-	if l.notifyEnabled() && l.cfg.Root != "" {
+	if !l.nonLanding && l.notifyEnabled() && l.cfg.Root != "" {
 		if w := bgactors.NewDocsWatcher(l.cfg.Root); w != nil {
 			watcher = w
 			watcherDone = make(chan struct{})
@@ -394,16 +394,18 @@ func (l *Loop) runSyncStep(ctx context.Context, result *LoopResult, startup bool
 		l.actors.DocsGen.Add(1)
 		l.signalPassWake()
 	}
-	if changed, err := l.refreshSyncPlannerCaches(ctx); err != nil {
-		return err
-	} else if changed {
-		l.actors.DocsGen.Add(1)
-		l.signalPassWake()
-	}
-	if err := l.retireDesigners(ctx); err != nil {
-		return err
+	if startup || l.actorsActive() {
+		if changed, err := l.refreshSyncPlannerCaches(ctx); err != nil {
+			return err
+		} else if changed {
+			l.actors.DocsGen.Add(1)
+			l.signalPassWake()
+		}
 	}
 	if !l.nonLanding {
+		if err := l.retireDesigners(ctx); err != nil {
+			return err
+		}
 		if err := l.releaseGeneratedTriage(ctx); err != nil {
 			return err
 		}
@@ -489,17 +491,56 @@ func (l *Loop) refreshCommentReadiness(ctx context.Context) (bool, error) {
 // prerequisites outside the scheduling pass so pure passes invoke zero git or
 // Vantage subprocesses.
 func (l *Loop) refreshSyncPlannerCaches(ctx context.Context) (bool, error) {
-	if l.cfg.Root == "" {
+	if l.nonLanding || l.cfg.Root == "" || l.cfg.Store == "" {
 		return false, nil
 	}
+	s, err := store.OpenRead(ctx, l.cfg.Store)
+	if err != nil {
+		return false, err
+	}
+	defer s.Close()
+
+	var declaredDef definition.Definition
+	var needsQuestions bool
+	err = s.ReadTx(ctx, func(r *store.Reader) error {
+		declared, readErr := definition.ForReader(r)
+		if readErr != nil {
+			return readErr
+		}
+		declaredDef = declared.Parsed
+		checkDoc := hasPrerequisite(declaredDef, definition.PrerequisiteDesignDocument)
+		checkQuestions := hasPrerequisite(declaredDef, definition.PrerequisiteDesignQuestions)
+		if !checkDoc && !checkQuestions {
+			return nil
+		}
+		rows, readErr := readItems(r)
+		if readErr != nil {
+			return readErr
+		}
+		for _, row := range rows {
+			if finishedState(declaredDef, row.State) || itemIsComment(row.ItemID) || row.DesignDoc == "" {
+				continue
+			}
+			needsQuestions = true
+			break
+		}
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+
 	var preloaded *VantageQuestions
 	tip := l.cachedTrunkTip()
+	if tip == "" {
+		tip = l.syncedSHA
+	}
 	if tip != "" {
 		if saved, ok := LoadSavedQuestionsIndex(l.cfg.Root, tip, l.cfg.QuestionsCmd, true); ok {
 			preloaded = saved
 		}
 	}
-	if preloaded == nil {
+	if preloaded == nil && needsQuestions {
 		if raw, err := vantage.RunIndexCommand(ctx, l.cfg.Root, l.cfg.QuestionsCmd); err == nil {
 			idx := vantage.ParseIndex(raw, vantage.IndexCommandName(l.cfg.QuestionsCmd))
 			if tip != "" {
@@ -514,24 +555,19 @@ func (l *Loop) refreshSyncPlannerCaches(ctx context.Context) (bool, error) {
 	}
 	l.actors.SetCachedVantageQuestions(preloaded)
 
-	if l.cfg.Store == "" {
-		return false, nil
-	}
-	s, err := store.OpenRead(ctx, l.cfg.Store)
-	if err != nil {
-		return false, err
-	}
-	defer s.Close()
-
 	next := bgactors.DocPrereqsCache{Valid: true}
 	err = s.ReadTx(ctx, func(r *store.Reader) error {
-		declared, err := definition.ForReader(r)
-		if err != nil {
-			return err
-		}
-		if hasPrerequisite(declared.Parsed, definition.PrerequisiteDesignDocument) && declared.Parsed.Completes == "landing" {
+		if hasPrerequisite(declaredDef, definition.PrerequisiteDesignDocument) && declaredDef.Completes == "landing" {
 			proseRewrite := l.proseRewriteSettings()
-			unshared, rewriteHolds, rewriteOwnerHolds, err := documentPrerequisites(r, l.cfg.Root, &proseRewrite, preloaded)
+			var qSource QuestionSource
+			if preloaded != nil {
+				qSource = preloaded
+			} else {
+				l.mu.Lock()
+				qSource = l.questions
+				l.mu.Unlock()
+			}
+			unshared, rewriteHolds, rewriteOwnerHolds, err := documentPrerequisites(r, l.cfg.Root, &proseRewrite, qSource)
 			if err != nil {
 				return err
 			}

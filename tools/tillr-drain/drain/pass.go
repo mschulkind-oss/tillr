@@ -3325,6 +3325,7 @@ plans:
 		return l.waitForTrigger(ctx, leases, at, result)
 	}
 	if l.consumeTriageWake() {
+		l.dispatchAlertTriage(ctx)
 		l.waitingDetail = ""
 		return "", nil
 	}

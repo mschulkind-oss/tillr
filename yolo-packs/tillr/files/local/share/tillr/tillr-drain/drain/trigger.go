@@ -414,6 +414,7 @@ func (l *Loop) waitForTrigger(ctx context.Context, leases []LaneLease, at time.T
 				}
 				return "", err
 			}
+			l.dispatchAlertTriage(ctx)
 			return "", nil
 		case <-notifyWake:
 			if err := l.checkStopRequested(ctx); err != nil {

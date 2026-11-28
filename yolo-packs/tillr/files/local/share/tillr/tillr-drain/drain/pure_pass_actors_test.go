@@ -356,3 +356,49 @@ func TestPurePassSlotRefillAndNoNotifyParity(t *testing.T) {
 		t.Fatalf("recorded item state parity mismatch: notify=%v, no-notify=%v", notifyStates, pollStates)
 	}
 }
+
+func TestSeedActorCachesNonLandingSkipsGitAndVantage(t *testing.T) {
+	t.Setenv("TILLR_LOOP_STORE", "")
+	ctx := context.Background()
+	_, l := passFixture(t, "item-a")
+	l.nonLanding = true
+	l.cfg.Report = io.Discard
+	l.cfg.QuestionsCmd = []string{"vantage-trap"}
+
+	trapDir := t.TempDir()
+	trapLog := filepath.Join(trapDir, "invoked.log")
+	for _, bin := range []string{"git", "uvx", "vantage-trap"} {
+		script := "#!/bin/sh\necho " + bin + " \"$@\" >> " + trapLog + "\nexit 99\n"
+		if err := os.WriteFile(filepath.Join(trapDir, bin), []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", trapDir)
+
+	if err := l.seedActorCaches(ctx, &LoopResult{}); err != nil {
+		t.Fatalf("seedActorCaches(nonLanding): %v", err)
+	}
+	if invoked, err := os.ReadFile(trapLog); err == nil && len(invoked) > 0 {
+		t.Fatalf("non-landing seedActorCaches invoked external subprocesses:\n%s", invoked)
+	}
+}
+
+func TestRefreshSyncPlannerCachesSkipsFinishedDesignDocs(t *testing.T) {
+	t.Setenv("TILLR_LOOP_STORE", "")
+	ctx := context.Background()
+	f, l := passFixture(t, "item-a", "item-done")
+	l.cfg.Report = io.Discard
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := tx.Exec(`UPDATE items SET state = 'landed', design_doc = 'docs/design/done.md' WHERE item_id = 'item-done'`)
+		return err
+	})
+	countFile := filepath.Join(t.TempDir(), "vantage-calls")
+	l.cfg.QuestionsCmd = []string{"sh", "-c", `echo x >> "$1"; printf '{"index":{"documents":[]}}'`, "_", countFile}
+
+	if _, err := l.refreshSyncPlannerCaches(ctx); err != nil {
+		t.Fatalf("refreshSyncPlannerCaches: %v", err)
+	}
+	if raw, err := os.ReadFile(countFile); err == nil && len(raw) > 0 {
+		t.Fatalf("refreshSyncPlannerCaches invoked QuestionsCmd for finished item design_doc")
+	}
+}
