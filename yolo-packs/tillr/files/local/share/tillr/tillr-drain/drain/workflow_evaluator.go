@@ -164,7 +164,7 @@ func (l *Loop) settleEvaluator(ctx context.Context, d Decision, rec run.Record, 
 		if err := r.QueryRow(`SELECT outcome FROM node_runs WHERE run_id=?`, d.RunRequest.RunID).Scan(&outcome); err != nil {
 			return err
 		}
-		if err := r.QueryRow(`SELECT EXISTS(SELECT 1 FROM events WHERE kind=? AND object_type='run' AND object_id=? AND json_extract(payload,'$.step')=?)`, RefusalKind, d.RunRequest.RunID, RefusalVerifyNotDone).Scan(&refused); err != nil {
+		if err := r.QueryRow(`SELECT EXISTS(SELECT 1 FROM events WHERE kind=? AND object_type='run' AND object_id=? AND json_extract(payload,'$.step') IN (?, ?))`, RefusalKind, d.RunRequest.RunID, RefusalVerifyNotDone, RefusalGate).Scan(&refused); err != nil {
 			return err
 		}
 		var pauseErr error
@@ -190,24 +190,31 @@ func (l *Loop) settleEvaluator(ctx context.Context, d Decision, rec run.Record, 
 	if err != nil {
 		return true, err
 	}
-	c, accepted, err := l.judgeCandidate(ctx, c, result)
-	if errors.Is(err, errJudgeBackendHeld) || errors.Is(err, errJudgePaused) {
-		return true, err
-	}
-	if err != nil {
-		return true, err
-	}
-	if !accepted {
-		// The judge step has already recorded its own hold reason. Do not replace it
-		// with a generic failed-node hold or follow a workflow fail edge.
-		return true, l.finishEvaluatorHold(ctx, d, c)
-	}
-	if err := l.nodeOutcome(ctx, d, "passed"); err != nil {
-		return true, err
+	if outcome != "passed" {
+		var accepted bool
+		c, accepted, err = l.judgeCandidate(ctx, c, result)
+		if errors.Is(err, errJudgeBackendHeld) || errors.Is(err, errJudgePaused) {
+			return true, err
+		}
+		if err != nil {
+			return true, err
+		}
+		if !accepted {
+			// The judge step has already recorded its own hold reason. Do not replace it
+			// with a generic failed-node hold or follow a workflow fail edge.
+			return true, l.finishEvaluatorHold(ctx, d, c)
+		}
+		if err := l.nodeOutcome(ctx, d, "passed"); err != nil {
+			return true, err
+		}
 	}
 	if c.NoChange != nil {
-		if err := l.stampMirroredDesignBuiltOnNoChange(ctx, d, c); err != nil {
+		refusedStamp, stampCand, err := l.stampMirroredDesignBuiltOnNoChange(ctx, d, c, result)
+		if err != nil {
 			return true, err
+		}
+		if refusedStamp {
+			return true, l.finishEvaluatorHold(ctx, d, stampCand)
 		}
 		if err := l.completeNoChangeExit(ctx, d, c); err != nil {
 			return true, err

@@ -1008,6 +1008,9 @@ func (l *Loop) runTrunkProofStep(ctx context.Context, result *LoopResult, startu
 		if err := l.releaseAdvancedGateDigestFaults(ctx); err != nil {
 			return err
 		}
+		if err := l.releaseStampGateSettleFaults(ctx); err != nil {
+			return err
+		}
 		if err := l.releaseStaleBaseConflicts(ctx); err != nil {
 			return err
 		}

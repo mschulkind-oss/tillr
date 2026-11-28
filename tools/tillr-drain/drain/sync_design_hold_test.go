@@ -178,13 +178,19 @@ type mirroredPlanSteps struct {
 	gates       int
 	lands       int
 	planBrief   string
+	workBrief   string
 	verifyBrief string
+	gateFn      func(c Candidate) (GateOutcome, error)
+	workFn      func(req run.Request, target, brief string) (run.Record, string, error)
 }
 
 func (s *mirroredPlanSteps) Gate(ctx context.Context, c Candidate) (GateOutcome, error) {
 	s.gates++
 	if s.mode == "multi-commit" {
 		s.t.Fatal("gate must not run when plan holds multi-commit design")
+	}
+	if s.gateFn != nil {
+		return s.gateFn(c)
 	}
 	return GateOutcome{Outcome: GatePassed}, nil
 }
@@ -197,6 +203,9 @@ func (s *mirroredPlanSteps) Land(ctx context.Context, c Candidate) (LandOutcome,
 	// Apply the candidate's commit onto the test trunk checkout (mirroring workflowSteps.Land).
 	runGit(s.t, s.f.root, "fetch", c.Worktree, c.HeadSHA)
 	runGit(s.t, s.f.root, "merge", "--ff-only", "FETCH_HEAD")
+	if s.works > 0 {
+		fixtureLanding(s.t, s.f.storePath, c)
+	}
 	return LandOutcome{Result: LandLanded, TrunkAfter: runGit(s.t, s.f.root, "rev-parse", "HEAD")}, nil
 }
 
@@ -222,6 +231,10 @@ func (s *mirroredPlanSteps) Run(_ context.Context, req run.Request) (run.Record,
 
 	case "work":
 		s.works++
+		s.workBrief = brief
+		if s.workFn != nil {
+			return s.workFn(req, target, brief)
+		}
 		s.t.Fatalf("work must not run in mode %q", s.mode)
 		return s.exitedRecord(req, "RESULT: done\n"), "RESULT: done\n", nil
 
@@ -446,5 +459,207 @@ func TestMirroredAcceptedDesignNoChangeStampsBuiltWithoutRebuilding(t *testing.T
 	})
 	if state != "closed" || !strings.HasPrefix(closeReason, "no_change: ") {
 		t.Fatalf("item state/close_reason = %q / %q, want closed / no_change: ...", state, closeReason)
+	}
+}
+
+func writeDocumentsGateFailure(t *testing.T, root, runID, output string) string {
+	t.Helper()
+	runDir := RunDir(root, runID)
+	logDir := filepath.Join(runDir, "logs")
+	if err := os.MkdirAll(logDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	logPath := filepath.Join(logDir, "documents.log")
+	if err := os.WriteFile(logPath, []byte(output), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	verdict := mustJSON(map[string]any{
+		"payload": map[string]any{
+			"result": "fail",
+			"checks": []map[string]any{
+				{"check_id": "documents", "result": "fail", "log_ref": logPath},
+			},
+		},
+	})
+	if err := os.WriteFile(filepath.Join(runDir, GateVerdictRecord), []byte(verdict), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return logPath
+}
+
+// TestMirroredAcceptedDesignNoChangeStampDocumentFailureReturnsToBuilder verifies
+// that when the loop's BUILT stamp fails the gate's documents check, the check's
+// output is returned to the item's builder as a gate refusal (no settle-failed
+// hold and no retry of the unchanged stamp) so the builder can repair the link
+// and land the stamped document.
+func TestMirroredAcceptedDesignNoChangeStampDocumentFailureReturnsToBuilder(t *testing.T) {
+	f, l, base, id := setupMirroredAcceptedDesignFixture(t, "broken-link")
+	docPath := "docs/design/broken-link.md"
+	docErr := docPath + ": dead link ../../tools/tillr-drain/drain/seat_escalation.go"
+
+	var steps *mirroredPlanSteps
+	var workSawBuilt bool
+	var gateLogPath string
+	steps = &mirroredPlanSteps{
+		workflowSteps: base,
+		mode:          "no-change",
+		gateFn: func(c Candidate) (GateOutcome, error) {
+			if steps.gates == 1 {
+				gateLogPath = writeDocumentsGateFailure(t, f.root, c.RunID, docErr+"\n")
+				return GateOutcome{
+					Outcome:       GateFailed,
+					FailingChecks: []string{"documents"},
+					CheckLogs:     map[string]string{"documents": gateLogPath},
+				}, nil
+			}
+			return GateOutcome{Outcome: GatePassed}, nil
+		},
+		workFn: func(req run.Request, target, brief string) (run.Record, string, error) {
+			raw, err := os.ReadFile(filepath.Join(target, docPath))
+			if err != nil {
+				return run.Record{}, "", err
+			}
+			workSawBuilt = strings.Contains(string(raw), "stage: BUILT")
+			repaired := string(raw) + "\nRepaired link.\n"
+			if err := os.WriteFile(filepath.Join(target, docPath), []byte(repaired), 0o644); err != nil {
+				return run.Record{}, "", err
+			}
+			runGit(t, target, "add", "--", docPath)
+			runGit(t, target, "commit", "-qm", "docs: repair broken link in "+docPath)
+			return steps.exitedRecord(req, "RESULT: done\n"), "RESULT: done\n", nil
+		},
+	}
+	l.cfg.Steps = steps
+
+	result := &LoopResult{}
+	// Run until the stamp gate fails and the refusal is recorded (before work runs).
+	for i := 0; i < 10 && steps.gates == 0; i++ {
+		graphPass(t, l, result)
+	}
+	if steps.gates != 1 {
+		t.Fatalf("after first verify, gates = %d, want 1", steps.gates)
+	}
+
+	// Must NOT hold on settle-failed.
+	fixtureRead(t, f, func(r *store.Reader) error {
+		faults, err := ReadItemFaults(r)
+		if err != nil {
+			return err
+		}
+		if fault, ok := faults[id]; ok {
+			t.Fatalf("unexpected fault hold after stamp documents failure: %+v", fault)
+		}
+		return nil
+	})
+	if !hasRefusalStep(t, f, id, RefusalGate) {
+		t.Fatalf("expected %s refusal event after stamp documents failure", RefusalGate)
+	}
+
+	// Next decision must dispatch the build seat (work) on the stamped commit with the documents output.
+	next := decisionFor(t, l, id).decision
+	if next.Action != ActionDispatch || next.RunRequest == nil || next.RunRequest.NodeID != "work" {
+		t.Fatalf("next decision = %s / %s (req=%+v), want dispatch work", next.Action, next.Reason, next.RunRequest)
+	}
+	if next.Returned == nil || next.Returned.Cause != RefusalGate {
+		t.Fatalf("next returned = %+v, want cause %s", next.Returned, RefusalGate)
+	}
+
+	// Finish draining: work repairs the doc, verify passes, gate passes, land succeeds.
+	for i := 0; i < 20 && itemStateInStore(t, f, id) == "in-queue"; i++ {
+		graphPass(t, l, result)
+	}
+	if steps.plans != 1 || steps.works != 1 || steps.verifies != 2 || steps.gates != 2 || steps.lands != 1 {
+		t.Fatalf("counts = plans:%d works:%d verifies:%d gates:%d lands:%d, want 1/1/2/2/1",
+			steps.plans, steps.works, steps.verifies, steps.gates, steps.lands)
+	}
+	if !workSawBuilt {
+		t.Fatalf("work stage did not start from the stamped stage: BUILT commit")
+	}
+	if !strings.Contains(steps.workBrief, docErr) || !strings.Contains(steps.workBrief, gateLogPath) {
+		t.Fatalf("work brief missing documents check output (%q) or log path (%q):\n%s", docErr, gateLogPath, steps.workBrief)
+	}
+	if state := itemStateInStore(t, f, id); state != "landed" {
+		t.Fatalf("final item state = %q, want landed", state)
+	}
+	docBytes, err := os.ReadFile(filepath.Join(f.root, docPath))
+	if err != nil {
+		t.Fatalf("read landed design doc: %v", err)
+	}
+	if !strings.Contains(string(docBytes), "stage: BUILT") || !strings.Contains(string(docBytes), "Repaired link.") {
+		t.Fatalf("landed design doc missing BUILT stamp or repair:\n%s", string(docBytes))
+	}
+}
+
+// TestMirroredAcceptedDesignHeldStampGateSettleFailedMovesOnItsOwn verifies that an
+// item already held on settle-failed from a prior BUILT-stamp documents gate failure
+// clears its hold automatically, returns the recorded check output to the builder
+// without re-running the gate on the unchanged stamp, and dispatches work.
+func TestMirroredAcceptedDesignHeldStampGateSettleFailedMovesOnItsOwn(t *testing.T) {
+	f, l, base, id := setupMirroredAcceptedDesignFixture(t, "already-held")
+	docPath := "docs/design/already-held.md"
+	docErr := docPath + ": dead link ../../tools/tillr-drain/drain/seat_escalation.go"
+
+	var logPath string
+	var steps *mirroredPlanSteps
+	steps = &mirroredPlanSteps{
+		workflowSteps: base,
+		mode:          "no-change",
+		gateFn: func(c Candidate) (GateOutcome, error) {
+			if steps.gates == 1 {
+				// Simulate the pre-fix settle-failed outcome: gate wrote its failing
+				// documents verdict and settlement returned an external error.
+				logPath = writeDocumentsGateFailure(t, f.root, c.RunID, docErr+"\n")
+				return GateOutcome{}, Externalf("stamping %s BUILT failed gate (fail): documents", docPath)
+			}
+			t.Fatalf("gate must not re-run on unchanged stamp for %s", c.RunID)
+			return GateOutcome{Outcome: GatePassed}, nil
+		},
+	}
+	l.cfg.Steps = steps
+
+	// Drive plan (no_change) -> verify (passes) -> stamp commit -> pre-fix settle-failed hold.
+	result := &LoopResult{}
+	for i := 0; i < 10 && steps.gates == 0; i++ {
+		graphPass(t, l, result)
+	}
+	if steps.gates != 1 {
+		t.Fatalf("gates before recovery = %d, want 1", steps.gates)
+	}
+
+	// Confirm the item is genuinely held on settle-failed with the pre-fix detail.
+	if held := decisionFor(t, l, id).decision; held.Action != ActionHold || held.Reason != ReasonSettleFailed {
+		t.Fatalf("seeded decision = %s / %s, want hold / %s", held.Action, held.Reason, ReasonSettleFailed)
+	}
+
+	// Next pass must clear the settle-failed hold automatically (via observeAndSyncTrunk ->
+	// releaseStampGateSettleFaults) and settle verify into RefusalGate without re-running Gate.
+	graphPass(t, l, result)
+
+	fixtureRead(t, f, func(r *store.Reader) error {
+		faults, err := ReadItemFaults(r)
+		if err != nil {
+			return err
+		}
+		if fault, ok := faults[id]; ok {
+			t.Fatalf("settle-failed hold still active after recovery: %+v", fault)
+		}
+		return nil
+	})
+	if steps.gates != 1 {
+		t.Fatalf("gates after recovery = %d, want 1 (must not retry unchanged stamp)", steps.gates)
+	}
+	if !hasRefusalStep(t, f, id, RefusalGate) {
+		t.Fatalf("expected %s refusal event after recovering held stamp", RefusalGate)
+	}
+
+	next := decisionFor(t, l, id).decision
+	if next.Action != ActionDispatch || next.RunRequest == nil || next.RunRequest.NodeID != "work" {
+		t.Fatalf("next decision after recovery = %s / %s (req=%+v), want dispatch work", next.Action, next.Reason, next.RunRequest)
+	}
+	if next.Returned == nil || next.Returned.Cause != RefusalGate || !strings.Contains(next.Returned.Detail, docErr) {
+		t.Fatalf("next returned = %+v, want RefusalGate containing %q", next.Returned, docErr)
+	}
+	if len(next.Returned.Checks) != 1 || next.Returned.Checks[0].CheckID != "documents" || next.Returned.Checks[0].LogRef != logPath {
+		t.Fatalf("next returned checks = %+v, want documents with log %q", next.Returned.Checks, logPath)
 	}
 }

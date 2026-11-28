@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/mschulkind-oss/tillr-item/item"
@@ -302,45 +303,184 @@ func stampDesignStageBuilt(raw []byte) ([]byte, bool) {
 	return []byte(strings.Join(updated, "\n")), true
 }
 
-func (l *Loop) stampMirroredDesignBuiltOnNoChange(ctx context.Context, d Decision, c Candidate) error {
-	if !strings.HasPrefix(c.ItemID, "item-design-") || l.nonLanding || c.Worktree == "" {
+const stampGateLogExcerptMax = 4096
+
+func stampGateFailingChecks(runDir, runID string, gate GateOutcome) []EndingCheck {
+	if checks := gateFailingChecks(runDir, runID); len(checks) > 0 {
+		return checks
+	}
+	byID := map[string]EndingCheck{}
+	for _, id := range gate.FailingChecks {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if _, seen := byID[id]; seen {
+			continue
+		}
+		logRef := gate.CheckLogs[id]
+		c := EndingCheck{CheckID: id, LogRef: logRef}
+		if logRef != "" {
+			if output, err := os.ReadFile(logRef); err == nil {
+				c.Digest = evidenceDigest(string(output), runID)
+			}
+			c.Failing = readTriageBlock(logRef)
+		}
+		byID[id] = c
+	}
+	checks := make([]EndingCheck, 0, len(byID))
+	for _, c := range byID {
+		checks = append(checks, c)
+	}
+	sort.Slice(checks, func(i, j int) bool { return checks[i].CheckID < checks[j].CheckID })
+	return checks
+}
+
+func stampGateRefusalDetail(docPath, outcome string, checks []EndingCheck) string {
+	ids := make([]string, 0, len(checks))
+	for _, c := range checks {
+		ids = append(ids, c.CheckID)
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "stamping %s BUILT failed gate (%s): %s", docPath, outcome, strings.Join(ids, ", "))
+	budget := stampGateLogExcerptMax
+	for _, c := range checks {
+		if len(c.Failing) > 0 || c.LogRef == "" || budget <= 0 {
+			continue
+		}
+		raw, err := os.ReadFile(c.LogRef)
+		if err != nil {
+			continue
+		}
+		text := strings.TrimSpace(string(raw))
+		if text == "" {
+			continue
+		}
+		if len(text) > budget {
+			text = strings.TrimSpace(text[:budget]) + "\n...(truncated; see " + c.LogRef + ")"
+		}
+		fmt.Fprintf(&b, "\n%s output:\n%s", c.CheckID, text)
+		budget -= len(text)
+	}
+	return b.String()
+}
+
+func isStampBuiltGateFailureDetail(detail string) bool {
+	return strings.Contains(detail, "stamping ") && strings.Contains(detail, " BUILT failed gate (fail): ")
+}
+
+func stampGateSettleFaults(r *store.Reader) ([]ItemFault, error) {
+	faults, err := ReadItemFaults(r)
+	if err != nil {
+		return nil, err
+	}
+	var out []ItemFault
+	for _, f := range faults {
+		if f.Reason == ReasonSettleFailed && isStampBuiltGateFailureDetail(f.Detail) {
+			out = append(out, f)
+		}
+	}
+	return out, nil
+}
+
+// releaseStampGateSettleFaults clears settle-failed holds left by the earlier
+// BUILT-stamp gate error path so those items re-enter settlement and return
+// their recorded document check output to their builder without operator action.
+func (l *Loop) releaseStampGateSettleFaults(ctx context.Context) error {
+	if l.cfg.Store == "" {
 		return nil
+	}
+	r, err := store.OpenRead(ctx, l.cfg.Store)
+	if err != nil {
+		return err
+	}
+	var toClear []ItemFault
+	err = r.ReadTx(ctx, func(tx *store.Reader) error {
+		var err error
+		toClear, err = stampGateSettleFaults(tx)
+		return err
+	})
+	r.Close()
+	if err != nil || len(toClear) == 0 {
+		return err
+	}
+	st, err := store.Open(ctx, l.cfg.Store, true)
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	at := l.cfg.Now().UTC()
+	var cleared []ItemFault
+	err = st.WriteTx(ctx, func(tx *store.Tx) error {
+		current, err := stampGateSettleFaults(tx.Reader())
+		if err != nil {
+			return err
+		}
+		for _, f := range current {
+			if err := clearItemFault(tx, f, at); err != nil {
+				return err
+			}
+			cleared = append(cleared, f)
+		}
+		return nil
+	})
+	if err == nil {
+		for _, f := range cleared {
+			l.reportf("loop: cleared %s hold on %s: BUILT stamp gate failure now returns to builder\n", f.Reason, f.ItemID)
+		}
+	}
+	return err
+}
+
+func (l *Loop) stampMirroredDesignBuiltOnNoChange(ctx context.Context, d Decision, c Candidate, result *LoopResult) (bool, Candidate, error) {
+	if !strings.HasPrefix(c.ItemID, "item-design-") || l.nonLanding || c.Worktree == "" {
+		return false, Candidate{}, nil
 	}
 	var designDoc string
 	if err := l.readStore(ctx, func(r *store.Reader) error {
 		return r.QueryRow(`SELECT COALESCE(design_doc, '') FROM items WHERE item_id = ?`, c.ItemID).Scan(&designDoc)
 	}); err != nil {
-		return err
+		return false, Candidate{}, err
 	}
 	docPath, _, _ := strings.Cut(designDoc, "#")
 	docPath = strings.TrimSpace(docPath)
 	if docPath == "" {
-		return nil
+		return false, Candidate{}, nil
 	}
 	fullPath := filepath.Join(c.Worktree, filepath.FromSlash(docPath))
 	raw, err := os.ReadFile(fullPath)
 	if os.IsNotExist(err) {
-		return nil
+		return false, Candidate{}, nil
 	}
 	if err != nil {
-		return err
+		return false, Candidate{}, err
 	}
 	updated, changed := stampDesignStageBuilt(raw)
-	if !changed {
-		return nil
-	}
-	if err := os.WriteFile(fullPath, updated, 0o644); err != nil {
-		return err
-	}
-	if _, err := l.git(ctx, c.Worktree, "add", "--", docPath); err != nil {
-		return err
-	}
-	if _, err := l.git(ctx, c.Worktree, "commit", "-m", "docs: mark "+docPath+" built"); err != nil {
-		return err
-	}
-	newHead, err := l.git(ctx, c.Worktree, "rev-parse", "HEAD")
-	if err != nil {
-		return err
+	var stampHead string
+	if changed {
+		if err := os.WriteFile(fullPath, updated, 0o644); err != nil {
+			return false, Candidate{}, err
+		}
+		if _, err := l.git(ctx, c.Worktree, "add", "--", docPath); err != nil {
+			return false, Candidate{}, err
+		}
+		if _, err := l.git(ctx, c.Worktree, "commit", "-m", "docs: mark "+docPath+" built"); err != nil {
+			return false, Candidate{}, err
+		}
+		newHead, err := l.git(ctx, c.Worktree, "rev-parse", "HEAD")
+		if err != nil {
+			return false, Candidate{}, err
+		}
+		stampHead = strings.TrimSpace(newHead)
+	} else {
+		curHead, err := l.git(ctx, c.Worktree, "rev-parse", "HEAD")
+		if err != nil {
+			return false, Candidate{}, err
+		}
+		stampHead = strings.TrimSpace(curHead)
+		if stampHead == "" || stampHead == c.BaseSHA {
+			return false, Candidate{}, nil
+		}
 	}
 	stampCand := Candidate{
 		ItemID:   c.ItemID,
@@ -348,21 +488,40 @@ func (l *Loop) stampMirroredDesignBuiltOnNoChange(ctx context.Context, d Decisio
 		RunID:    c.RunID,
 		Worktree: c.Worktree,
 		BaseSHA:  c.BaseSHA,
-		HeadSHA:  strings.TrimSpace(newHead),
+		HeadSHA:  stampHead,
+	}
+	if !changed {
+		if priorChecks := gateFailingChecks(RunDir(l.cfg.Root, stampCand.RunID), stampCand.RunID); len(priorChecks) > 0 {
+			stampCand.requiredFailures = priorChecks
+			stampCand.RefusalDetail = stampGateRefusalDetail(docPath, GateFailed, priorChecks)
+			if err := l.refuse(ctx, stampCand, result, RefusalGate); err != nil {
+				return false, Candidate{}, err
+			}
+			return true, stampCand, nil
+		}
 	}
 	gate, err := l.cfg.Steps.Gate(ctx, stampCand)
 	if err != nil {
-		return err
+		return false, Candidate{}, err
+	}
+	if gate.Outcome == GateFailed {
+		checks := stampGateFailingChecks(RunDir(l.cfg.Root, stampCand.RunID), stampCand.RunID, gate)
+		stampCand.requiredFailures = checks
+		stampCand.RefusalDetail = stampGateRefusalDetail(docPath, gate.Outcome, checks)
+		if err := l.refuse(ctx, stampCand, result, RefusalGate); err != nil {
+			return false, Candidate{}, err
+		}
+		return true, stampCand, nil
 	}
 	if gate.Outcome != GatePassed && gate.Outcome != GatePassedInherited {
-		return Externalf("stamping %s BUILT failed gate (%s): %s", docPath, gate.Outcome, strings.Join(gate.FailingChecks, ", "))
+		return false, Candidate{}, Externalf("stamping %s BUILT failed gate (%s): %s", docPath, gate.Outcome, strings.Join(gate.FailingChecks, ", "))
 	}
 	land, err := l.cfg.Steps.Land(ctx, stampCand)
 	if err != nil {
-		return err
+		return false, Candidate{}, err
 	}
 	if land.Result != LandLanded {
-		return Externalf("stamping %s BUILT refused to land (%s): %s", docPath, land.Result, land.Reason)
+		return false, Candidate{}, Externalf("stamping %s BUILT refused to land (%s): %s", docPath, land.Result, land.Reason)
 	}
-	return nil
+	return false, Candidate{}, nil
 }
