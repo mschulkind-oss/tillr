@@ -317,6 +317,7 @@ func (r HeavyRunner) RunAttempt(ctx context.Context, requested string) (out Heav
 		}
 		activeStop = stopRunning
 		attemptCtx, storeProgress := r.StartStoreProgress(ctx, tip)
+		attemptCtx = WithHeavyFailingTests(attemptCtx, r.Store, r.Trunk, tip, r.Now)
 		run, e = r.judgeTip(context.WithValue(attemptCtx, HeavyProgressKey{}, progress), run)
 		run.ReusedChecks = progress.reused
 		if ctx.Err() != nil {
@@ -750,6 +751,11 @@ func (r HeavyRunner) judgeTip(ctx context.Context, run HeavyRun) (HeavyRun, erro
 			// can be interrupted, just like the initial individual checks.
 			if err := SaveHeavyCheck(ctx, *check); err != nil {
 				return err
+			}
+			if check.Stalls > 0 && classified.Outcome == checkresult.Pass {
+				if err := ClearHeavyFailingTests(ctx, check.CheckID); err != nil {
+					return err
+				}
 			}
 			if check.BudgetMS > 0 && check.DurationMS > check.BudgetMS {
 				check.OverBudgetMS = check.DurationMS - check.BudgetMS

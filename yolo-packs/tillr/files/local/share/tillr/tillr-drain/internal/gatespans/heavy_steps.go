@@ -62,6 +62,8 @@ func (cfg HeavyJudgeConfig) applyPriority(ctx context.Context, cmd *exec.Cmd) er
 }
 
 type HeavyDeclaration struct {
+	Label               string
+	Command             []string
 	Reads, Needs, Tools []string
 	Remember            *bool
 }
@@ -86,15 +88,23 @@ func HeavyCheckDeclarations(dir string) (map[string]HeavyDeclaration, error) {
 			return nil, err
 		}
 		var check struct {
-			ID, Scope, Tier     string
-			Reads, Needs, Tools []string
-			Remember            *bool
+			ID, Label, Scope, Tier string
+			Command                []string
+			Reads, Needs, Tools    []string
+			Remember               *bool
 		}
 		if err := json.Unmarshal(raw, &check); err != nil {
 			return nil, err
 		}
 		if check.Scope == "tree" && check.Tier == "heavy" {
-			declared[check.ID] = HeavyDeclaration{check.Reads, check.Needs, check.Tools, check.Remember}
+			declared[check.ID] = HeavyDeclaration{
+				Label:    check.Label,
+				Command:  check.Command,
+				Reads:    check.Reads,
+				Needs:    check.Needs,
+				Tools:    check.Tools,
+				Remember: check.Remember,
+			}
 		}
 	}
 	return declared, nil
@@ -191,12 +201,32 @@ func JudgeHeavy(ctx context.Context, cfg HeavyJudgeConfig, dir, only string) ([]
 					continue
 				}
 			}
+			savedTests, err := LoadHeavyFailingTests(ctx, id)
+			if err != nil {
+				return nil, err
+			}
+			if len(savedTests) > 0 {
+				focused, handled, err := runFocusedFailingTests(ctx, cfg, dir, id, declared[id], savedTests)
+				if err != nil {
+					return nil, err
+				}
+				if handled {
+					HeavyProgressReport(ctx, "loop: heavy %s %s (focused) in %s\n", id, focused.Result, (time.Duration(focused.DurationMS) * time.Millisecond).Round(time.Second))
+					HeavyStoreWholeStepProgress(ctx, focused.CheckID, focused.Result)
+					HeavyCheckEnded(ctx, focused)
+					result = append(result, focused)
+					continue
+				}
+			}
 			checks, err := JudgeHeavy(ctx, cfg, dir, id)
 			if err != nil {
 				return nil, err
 			}
 			if len(checks) != 1 || checks[0].CheckID != id {
 				return nil, drainmodel.Externalf("heavy check %s gave no verdict", id)
+			}
+			if err := updateHeavyFailingTests(ctx, dir, id, declared[id], checks[0]); err != nil {
+				return nil, err
 			}
 			if err := SaveHeavyCheck(ctx, checks[0]); err != nil {
 				return nil, err
@@ -595,4 +625,89 @@ func DecodeHeavyVerdict(raw []byte) ([]HeavyCheck, error) {
 		}
 	}
 	return env.Payload.Checks, nil
+}
+
+// runFocusedFailingTests runs only the previously recorded failing Go tests for a
+// suite check before starting the whole suite. If any of them still fails, it updates
+// the store to the tests that failed now and returns (failingCheck, true, nil) so the
+// whole suite is not started. Only when every one of them passes does it return
+// (zero, false, nil) so the caller runs the whole suite. On cancellation or cleanup
+// loss it returns the error without modifying the store.
+func runFocusedFailingTests(ctx context.Context, cfg HeavyJudgeConfig, dir, checkID string, meta HeavyDeclaration, savedTests []string) (HeavyCheck, bool, error) {
+	started := time.Now()
+	var stillFailing []string
+	var failedChecks []HeavyCheck
+	for _, testID := range savedTests {
+		if err := ctx.Err(); err != nil {
+			return HeavyCheck{}, false, err
+		}
+		checks, err := JudgeHeavyGo(ctx, cfg, dir, testID)
+		if err != nil {
+			if ctx.Err() != nil || CleanupLost(err) {
+				return HeavyCheck{}, false, err
+			}
+			// A focused test gave no verdict (for example, a build failure); fall back
+			// to the whole suite so the suite's own verdict governs the check.
+			HeavyProgressReport(ctx, "loop: heavy %s focused test %s gave no verdict (%v); running whole suite\n", checkID, testID, err)
+			return HeavyCheck{}, false, nil
+		}
+		if len(checks) != 1 {
+			return HeavyCheck{}, false, nil
+		}
+		classified := drainmodel.ClassifyCheck(checkresult.Observation{
+			Check:  checks[0].CheckID,
+			Source: checkresult.HeavyCheckWord,
+			Word:   checks[0].Result,
+		})
+		switch classified.Outcome {
+		case checkresult.Pass:
+			continue
+		case checkresult.Fail:
+			stillFailing = append(stillFailing, testID)
+			failedChecks = append(failedChecks, checks[0])
+		default:
+			return HeavyCheck{}, false, nil
+		}
+	}
+	if len(stillFailing) == 0 {
+		HeavyProgressReport(ctx, "loop: heavy %s focused rerun passed (%d tests); running whole suite\n", checkID, len(savedTests))
+		return HeavyCheck{}, false, nil
+	}
+	if err := SaveHeavyFailingTests(ctx, checkID, stillFailing); err != nil {
+		return HeavyCheck{}, false, err
+	}
+	logPath, detail := formatFocusedGoFailureLog(ctx, cfg.LaneRoot, dir, checkID, failedChecks)
+	return HeavyCheck{
+		CheckID:    checkID,
+		Result:     "fail",
+		DurationMS: time.Since(started).Milliseconds(),
+		Reads:      meta.Reads,
+		Needs:      meta.Needs,
+		Tools:      meta.Tools,
+		Remember:   meta.Remember,
+		LogPath:    logPath,
+		LogRef:     logPath,
+		Detail:     detail,
+	}, true, nil
+}
+
+func updateHeavyFailingTests(ctx context.Context, dir, checkID string, meta HeavyDeclaration, check HeavyCheck) error {
+	classified := drainmodel.ClassifyCheck(checkresult.Observation{
+		Check:  check.CheckID,
+		Source: checkresult.HeavyCheckWord,
+		Word:   check.Result,
+	})
+	switch classified.Outcome {
+	case checkresult.Pass:
+		return ClearHeavyFailingTests(ctx, checkID)
+	case checkresult.Fail:
+		named := ExtractNamedGoFailingTests(dir, meta, check)
+		if len(named) > 0 {
+			return SaveHeavyFailingTests(ctx, checkID, named)
+		}
+		return ClearHeavyFailingTests(ctx, checkID)
+	default:
+		// Unknown, stalled, unavailable, or disabled leaves any recorded failing set intact.
+		return nil
+	}
 }

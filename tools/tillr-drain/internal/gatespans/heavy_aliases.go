@@ -56,6 +56,9 @@ var (
 	HeavyCheckEnded                   = heavyrun.HeavyCheckEnded
 	ReuseHeavyCheck                   = heavyrun.ReuseHeavyCheck
 	SaveHeavyCheck                    = heavyrun.SaveHeavyCheck
+	LoadHeavyFailingTests             = heavyrun.LoadHeavyFailingTests
+	SaveHeavyFailingTests             = heavyrun.SaveHeavyFailingTests
+	ClearHeavyFailingTests            = heavyrun.ClearHeavyFailingTests
 	StartHeavyReplayProgressWatcher   = heavyrun.StartHeavyReplayProgressWatcher
 	StartHeavyCheckLogProgressWatcher = heavyrun.StartHeavyCheckLogProgressWatcher
 	StartHeavyLogFileProgressWatcher  = heavyrun.StartHeavyLogFileProgressWatcher

@@ -1,6 +1,7 @@
 package gatespans
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -8,9 +9,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/mschulkind-oss/tillr-drain/internal/drainmodel"
+	"github.com/mschulkind-oss/tillr-drain/internal/runhistory"
 	"github.com/mschulkind-oss/tillr/checkresult"
 )
 
@@ -22,6 +25,14 @@ const (
 var goTestName = regexp.MustCompile(`^(Test|Example|Fuzz)[\pL\pN_]*(/[^[:space:]]*)*$`)
 var goToolModule = regexp.MustCompile(`^tools/[a-z0-9-]+$`)
 var goImport = regexp.MustCompile(`^[a-zA-Z0-9._~-]+(/[a-zA-Z0-9._~-]+)*$`)
+var goBuildFailLineRe = regexp.MustCompile(`^FAIL\t\S+\s+\[(?:build|setup) failed\]`)
+
+func validGoModuleDir(mod string) bool {
+	if mod == "." {
+		return true
+	}
+	return mod != "" && !strings.Contains(mod, ":") && filepath.IsLocal(mod) && filepath.Clean(mod) == mod
+}
 
 // GoSuiteProofID is the legacy declaration id for the suite that emitted a
 // named test. A passing suite is positive evidence even though it does not
@@ -83,7 +94,7 @@ func GoSuiteFailures(label string, evidence LegacyFailure, suite HeavyCheck) []H
 // gate of a previously reverted item. Its ID is self-contained across restarts.
 func JudgeHeavyGo(ctx context.Context, cfg HeavyJudgeConfig, dir, id string) ([]HeavyCheck, error) {
 	parts := strings.SplitN(strings.TrimPrefix(id, GoTestPrefix), ":", 3)
-	if len(parts) != 3 || !goToolModule.MatchString(parts[0]) || !goImport.MatchString(parts[1]) || !goTestName.MatchString(parts[2]) {
+	if len(parts) != 3 || !validGoModuleDir(parts[0]) || !goImport.MatchString(parts[1]) || !goTestName.MatchString(parts[2]) {
 		return nil, drainmodel.Externalf("invalid Go test selector %q", id)
 	}
 	module, pkg, name := parts[0], parts[1], parts[2]
@@ -235,4 +246,212 @@ func PrivateGoReplayGitConfig(ctx context.Context, dir, dest string) error {
 		}
 	}
 	return nil
+}
+
+// ExtractNamedGoFailingTests parses a failing suite check's log and resolves every
+// failing Go test into a canonical `go-test:<module>:<pkg>:<TestName>` selector.
+// It returns nil whenever any failure in the log cannot be named (build/setup failure,
+// panic outside a test, unnamed shard failure, non-Go runner, or unresolvable module)
+// so the next proof runs the whole check.
+func ExtractNamedGoFailingTests(dir string, decl HeavyDeclaration, check HeavyCheck) []string {
+	logRef := check.LogPath
+	if logRef == "" {
+		logRef = check.LogRef
+	}
+	if logRef == "" {
+		return nil
+	}
+	if logHasUnnamedGoFailure(logRef) {
+		return nil
+	}
+	goRes := runhistory.ReadGoTestFailures(logRef)
+	if len(goRes.Failures) == 0 {
+		return nil
+	}
+	modules := candidateGoModules(dir, decl)
+	if len(modules) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(goRes.Failures))
+	out := make([]string, 0, len(goRes.Failures))
+	for _, gf := range goRes.Failures {
+		if gf.Package == "" || gf.Test == "" || !goImport.MatchString(gf.Package) || !goTestName.MatchString(gf.Test) {
+			return nil
+		}
+		mod := resolveGoModuleForPackage(dir, modules, gf.Package)
+		if mod == "" {
+			return nil
+		}
+		selector := GoTestPrefix + mod + ":" + gf.Package + ":" + gf.Test
+		if _, ok := seen[selector]; !ok {
+			seen[selector] = struct{}{}
+			out = append(out, selector)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func openCheckLogFile(logRef string) (*os.File, error) {
+	whole := strings.TrimSuffix(logRef, ".triage.log")
+	if whole != logRef {
+		whole += ".log"
+	}
+	f, err := os.Open(whole)
+	if err != nil && whole != logRef {
+		f, err = os.Open(logRef)
+	}
+	return f, err
+}
+
+func logHasUnnamedGoFailure(logRef string) bool {
+	f, err := openCheckLogFile(logRef)
+	if err != nil {
+		return true
+	}
+	defer f.Close()
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 64<<10), runhistory.TriageScanMax)
+	for scanner.Scan() {
+		trimmed := strings.TrimSpace(scanner.Text())
+		if goBuildFailLineRe.MatchString(trimmed) {
+			return true
+		}
+		if shardLine, shardNames := runhistory.ParseShardFailureLine(trimmed); shardLine != "" && len(shardNames) == 0 {
+			return true
+		}
+	}
+	return scanner.Err() != nil
+}
+
+type goModuleCandidate struct {
+	dir        string
+	modulePath string
+}
+
+func candidateGoModules(dir string, decl HeavyDeclaration) []goModuleCandidate {
+	seen := map[string]bool{}
+	var dirs []string
+	add := func(cand string) {
+		cand = strings.TrimSpace(strings.Trim(cand, `"'`))
+		cand = strings.TrimSuffix(cand, "/")
+		if cand == "" {
+			return
+		}
+		cand = filepath.Clean(cand)
+		if !validGoModuleDir(cand) || seen[cand] {
+			return
+		}
+		seen[cand] = true
+		dirs = append(dirs, cand)
+	}
+	for _, suffix := range []string{"'s whole Go suite passes", "'s whole suite passes"} {
+		if mod, ok := strings.CutSuffix(decl.Label, suffix); ok {
+			add(mod)
+		}
+	}
+	cmdText := strings.Join(decl.Command, " ")
+	fields := strings.Fields(cmdText)
+	for i := 0; i < len(fields); i++ {
+		tok := fields[i]
+		if (tok == "shards" || tok == "cd") && i+1 < len(fields) {
+			add(fields[i+1])
+		}
+		if tok == "-C" && i+1 < len(fields) && i >= 2 && fields[i-2] == "go" && fields[i-1] == "test" {
+			add(fields[i+1])
+		}
+	}
+	add(".")
+	var out []goModuleCandidate
+	for _, d := range dirs {
+		modPath := readGoModPath(filepath.Join(dir, d, "go.mod"))
+		if modPath != "" {
+			out = append(out, goModuleCandidate{dir: d, modulePath: modPath})
+		}
+	}
+	return out
+}
+
+func readGoModPath(path string) string {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		if fields := strings.Fields(line); len(fields) >= 2 && fields[0] == "module" {
+			return strings.Trim(fields[1], `"`)
+		}
+	}
+	return ""
+}
+
+func resolveGoModuleForPackage(dir string, candidates []goModuleCandidate, pkg string) string {
+	for _, c := range candidates {
+		if pkg == c.modulePath {
+			if info, err := os.Stat(filepath.Join(dir, c.dir)); err == nil && info.IsDir() {
+				return c.dir
+			}
+			continue
+		}
+		if suffix, ok := strings.CutPrefix(pkg, c.modulePath+"/"); ok && filepath.IsLocal(suffix) && filepath.Clean(suffix) == suffix {
+			if info, err := os.Stat(filepath.Join(dir, c.dir, suffix)); err == nil && info.IsDir() {
+				return c.dir
+			}
+		}
+	}
+	return ""
+}
+
+func formatFocusedGoFailureLog(ctx context.Context, laneRoot, dir, checkID string, failed []HeavyCheck) (string, string) {
+	var body strings.Builder
+	var names []string
+	for _, fc := range failed {
+		parts := strings.SplitN(strings.TrimPrefix(fc.CheckID, GoTestPrefix), ":", 3)
+		pkg, name := "", fc.CheckID
+		if len(parts) == 3 {
+			pkg, name = parts[1], parts[2]
+		}
+		names = append(names, name)
+		fmt.Fprintf(&body, "--- FAIL: %s\n", name)
+		for _, line := range strings.Split(fc.Detail, "\n") {
+			if strings.TrimSpace(line) == "" {
+				continue
+			}
+			var ev struct {
+				Action string `json:"Action"`
+				Output string `json:"Output"`
+			}
+			if json.Unmarshal([]byte(line), &ev) == nil && ev.Action != "" {
+				if ev.Action == "output" && ev.Output != "" {
+					body.WriteString(ev.Output)
+				}
+				continue
+			}
+			body.WriteString(line)
+			body.WriteByte('\n')
+		}
+		if pkg != "" {
+			fmt.Fprintf(&body, "FAIL\t%s\t(focused rerun)\n", pkg)
+		}
+	}
+	detail := "focused rerun failed: " + strings.Join(names, ", ")
+	logPath := ""
+	if laneRoot != "" {
+		if rev, err := HeavyGitOutput(ctx, dir, "rev-parse", "HEAD"); err == nil && rev != "" {
+			logs := filepath.Join(laneRoot, ".rolling", "logs", rev)
+			if os.MkdirAll(logs, 0o755) == nil {
+				safe := strings.Map(func(r rune) rune {
+					if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' || r == '.' {
+						return r
+					}
+					return '_'
+				}, checkID)
+				candidate := filepath.Join(logs, "focused-"+safe+".log")
+				if os.WriteFile(candidate, []byte(body.String()), 0o644) == nil {
+					logPath = candidate
+				}
+			}
+		}
+	}
+	return logPath, detail
 }
