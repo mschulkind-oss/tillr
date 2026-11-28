@@ -398,13 +398,20 @@ func TestPlanHoldsAListedSeatOnItsFailedBackend(t *testing.T) {
 		t.Fatalf("want hold on designer-a, got %+v", got)
 	}
 
-	// If the last recorded failure was on another backend, hold on that one.
-	// The current seat mapping does not change where the earlier run holds.
+	// If the last recorded failure was on another backend that the seat still
+	// lists, hold on that backend.
 	spent := fixture(t,
 		itemRecordSeated("item_042", "in-queue", "design"),
 		runRecord("run-item_042-20261109T000000Z", "item_042", "lane-9", "designer-a", run.StateFailedToStart, nil, ""),
 		runRecord("run-item_042-20261109T010000Z", "item_042", "lane-9", "designer-b", run.StateFailedToStart, nil, ""),
 	)
+	got = decisionFor(t, plan(t, spent, tickPath), "item_042")
+	if got.Action != drain.ActionHold || got.Reason != drain.ReasonBackendClosed || got.DeferredBy != "designer-b" || got.RunRequest != nil {
+		t.Fatalf("want hold on designer-b while seat still lists it, got %+v", got)
+	}
+
+	// If the policy reassigns the seat away from the closed backend, the step
+	// resolves to the seat's current backend and holds there when it is also closed.
 	policyPath := policyDoc(t, map[string]any{
 		"default_backend": "builder-a",
 		"seats":           map[string]string{"design": "designer-a"},
@@ -416,7 +423,7 @@ func TestPlanHoldsAListedSeatOnItsFailedBackend(t *testing.T) {
 		},
 	})
 	got = decisionFor(t, plan(t, spent, tick(t, "2026-11-10T00:00:00Z", []string{"lane-1"}, 1, policyPath)), "item_042")
-	if got.Action != drain.ActionHold || got.Reason != drain.ReasonBackendClosed || got.DeferredBy != "designer-b" || got.RunRequest != nil {
-		t.Fatalf("want hold on designer-b, got %+v", got)
+	if got.Action != drain.ActionHold || got.Reason != drain.ReasonBackendClosed || got.DeferredBy != "designer-a" || got.RunRequest != nil {
+		t.Fatalf("want hold on designer-a after seat reassignment, got %+v", got)
 	}
 }
