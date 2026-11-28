@@ -63,6 +63,8 @@ const (
 type Request struct {
 	ID   string    `json:"id"`
 	Role string    `json:"role"`
+	By   string    `json:"by,omitempty"`
+	Why  string    `json:"why,omitempty"`
 	At   time.Time `json:"at"`
 }
 
@@ -102,6 +104,12 @@ func File(ctx context.Context, storePath, role string, at time.Time) (Request, e
 // FileWithOptions is File with optional store.OpenOption values (used by tests to
 // control SQLite busy timeouts without changing production defaults).
 func FileWithOptions(ctx context.Context, storePath, role string, at time.Time, opts ...store.OpenOption) (Request, error) {
+	return FileWithReason(ctx, storePath, role, "", "", at, opts...)
+}
+
+// FileWithReason writes one request for role with who asked (by) and why, and returns it.
+// It needs no running loop: the next process of that role answers it at startup.
+func FileWithReason(ctx context.Context, storePath, role, by, why string, at time.Time, opts ...store.OpenOption) (Request, error) {
 	if err := validRole(role); err != nil {
 		return Request{}, err
 	}
@@ -109,7 +117,13 @@ func FileWithOptions(ctx context.Context, storePath, role string, at time.Time, 
 	if _, err := rand.Read(suffix[:]); err != nil {
 		return Request{}, fmt.Errorf("minting a restart id: %v", err)
 	}
-	request := Request{ID: fmt.Sprintf("restart-%s-%d-%x", role, at.UnixMilli(), suffix), Role: role, At: at.UTC()}
+	request := Request{
+		ID:   fmt.Sprintf("restart-%s-%d-%x", role, at.UnixMilli(), suffix),
+		Role: role,
+		By:   by,
+		Why:  why,
+		At:   at.UTC(),
+	}
 	// The caller can already be the replacement build, while the old loop is
 	// still writing. Filing a request must never migrate its store.
 	s, err := store.Open(ctx, storePath, false, opts...)
@@ -191,6 +205,64 @@ func ReadState(r *store.Reader, role string) (State, error) {
 		}
 	}
 	return state, nil
+}
+
+// PendingAfterBuild returns the newest unanswered restart request for role filed after the
+// latest drain.build-started event for role (or after seq 0 when no build has been published).
+func PendingAfterBuild(r *store.Reader, role string) (Request, bool, error) {
+	var lastBuildSeq int64
+	if err := r.QueryRow(
+		`SELECT COALESCE(MAX(seq), 0) FROM events WHERE kind = ? AND json_extract(payload, '$.role') = ?`,
+		BuildKind, role,
+	).Scan(&lastBuildSeq); err != nil {
+		return Request{}, false, err
+	}
+	rows, err := r.Query(`SELECT seq, kind, payload FROM events WHERE kind IN (?, ?) ORDER BY seq`, RequestKind, AnswerKind)
+	if err != nil {
+		return Request{}, false, err
+	}
+	defer rows.Close()
+	type seqRequest struct {
+		seq int64
+		req Request
+	}
+	var requests []seqRequest
+	answered := map[string]bool{}
+	for rows.Next() {
+		var seq int64
+		var kind string
+		var payload []byte
+		if err := rows.Scan(&seq, &kind, &payload); err != nil {
+			return Request{}, false, err
+		}
+		switch kind {
+		case RequestKind:
+			var req Request
+			if err := json.Unmarshal(payload, &req); err != nil {
+				return Request{}, false, err
+			}
+			if req.Role == role && seq > lastBuildSeq {
+				requests = append(requests, seqRequest{seq: seq, req: req})
+			}
+		case AnswerKind:
+			var ans Answer
+			if err := json.Unmarshal(payload, &ans); err != nil {
+				return Request{}, false, err
+			}
+			if ans.Role == role {
+				answered[ans.RequestID] = true
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return Request{}, false, err
+	}
+	for i := len(requests) - 1; i >= 0; i-- {
+		if !answered[requests[i].req.ID] {
+			return requests[i].req, true, nil
+		}
+	}
+	return Request{}, false, nil
 }
 
 // ReadAnswers answers the latest answer of each role that has one.

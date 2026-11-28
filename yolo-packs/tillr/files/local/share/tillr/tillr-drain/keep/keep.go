@@ -10,6 +10,7 @@ package keep
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -29,7 +30,9 @@ import (
 	"time"
 
 	"github.com/mschulkind-oss/tillr-drain/presence"
+	"github.com/mschulkind-oss/tillr-drain/restart"
 	"github.com/mschulkind-oss/tillr/settings"
+	"github.com/mschulkind-oss/tillr/store"
 	"golang.org/x/sys/unix"
 	_ "modernc.org/sqlite"
 )
@@ -856,8 +859,16 @@ func runForeground(root string, extra []string, lockPath string, stdout, stderr 
 	launches := 0
 
 	launch := func() (*LoopChild, error) {
+		// Record an operator-initiated start only on the keeper's first launch when
+		// no loop was adopted; restarts after a loop exit must remain unrequested so
+		// drain-unrequested-start still fires on crashes or unexpected exits.
+		if launches == 0 && !adopted {
+			if err := recordOperatorStartRequest(root, extra, "operator start (tillr-drain keep)"); err != nil {
+				return nil, err
+			}
+		}
 		// A separate session keeps terminal Ctrl-C and --stop away from the
-		// loop. Never terminate, authorize a retry, or write to its store here.
+		// loop. Never terminate or authorize a retry here.
 		attemptExtra := LaunchExtraForAttempt(root, extra, sessionStart, adopted, launches)
 		launches++
 		argv := LoopCommand(root, attemptExtra)
@@ -923,4 +934,74 @@ func runForeground(root string, extra []string, lockPath string, stdout, stderr 
 	}
 	fmt.Fprintln(stdout, "keeper: stopped; loop left running")
 	return nil
+}
+
+func storePathForLaunch(root string, extra []string) string {
+	for i := 0; i < len(extra); i++ {
+		arg := extra[i]
+		var val string
+		switch {
+		case (arg == "--store" || arg == "-store") && i+1 < len(extra):
+			val = extra[i+1]
+		case strings.HasPrefix(arg, "--store="):
+			val = strings.TrimPrefix(arg, "--store=")
+		case strings.HasPrefix(arg, "-store="):
+			val = strings.TrimPrefix(arg, "-store=")
+		default:
+			continue
+		}
+		if val == "" {
+			continue
+		}
+		if filepath.IsAbs(val) {
+			return val
+		}
+		return filepath.Join(root, val)
+	}
+	return filepath.Join(root, ".tillr", "state.db")
+}
+
+// recordOperatorStartRequest files a drain.restart-request recording who asked and why
+// when the store exists with an events table and has no newer pending drain request.
+// Fresh stores without state.db are left alone because the loop marks its first start initial.
+func recordOperatorStartRequest(root string, extra []string, why string) error {
+	storePath := storePathForLaunch(root, extra)
+	info, err := os.Stat(storePath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	if info.IsDir() {
+		return nil
+	}
+	ctx := context.Background()
+	s, err := store.OpenRead(ctx, storePath)
+	if err != nil {
+		// Partial or uninitialized databases (such as synthetic test fixtures without
+		// a tillr schema) have no restart log to append to.
+		return nil
+	}
+	var hasEventsTable bool
+	var alreadyPending bool
+	readErr := s.ReadTx(ctx, func(r *store.Reader) error {
+		var name string
+		err := r.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name='events'`).Scan(&name)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		hasEventsTable = true
+		_, alreadyPending, err = restart.PendingAfterBuild(r, restart.RoleDrain)
+		return err
+	})
+	s.Close()
+	if readErr != nil || !hasEventsTable || alreadyPending {
+		return readErr
+	}
+	_, err = restart.FileWithReason(ctx, storePath, restart.RoleDrain, "operator", why, time.Now())
+	return err
 }

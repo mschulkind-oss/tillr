@@ -479,3 +479,69 @@ func TestDrainBuildStartedSessionRelaunchProvenance(t *testing.T) {
 		})
 	})
 }
+
+func TestDrainBuildStartedPendingRestartRequest(t *testing.T) {
+	ctx := context.Background()
+	h := newRestartHarness(t, []byte("drain build"), nil)
+	t.Setenv(restart.RequestEnv, "")
+
+	adopt := func() recordedBuildFields {
+		t.Helper()
+		if err := h.l.adoptRestart(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if h.l.stopInheritedReaper != nil {
+			t.Cleanup(h.l.stopInheritedReaper)
+		}
+		return readLatestDrainBuildFields(t, h.f.storePath)
+	}
+
+	// Initial start establishes a prior drain.build-started in the same domain.
+	initial := adopt()
+	if initial.initialType.String != "true" {
+		t.Fatalf("initial = %+v, want initial=true", initial)
+	}
+
+	// A pending drain.restart-request filed after the last drain.build-started is recorded
+	// on the next cold start's drain.build-started (even without TILLR_RESTART_REQUEST).
+	req, err := restart.FileWithReason(ctx, h.f.storePath, restart.RoleDrain, "operator", "operator restart (tillr-drain keep --restart)", stopClock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if req.By != "operator" || req.Why != "operator restart (tillr-drain keep --restart)" {
+		t.Fatalf("request metadata = (by=%q, why=%q), want operator and restart reason", req.By, req.Why)
+	}
+
+	afterRestart := adopt()
+	if afterRestart.restartType.String != "text" || afterRestart.restartVal.String != req.ID {
+		t.Fatalf("cold start after pending restart request = %+v, want restart_request=%q", afterRestart, req.ID)
+	}
+	if afterRestart.stopType.Valid || afterRestart.initialType.Valid || afterRestart.relaunchType.Valid {
+		t.Fatalf("cold start after pending restart request must omit stop/initial/relaunch, got %+v", afterRestart)
+	}
+
+	// Even if that loop exits before answering the request, a subsequent start must not
+	// reuse the older request (its seq is before the latest drain.build-started).
+	unrequestedAfterCrash := adopt()
+	if unrequestedAfterCrash.restartType.Valid || unrequestedAfterCrash.stopType.Valid || unrequestedAfterCrash.initialType.Valid || unrequestedAfterCrash.relaunchType.Valid {
+		t.Fatalf("start after crash without a new request = %+v, want all provenance omitted", unrequestedAfterCrash)
+	}
+
+	// An already-answered restart request must not quiet a subsequent cold start.
+	answeredReq, err := restart.FileWithReason(ctx, h.f.storePath, restart.RoleDrain, "operator", "already settled", stopClock.Add(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.l.restarter().Record(ctx, restart.Answer{
+		RequestID: answeredReq.ID,
+		Answer:    restart.AnswerAlreadyCurrent,
+		FromBuild: "b1",
+		ToBuild:   "b1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	unrequestedAfterAnswered := adopt()
+	if unrequestedAfterAnswered.restartType.Valid || unrequestedAfterAnswered.stopType.Valid || unrequestedAfterAnswered.initialType.Valid || unrequestedAfterAnswered.relaunchType.Valid {
+		t.Fatalf("start after already-answered request = %+v, want all provenance omitted", unrequestedAfterAnswered)
+	}
+}

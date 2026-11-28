@@ -643,7 +643,11 @@ func RestartDrain(root string, extra []string, lockPath string, opts RestartOpts
 	}
 	fmt.Fprintf(out, "restart: PATH programs (launchers or binaries): %s\n", strings.Join(programs, ", "))
 
-	// 5. Start the keeper again in the background with the resolved policy and lane count.
+	// 5. Record the operator restart request before starting the keeper so the loop's
+	// drain.build-started records who asked and why, then start the keeper in the background.
+	if err := recordOperatorStartRequest(root, restartArgs, "operator restart (tillr-drain keep --restart)"); err != nil {
+		return err
+	}
 	keeperCmd := []string{keeperBin, "keep", "--root", root}
 	if len(restartArgs) > 0 {
 		keeperCmd = append(keeperCmd, "--")

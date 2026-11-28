@@ -83,6 +83,15 @@ func (l *Loop) publishDrainBuild(ctx context.Context) error {
 	}
 	return s.WriteTx(ctx, func(tx *store.Tx) error {
 		if fact.RestartRequest == "" {
+			pendingReq, hasPendingReq, err := restart.PendingAfterBuild(tx.Reader(), restart.RoleDrain)
+			if err != nil {
+				return err
+			}
+			if hasPendingReq {
+				fact.RestartRequest = pendingReq.ID
+			}
+		}
+		if fact.RestartRequest == "" {
 			r := tx.Reader()
 			var seq int64
 			var kind string
