@@ -1032,46 +1032,42 @@ func (l *Loop) reclaimEndedItemLanes(ctx context.Context) error {
 			}
 
 			owners := make(map[string]endedLaneOwner, len(idleLanes))
-			args := make([]any, len(idleLanes))
-			conds := make([]string, len(idleLanes))
-			for i, lane := range idleLanes {
-				args[i] = lane
-				conds[i] = "lane_id = ?"
+			for _, lane := range idleLanes {
 				if owner, ok := nextEventOwners[lane]; ok {
 					owners[lane] = owner
 				}
-			}
-			rows, err = queryEndedLaneRows(r, `SELECT run_id, COALESCE(item_id, ''), lane_id, event_seq, finished_at, started_at FROM runs WHERE `+strings.Join(conds, " OR "), args...)
-			if err != nil {
-				return err
-			}
-			for rows.Next() {
-				var runID, itemID, lane string
-				var seq, finishedAt, startedAt int64
-				if err := rows.Scan(&runID, &itemID, &lane, &seq, &finishedAt, &startedAt); err != nil {
+				rows, err = queryEndedLaneRows(r, `SELECT run_id, COALESCE(item_id, ''), lane_id, event_seq, finished_at, started_at FROM runs WHERE lane_id = ?`, lane)
+				if err != nil {
+					return err
+				}
+				for rows.Next() {
+					var runID, itemID, rowLane string
+					var seq, finishedAt, startedAt int64
+					if err := rows.Scan(&runID, &itemID, &rowLane, &seq, &finishedAt, &startedAt); err != nil {
+						rows.Close()
+						return err
+					}
+					if rowLane == "" || itemID == "" || runID == "" {
+						continue
+					}
+					cand := endedLaneOwner{
+						runID:      runID,
+						itemID:     itemID,
+						seq:        seq,
+						fromRuns:   true,
+						finishedAt: finishedAt,
+						startedAt:  startedAt,
+					}
+					if prev, ok := owners[rowLane]; !ok || cand.newerOrEqual(prev) {
+						owners[rowLane] = cand
+					}
+				}
+				if err := rows.Err(); err != nil {
 					rows.Close()
 					return err
 				}
-				if lane == "" || itemID == "" || runID == "" {
-					continue
-				}
-				cand := endedLaneOwner{
-					runID:      runID,
-					itemID:     itemID,
-					seq:        seq,
-					fromRuns:   true,
-					finishedAt: finishedAt,
-					startedAt:  startedAt,
-				}
-				if prev, ok := owners[lane]; !ok || cand.newerOrEqual(prev) {
-					owners[lane] = cand
-				}
-			}
-			if err := rows.Err(); err != nil {
 				rows.Close()
-				return err
 			}
-			rows.Close()
 
 			l.endedLanes.storePath = l.cfg.Store
 			l.endedLanes.lastSeq = head
