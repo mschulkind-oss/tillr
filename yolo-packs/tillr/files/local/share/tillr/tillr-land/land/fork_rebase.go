@@ -79,6 +79,82 @@ func (t *Trunk) hasRebaseVerdict(req LandingRequest) bool {
 	return false
 }
 
+// sameTreeRewrite authorizes a non-fast-forward fork rewrite from the staged
+// delivery tip when the candidate's tree equals the delivered tip's tree and
+// its history above the fork's upstream base is linear.
+func (t *Trunk) sameTreeRewrite(req LandingRequest, tree string) (forkRebase, error) {
+	baseTree, err := t.TreeOf(req.BaseSHA)
+	if err != nil {
+		return forkRebase{}, err
+	}
+	if baseTree != tree {
+		return forkRebase{}, nil
+	}
+	upstreamBase := t.forkUpstreamBase(req.BaseRef, req.BaseSHA, req.HeadSHA)
+	if upstreamBase == "" || !t.IsAncestor(upstreamBase, req.HeadSHA) {
+		return forkRebase{}, nil
+	}
+	merges, err := t.git("rev-list", "--merges", "--max-count=1", upstreamBase+".."+req.HeadSHA)
+	if err != nil {
+		return forkRebase{}, Externalf("checking the same-tree rewrite range: %v", err)
+	}
+	if strings.TrimSpace(merges) != "" {
+		return forkRebase{}, nil
+	}
+	return forkRebase{old: req.BaseSHA, new: req.HeadSHA}, nil
+}
+
+// forkUpstreamBase resolves the upstream base commit beneath oldTip for a fork
+// patch branch. It prefers the fork cache's followed upstream ref, then a
+// tracked fork pin on the trunk, and finally the common ancestor of oldTip and
+// newTip when neither upstream reference is present.
+func (t *Trunk) forkUpstreamBase(baseRef, oldTip, newTip string) string {
+	fork := strings.TrimPrefix(PatchRef(baseRef), patchPrefix)
+	cache := t.forkCache(baseRef)
+	if _, err := os.Stat(cache); err == nil {
+		sourceRef := t.forkSourceRef(fork)
+		if upstreamRef := t.resolveForkUpstreamRef(cache, sourceRef); upstreamRef != "" {
+			if out, _, err := t.runGitIn(cache, nil, "merge-base", oldTip, upstreamRef); err == nil {
+				if base := strings.TrimSpace(out); base != "" && t.IsAncestor(base, oldTip) {
+					return base
+				}
+			}
+		}
+	}
+	if base := t.forkPinBase(fork); base != "" && t.IsAncestor(base, oldTip) {
+		return base
+	}
+	if out, _, err := t.runGit(nil, "merge-base", oldTip, newTip); err == nil {
+		return strings.TrimSpace(out)
+	}
+	return ""
+}
+
+// forkPinBase reads the recorded upstream merge base (line 3) from a tracked
+// yolo-packs/fork-pins/<fork> file on the trunk, or "" when absent or invalid.
+func (t *Trunk) forkPinBase(fork string) string {
+	pinRel := "yolo-packs/fork-pins/" + fork
+	ref := "HEAD"
+	if branch, err := t.Branch(); err == nil {
+		if tip, err := t.Head(branch); err == nil {
+			ref = tip
+		}
+	}
+	raw, _, err := t.runGit(nil, "cat-file", "-p", ref+":"+pinRel)
+	if err != nil {
+		return ""
+	}
+	lines := strings.Split(strings.TrimRight(raw, "\r\n"), "\n")
+	if len(lines) != 3 {
+		return ""
+	}
+	base := strings.TrimSpace(lines[2])
+	if !isHexCommit(base) {
+		return ""
+	}
+	return base
+}
+
 // releaseRebase checks the launch's selected release, not a tag supplied by the
 // candidate. Resolve before taking land.lock: fetching upstream can block.
 func (t *Trunk) releaseRebase(req LandingRequest) (forkRebase, error) {
@@ -134,8 +210,12 @@ func (t *Trunk) moveForkRebase(ref, run string, r forkRebase) error {
 	}
 	txn := fmt.Sprintf("start\noption no-deref\n%s\noption no-deref\nupdate %s %s %s\noption no-deref\ncreate %s %s\nprepare\ncommit\n",
 		pinCommand, ref, r.new, r.old, landedMarkerRef(run), r.new)
-	if _, stderr, err := t.runGitStdin(t.repo, []byte(txn), nil, "update-ref", "-m", "tillr-land: release rebase", "--stdin"); err != nil {
-		return Externalf("delivering release rebase of %s: %s", ref, failureText(stderr, err))
+	kind := "release rebase"
+	if r.release == "" {
+		kind = "same-tree rewrite"
+	}
+	if _, stderr, err := t.runGitStdin(t.repo, []byte(txn), nil, "update-ref", "-m", "tillr-land: "+kind, "--stdin"); err != nil {
+		return Externalf("delivering %s of %s: %s", kind, ref, failureText(stderr, err))
 	}
 	return nil
 }

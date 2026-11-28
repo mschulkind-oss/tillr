@@ -120,10 +120,12 @@ lander publishes the built commit without squashing. An ordinary delivery
 fast-forwards and writes its landed marker before the move. The marker names that
 same head, so sibling run boundaries recognize the delivery.
 
-A non-fast-forward release rebase is allowed only from the staged delivery tip,
-with the retained verdict, change record and fork registry for that run. The head
-must be linear above the new release the fork's patch-branch target selects,
-not just above an arbitrary tag. Under the landing lock the lander compares and
+A non-fast-forward rewrite is allowed only from the staged delivery tip,
+with the retained verdict, change record and fork registry for that run, in two
+cases: a same-tree rewrite whose tree equals the delivered tip's tree and whose
+history above the fork's upstream base is linear, or a release rebase whose head
+is linear above the new release the fork's patch-branch target selects, not just
+above an arbitrary tag. Under the landing lock the lander compares and
 swaps the patch ref to the exact built head and, in the same Git transaction,
 writes the landed marker and pins the old tip at
 `refs/tillr/patch-history/<fork>/<old>`. A concurrent delivery or conflicting pin

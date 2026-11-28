@@ -47,8 +47,8 @@ const (
 	// stands, and the landing is attempted again once `git status` in that worktree is
 	// clean.
 	ReasonTrunkUncommitted = "trunk-worktree-uncommitted"
-	// ReasonPatchRewind is a non-fast-forward fork delivery without a verified release
-	// rebase from the current patch tip.
+	// ReasonPatchRewind is a non-fast-forward fork delivery without a verified same-tree
+	// rewrite or release rebase from the current patch tip.
 	ReasonPatchRewind = "patch-rewind"
 	// ReasonPatchAtHead is a fork-series landing whose patch branch already points at the
 	// head. The run's own export delivered it, which is the successful case; a second move
@@ -311,9 +311,15 @@ func Land(ctx context.Context, s *store.Store, t *Trunk, req LandingRequest) (an
 					landing.Reason = ReasonVerdictMismatch
 					break
 				}
-				rebase, err = t.releaseRebase(req)
+				rebase, err = t.sameTreeRewrite(req, tree)
 				if err != nil {
 					return Landing{}, err
+				}
+				if !rebase.verified() {
+					rebase, err = t.releaseRebase(req)
+					if err != nil {
+						return Landing{}, err
+					}
 				}
 				if rebase.verified() {
 					landing.Result, landing.Reason = ResultLanded, ""
