@@ -458,10 +458,11 @@ func itemDependencyBlocked(r *store.Reader, itemID string) (bool, error) {
 }
 
 const (
-	quickWayFile     = "do-it-now"
-	planQuickWayKind = "drain.plan-quick"
-	noChangeFile     = "no-change.json"
-	noChangeKind     = "drain.no-change"
+	quickWayFile         = "do-it-now"
+	planQuickWayKind     = "drain.plan-quick"
+	planQuickRefusedKind = "drain.plan-quick-refused"
+	noChangeFile         = "no-change.json"
+	noChangeKind         = "drain.no-change"
 )
 
 type noChangeRecord struct {
@@ -629,6 +630,49 @@ func (l *Loop) settleQuickWay(ctx context.Context, d Decision) error {
 				"attempt": d.Attempt,
 				"node_id": stage.ID,
 				"run_id":  d.RunRequest.RunID,
+			}, l.cfg.Now().UTC()); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func (l *Loop) settleQuickWayRefused(ctx context.Context, d Decision, size candidateSize) error {
+	s, err := store.Open(ctx, l.cfg.Store, true)
+	if err != nil {
+		return err
+	}
+	defer s.Close()
+	return s.WriteTx(ctx, func(tx *store.Tx) error {
+		if _, err := tx.Exec(`UPDATE node_runs SET outcome='passed', quick_way=0 WHERE run_id=?`, d.RunRequest.RunID); err != nil {
+			return err
+		}
+		if slot := evaluatorSlot(d.Workflow); slot != "" {
+			outcomes, err := workflowOutcomes(tx.Reader(), d.ItemID, d.Attempt)
+			if err != nil {
+				return err
+			}
+			for i, stage := range d.Workflow.Stages {
+				if outcomes[stage.ID] == "" && stage.ID != slot {
+					if _, err := tx.Exec(`INSERT INTO node_runs(item_id,attempt,node_id,run_id,outcome) VALUES(?,?,?,?, 'skipped') ON CONFLICT(item_id,attempt,node_id) DO NOTHING`, d.ItemID, d.Attempt, stage.ID, attemptRunID(d.ItemID, d.Attempt)+"-n"+strconv.Itoa(i+1)); err != nil {
+						return err
+					}
+				}
+			}
+		}
+		seen, err := judgmentSeen(tx, planQuickRefusedKind, "run", d.RunRequest.RunID)
+		if err != nil {
+			return err
+		}
+		if seen == 0 {
+			stage := d.Workflow.Stages[d.NodeIndex]
+			if err := appendEffect(tx, planQuickRefusedKind, d.RunRequest.RunID, map[string]any{
+				"item_id":        d.ItemID,
+				"attempt":        d.Attempt,
+				"node_id":        stage.ID,
+				"run_id":         d.RunRequest.RunID,
+				"candidate_size": size,
 			}, l.cfg.Now().UTC()); err != nil {
 				return err
 			}
@@ -1059,14 +1103,33 @@ func (l *Loop) settleNodeFormat(ctx context.Context, d Decision, rec run.Record,
 		}
 	}
 	if quickWay {
-		if err := l.settleQuickWay(ctx, d); err != nil {
-			return true, err
+		var quickSize *candidateSize
+		if !l.nonLanding {
+			size, err := l.measureCandidateSize(ctx, Candidate{
+				Worktree: target,
+				BaseSHA:  base,
+				HeadSHA:  head,
+				BaseRef:  l.lanePatchRef(d.LaneID),
+			})
+			if err != nil {
+				return true, err
+			}
+			quickSize = &size
 		}
-		if l.nonLanding {
-			outcome := l.settleHook(ctx, d, result)
-			return true, outcome.err
+		if quickSize != nil && s1Holds(*quickSize) {
+			if err := l.settleQuickWayRefused(ctx, d, *quickSize); err != nil {
+				return true, err
+			}
+		} else {
+			if err := l.settleQuickWay(ctx, d); err != nil {
+				return true, err
+			}
+			if l.nonLanding {
+				outcome := l.settleHook(ctx, d, result)
+				return true, outcome.err
+			}
+			return false, nil
 		}
-		return false, nil
 	}
 	next, err := l.nextWorkflowNode(ctx, d)
 	if err != nil {

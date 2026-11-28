@@ -15,6 +15,7 @@ import (
 
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
+	"github.com/mschulkind-oss/tillr/settings"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -588,6 +589,213 @@ func TestPlannedBuildQuickWay(t *testing.T) {
 					return nil
 				})
 			}
+		})
+	}
+}
+
+type quickWaySizeSteps struct {
+	*workflowSteps
+	files      int
+	lines      int
+	runs       []string
+	planHead   string
+	verifyHead string
+}
+
+func (s *quickWaySizeSteps) Run(ctx context.Context, req run.Request) (run.Record, string, error) {
+	s.runs = append(s.runs, req.NodeID)
+	target := filepath.Join(s.f.laneRoot, req.LaneID, WorktreeDir)
+	durable := run.DurableDir(filepath.Join(s.f.laneRoot, req.LaneID), req.RunID)
+	if err := os.MkdirAll(durable, 0755); err != nil {
+		return run.Record{}, "", err
+	}
+	switch req.NodeID {
+	case "plan":
+		s.firstHead = runGit(s.t, target, "rev-parse", "HEAD")
+		outDir := nodeOutputsDir(s.f.root, req.RunID)
+		if err := os.MkdirAll(outDir, 0755); err != nil {
+			return run.Record{}, "", err
+		}
+		writeForkFile(s.t, filepath.Join(outDir, quickWayFile), "do it now\n")
+		for i := 0; i < s.files; i++ {
+			rel := fmt.Sprintf("tools/item-a/file-%d.txt", i)
+			if err := os.MkdirAll(filepath.Dir(filepath.Join(target, rel)), 0755); err != nil {
+				return run.Record{}, "", err
+			}
+			lineCount := 1
+			if i == s.files-1 {
+				lineCount = s.lines - (s.files - 1)
+				if lineCount < 1 {
+					lineCount = 1
+				}
+			}
+			writeForkFile(s.t, filepath.Join(target, rel), strings.Repeat("line\n", lineCount))
+		}
+		runGit(s.t, target, "add", ".")
+		runGit(s.t, target, "commit", "-qm", "quick candidate")
+		s.planHead = runGit(s.t, target, "rev-parse", "HEAD")
+	case "verify":
+		s.verifyHead = runGit(s.t, target, "rev-parse", "HEAD")
+		tree := runGit(s.t, target, "rev-parse", s.verifyHead+"^{tree}")
+		out := item.JudgeOutput{
+			EvaluatedHead: s.verifyHead,
+			EvaluatedTree: tree,
+			Outcome:       "pass",
+			Verdicts: []item.JudgeEntry{{
+				CriterionID:   "c1",
+				CriterionHash: item.CriterionHash("the first criterion of item-a"),
+				Verdict:       "done",
+				ClaimClass:    item.ClaimVerification,
+				Reason:        "verified plan candidate",
+				Evidence:      []string{"node:plan"},
+			}},
+		}
+		raw, err := json.Marshal(out)
+		if err != nil {
+			return run.Record{}, "", err
+		}
+		if err := os.WriteFile(filepath.Join(durable, "eval.output"), raw, 0644); err != nil {
+			return run.Record{}, "", err
+		}
+	}
+	report := "RESULT: done\n"
+	path := filepath.Join(durable, "report.md")
+	if err := os.WriteFile(path, []byte(report), 0644); err != nil {
+		return run.Record{}, "", err
+	}
+	rec := run.Record{RunID: req.RunID, ItemID: req.ItemID, LaneID: req.LaneID, Backend: req.Backend, State: run.StateExited, ExitCode: countPtr(0), StartedAt: "2026-11-15T00:00:00Z", FinishedAt: "2026-11-15T00:00:00Z", ArtifactRefs: []run.ArtifactRef{{Kind: "report", Ref: path}}}
+	st, err := store.Open(ctx, s.f.storePath, true)
+	if err != nil {
+		return rec, report, err
+	}
+	defer st.Close()
+	err = st.WriteTx(ctx, func(tx *store.Tx) error { return applyTerminal(tx, rec) })
+	return rec, report, err
+}
+
+func TestPlannedBuildQuickWaySizeBound(t *testing.T) {
+	cases := []struct {
+		name        string
+		limits      settings.CandidateSizeLimits
+		files       int
+		lines       int
+		wantRefused bool
+	}{
+		{
+			name:        "over-file-limit",
+			limits:      settings.CandidateSizeLimits{FileLimit: 2, AddedLineLimit: 100},
+			files:       3,
+			lines:       3,
+			wantRefused: true,
+		},
+		{
+			name:        "over-added-line-limit",
+			limits:      settings.CandidateSizeLimits{FileLimit: 27, AddedLineLimit: 5},
+			files:       1,
+			lines:       6,
+			wantRefused: true,
+		},
+		{
+			name:        "within-limit",
+			limits:      settings.CandidateSizeLimits{FileLimit: 2, AddedLineLimit: 5},
+			files:       2,
+			lines:       5,
+			wantRefused: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f, l, base := plannedFixture(t)
+			limits := tc.limits
+			l.cfg.CandidateSizeLimits = &limits
+			steps := &quickWaySizeSteps{workflowSteps: base, files: tc.files, lines: tc.lines}
+			l.cfg.Steps = steps
+			result := &LoopResult{}
+			for i := 0; i < 8; i++ {
+				graphPass(t, l, result)
+			}
+			if !tc.wantRefused {
+				if !reflect.DeepEqual(steps.runs, []string{"plan"}) {
+					t.Fatalf("runs = %v, want [plan]", steps.runs)
+				}
+				if base.gates != 1 || result.Landed != 1 {
+					t.Fatalf("gates=%d landed=%d result=%+v", base.gates, result.Landed, result)
+				}
+				fixtureRead(t, f, func(r *store.Reader) error {
+					var quickCount, refusedCount int
+					if err := r.QueryRow(`SELECT COUNT(*) FROM events WHERE kind=?`, planQuickWayKind).Scan(&quickCount); err != nil {
+						return err
+					}
+					if err := r.QueryRow(`SELECT COUNT(*) FROM events WHERE kind=?`, planQuickRefusedKind).Scan(&refusedCount); err != nil {
+						return err
+					}
+					if quickCount != 1 || refusedCount != 0 {
+						t.Fatalf("plan-quick=%d plan-quick-refused=%d, want 1 and 0", quickCount, refusedCount)
+					}
+					return nil
+				})
+				return
+			}
+			if !reflect.DeepEqual(steps.runs, []string{"plan", "verify"}) {
+				t.Fatalf("runs = %v, want [plan verify]", steps.runs)
+			}
+			if steps.planHead == "" || steps.verifyHead != steps.planHead {
+				t.Fatalf("verifyHead = %q, want kept planHead %q", steps.verifyHead, steps.planHead)
+			}
+			if base.gates != 1 || result.Landed != 1 {
+				t.Fatalf("gates=%d landed=%d result=%+v", base.gates, result.Landed, result)
+			}
+			fixtureRead(t, f, func(r *store.Reader) error {
+				var planOutcome, workOutcome, verifyOutcome string
+				var quickWay int
+				if err := r.QueryRow(`SELECT outcome, quick_way FROM node_runs WHERE item_id='item-a' AND node_id='plan'`).Scan(&planOutcome, &quickWay); err != nil {
+					return err
+				}
+				if planOutcome != "passed" || quickWay != 0 {
+					t.Fatalf("plan node_runs: outcome=%s quick_way=%d, want passed and 0", planOutcome, quickWay)
+				}
+				if err := r.QueryRow(`SELECT outcome FROM node_runs WHERE item_id='item-a' AND node_id='work'`).Scan(&workOutcome); err != nil {
+					return err
+				}
+				if workOutcome != "skipped" {
+					t.Fatalf("work outcome=%s, want skipped", workOutcome)
+				}
+				if err := r.QueryRow(`SELECT outcome FROM node_runs WHERE item_id='item-a' AND node_id='verify'`).Scan(&verifyOutcome); err != nil {
+					return err
+				}
+				if verifyOutcome != "passed" {
+					t.Fatalf("verify outcome=%s, want passed", verifyOutcome)
+				}
+				var quickCount int
+				if err := r.QueryRow(`SELECT COUNT(*) FROM events WHERE kind=?`, planQuickWayKind).Scan(&quickCount); err != nil {
+					return err
+				}
+				if quickCount != 0 {
+					t.Fatalf("plan-quick events=%d, want 0", quickCount)
+				}
+				var raw []byte
+				if err := r.QueryRow(`SELECT payload FROM events WHERE kind=?`, planQuickRefusedKind).Scan(&raw); err != nil {
+					return err
+				}
+				var payload struct {
+					ItemID        string        `json:"item_id"`
+					NodeID        string        `json:"node_id"`
+					CandidateSize candidateSize `json:"candidate_size"`
+				}
+				if err := json.Unmarshal(raw, &payload); err != nil {
+					return err
+				}
+				wantSize := candidateSize{
+					Files:          int64(tc.files),
+					AddedLines:     int64(tc.lines),
+					FileLimit:      tc.limits.FileLimit,
+					AddedLineLimit: tc.limits.AddedLineLimit,
+				}
+				if payload.ItemID != "item-a" || payload.NodeID != "plan" || payload.CandidateSize != wantSize {
+					t.Fatalf("refusal payload = %+v, want item_id=item-a node_id=plan candidate_size=%+v", payload, wantSize)
+				}
+				return nil
+			})
 		})
 	}
 }

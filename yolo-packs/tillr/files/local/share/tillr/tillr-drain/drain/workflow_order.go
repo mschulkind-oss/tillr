@@ -44,6 +44,15 @@ func attemptNoChangeFinding(r *store.Reader, itemID string, attempt int) (*noCha
 	}, nil
 }
 
+func attemptPlanQuickRefused(r *store.Reader, itemID string, attempt int) (bool, error) {
+	var exists bool
+	err := r.QueryRow(
+		`SELECT EXISTS(SELECT 1 FROM events WHERE kind=? AND json_valid(payload) AND json_extract(payload,'$.item_id')=? AND json_extract(payload,'$.attempt')=?)`,
+		planQuickRefusedKind, itemID, attempt,
+	).Scan(&exists)
+	return exists, err
+}
+
 // nextWorkflowNode waits for incoming producers to settle, then follows any
 // matching edge. This admits joins of mutually exclusive pass/fail branches;
 // a node with no followed incoming edge is skipped, never dispatched.
@@ -66,13 +75,20 @@ func (l *Loop) nextWorkflowNode(ctx context.Context, d Decision) (int, error) {
 		if done || (d.SplitDonor != nil && evaluatorNode(d) && outcomes[evaluatorSlot(d.Workflow)] == "passed") {
 			return nil
 		}
-		planNoChange := false
+		planSkippedWork := false
 		if outcomes["work"] == "skipped" {
 			nc, err := attemptNoChangeFinding(tx.Reader(), d.ItemID, d.Attempt)
 			if err != nil {
 				return err
 			}
-			planNoChange = nc != nil && nc.NodeID == "plan"
+			if nc != nil && nc.NodeID == "plan" {
+				planSkippedWork = true
+			} else {
+				planSkippedWork, err = attemptPlanQuickRefused(tx.Reader(), d.ItemID, d.Attempt)
+				if err != nil {
+					return err
+				}
+			}
 		}
 		for i, stage := range d.Workflow.Stages {
 			if outcomes[stage.ID] != "" {
@@ -92,7 +108,7 @@ func (l *Loop) nextWorkflowNode(ctx context.Context, d Decision) (int, error) {
 				if edge.WhenOutcome == "fail" {
 					matches = outcome == "handled-fail"
 				}
-				if planNoChange && stage.ID == evaluatorSlot(d.Workflow) && edge.From == "work" && outcome == "skipped" {
+				if planSkippedWork && stage.ID == evaluatorSlot(d.Workflow) && edge.From == "work" && outcome == "skipped" {
 					matches = true
 				}
 				for _, id := range edge.RequiresPassed {

@@ -195,6 +195,14 @@ func (l *Loop) verifyBuildSession(ctx context.Context, c Candidate) (*WorkerSess
 		}
 		return session, nil
 	}
+	for i := evaluator - 1; i >= 0; i-- {
+		s := w.Stages[i]
+		if s.Kind == "agent" && s.Access == "write" && (s.Seat == "build" || s.Seat == "") && s.WriteScope.Paths == nil {
+			session.NodeIndex = i
+			session.NodeBaseSHA = c.HeadSHA
+			return session, nil
+		}
+	}
 	insertVerifyWorkStage(&w, evaluator)
 	session.NodeIndex = evaluator
 	session.NodeBaseSHA = c.HeadSHA

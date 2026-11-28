@@ -47,9 +47,21 @@ func workflowAttemptDone(r *store.Reader, w *Workflow, itemID string, attempt in
 	if outcomes["work"] != "skipped" {
 		return false, nil
 	}
+	allowedSkip := false
 	nc, err := attemptNoChangeFinding(r, itemID, attempt)
-	if err != nil || nc == nil || nc.NodeID != "plan" {
+	if err != nil {
 		return false, err
+	}
+	if nc != nil && nc.NodeID == "plan" {
+		allowedSkip = true
+	} else {
+		allowedSkip, err = attemptPlanQuickRefused(r, itemID, attempt)
+		if err != nil {
+			return false, err
+		}
+	}
+	if !allowedSkip {
+		return false, nil
 	}
 	for _, id := range workflow.RequiredWorkflowNodes(w) {
 		if id == "work" && outcomes[id] == "skipped" {

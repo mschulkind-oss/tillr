@@ -99,6 +99,10 @@ func (l *Loop) evaluatorCandidate(ctx context.Context, d Decision) (Candidate, e
 		if err != nil {
 			return err
 		}
+		quickRefused, err := attemptPlanQuickRefused(r, d.ItemID, d.Attempt)
+		if err != nil {
+			return err
+		}
 		for _, n := range rows {
 			if n.Outcome != "passed" && n.Outcome != "handled-fail" {
 				continue
@@ -109,7 +113,7 @@ func (l *Loop) evaluatorCandidate(ctx context.Context, d Decision) (Candidate, e
 			for _, stage := range d.Workflow.Stages {
 				if stage.ID == node {
 					producer = stage
-					writing = stage.Access == "write"
+					writing = stage.Access == "write" || (quickRefused && planAllowsQuickWay(stage))
 					break
 				}
 			}

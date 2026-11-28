@@ -26,7 +26,7 @@ import (
 )
 
 func init() {
-	for _, kind := range []string{commentReplyStateKind, designerCompactedKind, nodeAdvancedKind, graphChangedKind, candidateGatedKind, planQuickWayKind, noChangeKind, "drain.no-change-closed"} {
+	for _, kind := range []string{commentReplyStateKind, designerCompactedKind, nodeAdvancedKind, graphChangedKind, candidateGatedKind, planQuickWayKind, planQuickRefusedKind, noChangeKind, "drain.no-change-closed"} {
 		if err := event.Register(kind, Utility); err != nil {
 			panic(err)
 		}
