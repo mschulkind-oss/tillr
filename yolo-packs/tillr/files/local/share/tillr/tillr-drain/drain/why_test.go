@@ -35,8 +35,15 @@ func TestWhyChangesWithPlannerHoldRule(t *testing.T) {
 				return err
 			}
 			var plannerDecision Decision
-			if err := json.Unmarshal(envs[1].Payload, &plannerDecision); err != nil {
-				return err
+			for _, env := range envs {
+				var d Decision
+				if err := json.Unmarshal(env.Payload, &d); err != nil {
+					return err
+				}
+				if d.ItemID == "dependent" {
+					plannerDecision = d
+					break
+				}
 			}
 			for _, row := range answer.Rows {
 				if row.ItemID == "dependent" {

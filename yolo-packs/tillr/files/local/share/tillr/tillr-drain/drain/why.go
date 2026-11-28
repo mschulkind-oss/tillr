@@ -155,21 +155,37 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 		return answer, readFailure(err)
 	}
 	answer.EventHeadSeq = head
-	refusals, err := readWhyRefusals(r)
-	if err != nil {
-		return answer, readFailure(err)
-	}
-	declines, err := readDispatchDeclines(r)
-	if err != nil {
-		return answer, readFailure(err)
-	}
 	declared, err := definition.ForReader(r)
 	if err != nil {
 		return answer, readFailure(err)
 	}
 	answer.Definition = declared.Name
 	def := declared.Parsed
-	works, designHistory, err := readPendingHistory(r)
+	extraIDs := overrideIDs(policy)
+	if namedItem != "" {
+		extraIDs = append(extraIDs, namedItem)
+	}
+	items, err := readOpenItems(r, def, extraIDs...)
+	if err != nil {
+		return answer, err
+	}
+	openItemIDs := make([]string, len(items))
+	for i, it := range items {
+		openItemIDs[i] = it.ItemID
+	}
+	openRunIDs, err := readOpenRunIDs(r, openItemIDs)
+	if err != nil {
+		return answer, readFailure(err)
+	}
+	refusals, err := readWhyRefusalsForItems(r, openItemIDs, openRunIDs)
+	if err != nil {
+		return answer, readFailure(err)
+	}
+	declines, err := readDispatchDeclinesForItems(r, openItemIDs)
+	if err != nil {
+		return answer, readFailure(err)
+	}
+	works, designHistory, err := readPendingHistoryForItems(r, openItemIDs, openRunIDs)
 	if err != nil {
 		return answer, err
 	}
@@ -178,27 +194,23 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 		return answer, err
 	}
 	tick.runFaces = runFaces
-	items, err := readItems(r)
-	if err != nil {
-		return answer, err
-	}
-	answerCounts, err := answeredObstacleCounts(r)
+	answerCounts, err := answeredObstacleCountsForItems(r, openItemIDs)
 	if err != nil {
 		return WhyAnswer{}, err
 	}
-	conflicts, err := item.ReadConflicts(r)
+	conflicts, err := item.ReadConflictsForItems(r, openItemIDs)
 	if err != nil {
 		return answer, err
 	}
-	_, noSplitCalls, err := readSplitCallsForPlanner(r)
+	pendingSplitCalls, noSplitCalls, err := readSplitCallsForPlannerForItems(r, openItemIDs)
 	if err != nil {
 		return answer, readFailure(err)
 	}
-	edges, err := readEdges(r)
+	edges, err := readEdgesForItems(r, openItemIDs)
 	if err != nil {
 		return answer, err
 	}
-	splits, err := item.ReadAllSplits(r)
+	splits, err := item.ReadSplitsForItems(r, openItemIDs)
 	if err != nil {
 		return answer, readFailure(err)
 	}
@@ -211,37 +223,77 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 		}
 		splitStates[parentID] = cst
 	}
-	titles := map[string]string{}
-	if len(splits) > 0 {
-		titles, err = readItemTitles(r)
-		if err != nil {
-			return answer, readFailure(err)
-		}
-	}
 	states := map[string]string{}
 	for _, it := range items {
 		states[it.ItemID] = it.State
 	}
+	var splitPartIDs []string
+	var extraStateIDs []string
+	for parentID, st := range splits {
+		for _, p := range st.Parts {
+			id := item.SplitPartID(parentID, p.Label)
+			splitPartIDs = append(splitPartIDs, id)
+			extraStateIDs = append(extraStateIDs, id)
+		}
+	}
+	for _, itemEdges := range edges {
+		for _, edge := range itemEdges {
+			extraStateIDs = append(extraStateIDs, edge.Target)
+		}
+	}
+	if err := readMissingItemStates(r, states, extraStateIDs); err != nil {
+		return answer, err
+	}
+	titles := map[string]string{}
+	if len(splits) > 0 {
+		titleIDs := make([]string, 0, len(splits)+len(openItemIDs))
+		titleIDs = append(titleIDs, openItemIDs...)
+		for parentID := range splits {
+			titleIDs = append(titleIDs, parentID)
+		}
+		titles, err = readItemTitlesFor(r, titleIDs)
+		if err != nil {
+			return answer, readFailure(err)
+		}
+	}
 	closeReasons := map[string]string{}
-	crRows, crErr := r.Query(`SELECT item_id, close_reason FROM items WHERE close_reason != ''`)
-	if crErr != nil {
-		if !strings.Contains(crErr.Error(), "no such column: close_reason") {
-			return answer, readFailure(crErr)
-		}
-	} else {
-		for crRows.Next() {
-			var id, cr string
-			if scanErr := crRows.Scan(&id, &cr); scanErr != nil {
-				crRows.Close()
-				return answer, readFailure(scanErr)
+	reasonIDs := make([]string, 0, len(openItemIDs)+len(splitPartIDs))
+	reasonIDs = append(reasonIDs, openItemIDs...)
+	reasonIDs = append(reasonIDs, splitPartIDs...)
+	if len(reasonIDs) > 0 {
+		const chunk = 400
+		for start := 0; start < len(reasonIDs); start += chunk {
+			end := start + chunk
+			if end > len(reasonIDs) {
+				end = len(reasonIDs)
 			}
-			closeReasons[id] = cr
-		}
-		if crErr := crRows.Err(); crErr != nil {
+			batch := reasonIDs[start:end]
+			args := make([]any, len(batch))
+			for i, id := range batch {
+				args[i] = id
+			}
+			placeholders := strings.TrimSuffix(strings.Repeat("?,", len(batch)), ",")
+			crRows, crErr := r.Query(`SELECT item_id, close_reason FROM items WHERE item_id IN (`+placeholders+`) AND close_reason != ''`, args...)
+			if crErr != nil {
+				if !strings.Contains(crErr.Error(), "no such column: close_reason") {
+					return answer, readFailure(crErr)
+				}
+				break
+			}
+			for crRows.Next() {
+				var id, cr string
+				if scanErr := crRows.Scan(&id, &cr); scanErr != nil {
+					crRows.Close()
+					return answer, readFailure(scanErr)
+				}
+				closeReasons[id] = cr
+			}
+			if crErr := crRows.Err(); crErr != nil {
+				crRows.Close()
+				return answer, readFailure(crErr)
+			}
 			crRows.Close()
-			return answer, readFailure(crErr)
 		}
-		crRows.Close()
 	}
 	at, err := tick.At()
 	if err != nil {
@@ -294,10 +346,17 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 	answer.Lanes = offered
 	answer.Draining = drainingLanes(works, configured)
 	details := planDetails{
-		maskedWorkers: make(map[string]Decision),
-		works:         works,
-		designHistory: designHistory,
-		conflicts:     conflicts,
+		maskedWorkers:     make(map[string]Decision),
+		works:             works,
+		designHistory:     designHistory,
+		conflicts:         conflicts,
+		items:             items,
+		itemIDs:           openItemIDs,
+		runIDs:            openRunIDs,
+		edges:             edges,
+		splits:            splits,
+		pendingSplitCalls: pendingSplitCalls,
+		noSplitCalls:      noSplitCalls,
 	}
 	envs, err := planWithDetails(r, tick, policy, questions, def, &details)
 	if err != nil {
@@ -373,7 +432,7 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 	}
 	itemFaults := details.faults
 	obstacleHolds := details.obstacleHolds
-	landedItems, err := obstacles.LandedItems(r)
+	landedItems, err := obstacles.LandedItemsFor(r, openItemIDs)
 	if err != nil {
 		return answer, readFailure(err)
 	}
@@ -382,7 +441,7 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 	var lookedForLoop bool
 	for i, env := range envs {
 		it := items[i]
-		if (def.Completes == "landing" && it.State == StateLanded && it.ItemID != namedItem) || (def.Completes != "landing" && finishedState(def, it.State)) {
+		if finishedState(def, it.State) && it.ItemID != namedItem {
 			continue
 		}
 		var d Decision
@@ -1992,34 +2051,63 @@ func shadowRotation(r *store.Reader, tick *Pass) (map[string]laneRefusal, error)
 	maps.Copy(out, tick.OutLanes)
 	tick.OutLanes = out
 	if tick.ItemWorktrees {
-		rows, err := r.Query(`SELECT e.object_id, e.kind, e.payload
-			FROM events e
-			WHERE e.object_type = 'lane' AND e.kind IN (?, ?)
-			  AND e.seq = (SELECT MAX(e2.seq) FROM events e2 WHERE e2.object_type = 'lane' AND e2.object_id = e.object_id AND e2.kind IN (?, ?))`,
-			laneRefusedKind, laneRestoredKind, laneRefusedKind, laneRestoredKind)
-		if err != nil {
-			return nil, err
-		}
-		defer rows.Close()
-		refusedSet := map[string]bool{}
-		for rows.Next() {
-			var lane, kind string
-			var payload []byte
-			if err := rows.Scan(&lane, &kind, &payload); err != nil {
-				return nil, err
+		seenLane := map[string]bool{}
+		var checkLanes []string
+		addLane := func(id string) {
+			if id != "" && !seenLane[id] {
+				seenLane[id] = true
+				checkLanes = append(checkLanes, id)
 			}
-			if kind == laneRefusedKind {
-				var refusal laneRefusal
-				if err := json.Unmarshal(payload, &refusal); err != nil {
+		}
+		for _, lane := range *tick.AvailableLanes {
+			addLane(lane)
+		}
+		lRows, lErr := r.Query(`SELECT lane_id FROM lanes`)
+		if lErr == nil {
+			for lRows.Next() {
+				var id string
+				if err := lRows.Scan(&id); err != nil {
+					lRows.Close()
 					return nil, err
 				}
-				tick.OutLanes[lane] = true
-				refused[lane] = refusal
-				refusedSet[lane] = true
+				addLane(id)
 			}
+			if err := lRows.Err(); err != nil {
+				lRows.Close()
+				return nil, err
+			}
+			lRows.Close()
 		}
-		if err := rows.Err(); err != nil {
-			return nil, err
+		refusedSet := map[string]bool{}
+		if len(checkLanes) > 0 {
+			events, err := r.EventsForObjects(0, checkLanes, laneRefusedKind, laneRestoredKind)
+			if err != nil {
+				return nil, err
+			}
+			latestByLane := map[string]struct {
+				kind    string
+				payload []byte
+			}{}
+			for _, e := range events {
+				if e.ObjectType != "lane" || e.ObjectID == nil {
+					continue
+				}
+				latestByLane[*e.ObjectID] = struct {
+					kind    string
+					payload []byte
+				}{kind: e.Kind, payload: e.Payload}
+			}
+			for lane, ev := range latestByLane {
+				if ev.kind == laneRefusedKind {
+					var refusal laneRefusal
+					if err := json.Unmarshal(ev.payload, &refusal); err != nil {
+						return nil, err
+					}
+					tick.OutLanes[lane] = true
+					refused[lane] = refusal
+					refusedSet[lane] = true
+				}
+			}
 		}
 		for _, lane := range *tick.AvailableLanes {
 			if !refusedSet[lane] {

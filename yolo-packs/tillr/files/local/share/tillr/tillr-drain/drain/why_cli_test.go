@@ -38,7 +38,7 @@ func TestWhyUsesPlannerAndWritesNothing(t *testing.T) {
 	if err := json.Unmarshal(out, &answer); err != nil {
 		t.Fatal(err)
 	}
-	if len(answer.Rows) != 4 || answer.Rows[0].ItemID != "ready" || answer.Rows[1].Reason != drain.ReasonBlocked || answer.Rows[1].Mover != "drain; ready" {
+	if len(answer.Rows) != 2 || answer.Rows[0].ItemID != "ready" || answer.Rows[1].ItemID != "blocked" || answer.Rows[1].Reason != drain.ReasonBlocked || answer.Rows[1].Mover != "drain; ready" {
 		t.Fatalf("rows: %+v", answer.Rows)
 	}
 	total := answer.Summary.Running + answer.Summary.CouldRun
@@ -63,14 +63,21 @@ func TestWhyUsesPlannerAndWritesNothing(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		for i := range answer.Rows {
+		if len(envs) != 5 {
+			t.Fatalf("Plan returned %d decisions, want 5 (including finished items)", len(envs))
+		}
+		byItem := make(map[string]drain.Decision, len(envs))
+		for _, env := range envs {
 			var d drain.Decision
-			index := i
-			if i == 3 {
-				index = 4
-			} // landed sorts before resolved and is omitted.
-			if err := json.Unmarshal(envs[index].Payload, &d); err != nil {
+			if err := json.Unmarshal(env.Payload, &d); err != nil {
 				return err
+			}
+			byItem[d.ItemID] = d
+		}
+		for i := range answer.Rows {
+			d, ok := byItem[answer.Rows[i].ItemID]
+			if !ok {
+				t.Fatalf("Plan missing decision for %q", answer.Rows[i].ItemID)
 			}
 			d.Inputs = nil
 			reported := answer.Rows[i].Decision
@@ -98,6 +105,10 @@ func TestWhyUsesPlannerAndWritesNothing(t *testing.T) {
 	code, out = invoke(t, "why", "--store", path, "--policy", ref, "--lanes", "lane-1", "blocked")
 	if code != 0 || !strings.Contains(string(out), "\"decision\"") || strings.Contains(string(out), "\"item_id\": \"ready\"") {
 		t.Fatalf("detail: %d %s", code, out)
+	}
+	code, out = invoke(t, "why", "--store", path, "--policy", ref, "--lanes", "lane-1", "closed")
+	if code != 0 || !strings.Contains(string(out), "\"item_id\": \"closed\"") {
+		t.Fatalf("named finished detail: %d %s", code, out)
 	}
 	after, err := store.Fingerprint(context.Background(), path)
 	if err != nil {

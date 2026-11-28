@@ -24,6 +24,7 @@ import (
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/checkresult"
 	"github.com/mschulkind-oss/tillr/definition"
+	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/settings"
 	"github.com/mschulkind-oss/tillr/store"
@@ -313,15 +314,22 @@ func (t Pass) plansItem(id string, work *pendingWork) bool {
 // A no-lane decision alone does not say whether it is an unspent retry waiting
 // for capacity, a continuation waiting for its own lane, or a dispatch cap.
 type planDetails struct {
-	nextOrdinals  map[string]int
-	retryLaneWait map[string]bool
-	workerLanes   map[string]string
-	maskedWorkers map[string]Decision
-	works         map[string]*pendingWork
-	designHistory map[string]*pendingWork
-	conflicts     map[string]item.Conflict
-	faults        map[string]ItemFault
-	obstacleHolds map[string]obstacles.Hold
+	nextOrdinals      map[string]int
+	retryLaneWait     map[string]bool
+	workerLanes       map[string]string
+	maskedWorkers     map[string]Decision
+	works             map[string]*pendingWork
+	designHistory     map[string]*pendingWork
+	conflicts         map[string]item.Conflict
+	faults            map[string]ItemFault
+	obstacleHolds     map[string]obstacles.Hold
+	items             []itemRow
+	itemIDs           []string
+	runIDs            []string
+	edges             map[string][]itemEdge
+	splits            map[string]item.SplitStatement
+	pendingSplitCalls map[string]item.SplitCall
+	noSplitCalls      map[string]item.SplitCall
 }
 
 func planWithDetails(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, def definition.Definition, details *planDetails) ([]record.Envelope, error) {
@@ -340,15 +348,38 @@ func planWithDetails(r *store.Reader, tick Pass, policy *Policy, questions Quest
 	if err != nil {
 		return nil, readFailure(err)
 	}
-	items, err := readItems(r)
-	if err != nil {
-		return nil, err
+	var items []itemRow
+	if details != nil && details.items != nil {
+		items = details.items
+	} else {
+		items, err = readItems(r)
+		if err != nil {
+			return nil, err
+		}
+	}
+	var openItemIDs []string
+	if details != nil && details.itemIDs != nil {
+		openItemIDs = details.itemIDs
+	} else {
+		openItemIDs = make([]string, len(items))
+		for i, it := range items {
+			openItemIDs[i] = it.ItemID
+		}
+	}
+	var openRunIDs []string
+	if details != nil && details.runIDs != nil {
+		openRunIDs = details.runIDs
+	} else {
+		openRunIDs, err = readOpenRunIDs(r, openItemIDs)
+		if err != nil {
+			return nil, readFailure(err)
+		}
 	}
 	var works, designHistory map[string]*pendingWork
 	if details != nil && details.works != nil && details.designHistory != nil {
 		works, designHistory = details.works, details.designHistory
 	} else {
-		works, designHistory, err = readPendingHistory(r)
+		works, designHistory, err = readPendingHistoryForItems(r, openItemIDs, openRunIDs)
 		if err != nil {
 			return nil, readFailure(err)
 		}
@@ -364,24 +395,29 @@ func planWithDetails(r *store.Reader, tick Pass, policy *Policy, questions Quest
 			}
 		}
 	}
-	edges, err := readEdges(r)
-	if err != nil {
-		return nil, err
+	var edges map[string][]itemEdge
+	if details != nil && details.edges != nil {
+		edges = details.edges
+	} else {
+		edges, err = readEdgesForItems(r, openItemIDs)
+		if err != nil {
+			return nil, err
+		}
 	}
 	lanes, err := readLanes(r, at)
 	if err != nil {
 		return nil, err
 	}
-	history, err := readRunHistory(r)
+	history, err := readRunHistoryForItems(r, openItemIDs, openRunIDs)
 	if err != nil {
 		return nil, err
 	}
 	latestFinished := map[string]string{}
-	priors, err := readPriorRunsWithOutcomes(r, designHistory, nil, latestFinished)
+	priors, err := readPriorRunsWithOutcomesForItems(r, openItemIDs, openRunIDs, designHistory, latestFinished)
 	if err != nil {
 		return nil, err
 	}
-	retries, err := readRetries(r)
+	retries, err := readRetriesForItems(r, openItemIDs)
 	if err != nil {
 		return nil, err
 	}
@@ -396,7 +432,7 @@ func planWithDetails(r *store.Reader, tick Pass, policy *Policy, questions Quest
 			}
 		}
 	}
-	escalations, err := readEscalations(r)
+	escalations, err := readEscalationsForItems(r, openItemIDs)
 	if err != nil {
 		return nil, readFailure(err)
 	}
@@ -458,6 +494,17 @@ func planWithDetails(r *store.Reader, tick Pass, policy *Policy, questions Quest
 	for _, item := range items {
 		states[item.ItemID] = item.State
 	}
+	var edgeTargets []string
+	for _, blockers := range edges {
+		for _, edge := range blockers {
+			if _, ok := states[edge.Target]; !ok {
+				edgeTargets = append(edgeTargets, edge.Target)
+			}
+		}
+	}
+	if err := readMissingItemStates(r, states, edgeTargets); err != nil {
+		return nil, err
+	}
 	plannedEdges := make(map[string][]itemEdge)
 	for id, blockers := range edges {
 		if tick.plansItem(id, works[id]) && !finishedState(def, states[id]) {
@@ -504,7 +551,7 @@ func planWithDetails(r *store.Reader, tick Pass, policy *Policy, questions Quest
 	if err := checkOverrides(policy, states); err != nil {
 		return nil, err
 	}
-	forks, err := liveForks(r, at, works)
+	forks, err := liveForksForItems(r, at, works, items)
 	if err != nil {
 		return nil, readFailure(err)
 	}
@@ -524,18 +571,40 @@ func planWithDetails(r *store.Reader, tick Pass, policy *Policy, questions Quest
 	if details != nil && details.conflicts != nil {
 		conflicts = details.conflicts
 	} else {
-		conflicts, err = item.ReadConflicts(r)
+		conflicts, err = item.ReadConflictsForItems(r, openItemIDs)
 		if err != nil {
 			return nil, readFailure(err)
 		}
 	}
-	splitCalls, noSplitCalls, err := readSplitCallsForPlanner(r)
-	if err != nil {
-		return nil, readFailure(err)
+	var splitCalls, noSplitCalls map[string]item.SplitCall
+	if details != nil && details.pendingSplitCalls != nil && details.noSplitCalls != nil {
+		splitCalls, noSplitCalls = details.pendingSplitCalls, details.noSplitCalls
+	} else {
+		splitCalls, noSplitCalls, err = readSplitCallsForPlannerForItems(r, openItemIDs)
+		if err != nil {
+			return nil, readFailure(err)
+		}
 	}
-	splits, err := item.ReadAllSplits(r)
-	if err != nil {
-		return nil, readFailure(err)
+	var splits map[string]item.SplitStatement
+	if details != nil && details.splits != nil {
+		splits = details.splits
+	} else {
+		splits, err = item.ReadSplitsForItems(r, openItemIDs)
+		if err != nil {
+			return nil, readFailure(err)
+		}
+	}
+	var splitPartIDs []string
+	for parentID, st := range splits {
+		for _, p := range st.Parts {
+			partID := item.SplitPartID(parentID, p.Label)
+			if _, ok := states[partID]; !ok {
+				splitPartIDs = append(splitPartIDs, partID)
+			}
+		}
+	}
+	if err := readMissingItemStates(r, states, splitPartIDs); err != nil {
+		return nil, err
 	}
 	splitParts := item.SplitPartIndex(splits)
 	for itemID, call := range noSplitCalls {
@@ -587,17 +656,17 @@ func planWithDetails(r *store.Reader, tick Pass, policy *Policy, questions Quest
 	if err := r.QueryRow(`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='node_runs')`).Scan(&hasNodes); err != nil {
 		return nil, readFailure(err)
 	}
-	requests, err := readRequestIDs(r)
+	requests, err := readRequestIDsForItems(r, openItemIDs)
 	if err != nil {
 		return nil, readFailure(err)
 	}
-	runIDsByItem, err := readAllRunIDs(r)
+	runIDsByItem, err := readAllRunIDsForItems(r, openItemIDs)
 	if err != nil {
 		return nil, readFailure(err)
 	}
 	var nodeMaxByItem map[string]int
 	if hasNodes {
-		nodeMaxByItem, err = readNodeAttemptMaxes(r)
+		nodeMaxByItem, err = readNodeAttemptMaxesForItems(r, openItemIDs)
 		if err != nil {
 			return nil, readFailure(err)
 		}
@@ -612,11 +681,11 @@ func planWithDetails(r *store.Reader, tick Pass, policy *Policy, questions Quest
 	if details != nil {
 		details.nextOrdinals = attempts
 	}
-	faults, err := ReadItemFaults(r)
+	faults, err := ReadItemFaultsForItems(r, openItemIDs, openRunIDs)
 	if err != nil {
 		return nil, readFailure(err)
 	}
-	obstacleHolds, releasedObstacles, err := ReadObstacleHolds(r)
+	obstacleHolds, releasedObstacles, err := ReadObstacleHoldsForItems(r, openItemIDs, openRunIDs)
 	if err != nil {
 		return nil, readFailure(err)
 	}
@@ -2716,6 +2785,151 @@ func readAllRunIDs(r *store.Reader) (map[string][]string, error) {
 	return out, rows.Err()
 }
 
+func readAllRunIDsForItems(r *store.Reader, itemIDs []string) (map[string][]string, error) {
+	out := map[string][]string{}
+	if len(itemIDs) == 0 {
+		return out, nil
+	}
+	const chunk = 400
+	for start := 0; start < len(itemIDs); start += chunk {
+		end := start + chunk
+		if end > len(itemIDs) {
+			end = len(itemIDs)
+		}
+		batch := itemIDs[start:end]
+		args := make([]any, len(batch))
+		for i, id := range batch {
+			args[i] = id
+		}
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(batch)), ",")
+		rows, err := r.Query(`SELECT item_id, run_id FROM runs WHERE item_id IN (`+placeholders+`)`, args...)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var itemID, runID string
+			if err := rows.Scan(&itemID, &runID); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			out[itemID] = append(out[itemID], runID)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		rows.Close()
+	}
+	return out, nil
+}
+
+func readOpenRunIDs(r *store.Reader, itemIDs []string) ([]string, error) {
+	seen := map[string]bool{}
+	var out []string
+	add := func(id string) {
+		if id != "" && !seen[id] {
+			seen[id] = true
+			out = append(out, id)
+		}
+	}
+	if len(itemIDs) > 0 {
+		const chunk = 400
+		for start := 0; start < len(itemIDs); start += chunk {
+			end := start + chunk
+			if end > len(itemIDs) {
+				end = len(itemIDs)
+			}
+			batch := itemIDs[start:end]
+			args := make([]any, len(batch))
+			for i, id := range batch {
+				args[i] = id
+			}
+			placeholders := strings.TrimSuffix(strings.Repeat("?,", len(batch)), ",")
+			rows, err := r.Query(`SELECT run_id FROM runs WHERE item_id IN (`+placeholders+`)`, args...)
+			if err != nil {
+				return nil, err
+			}
+			for rows.Next() {
+				var id string
+				if err := rows.Scan(&id); err != nil {
+					rows.Close()
+					return nil, err
+				}
+				add(id)
+			}
+			if err := rows.Err(); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			rows.Close()
+
+			dRows, err := r.Query(`SELECT run_id FROM dispatches WHERE item_id IN (`+placeholders+`) AND run_id IS NOT NULL AND run_id != ''`, args...)
+			if err != nil && !strings.Contains(err.Error(), "no such table: dispatches") {
+				return nil, err
+			}
+			if err == nil {
+				for dRows.Next() {
+					var id string
+					if err := dRows.Scan(&id); err != nil {
+						dRows.Close()
+						return nil, err
+					}
+					add(id)
+				}
+				if err := dRows.Err(); err != nil {
+					dRows.Close()
+					return nil, err
+				}
+				dRows.Close()
+			}
+
+			for _, evKind := range []string{dispatchStartedKind, nodeAdvancedKind, graphChangedKind} {
+				sArgs := make([]any, 0, 1+len(batch))
+				sArgs = append(sArgs, evKind)
+				sArgs = append(sArgs, args...)
+				sRows, err := r.Query(`SELECT object_id FROM events WHERE kind=? AND json_valid(payload) AND json_extract(payload,'$.decision.item_id') IN (`+placeholders+`)`, sArgs...)
+				if err != nil {
+					return nil, err
+				}
+				for sRows.Next() {
+					var id sql.NullString
+					if err := sRows.Scan(&id); err != nil {
+						sRows.Close()
+						return nil, err
+					}
+					if id.Valid {
+						add(id.String)
+					}
+				}
+				if err := sRows.Err(); err != nil {
+					sRows.Close()
+					return nil, err
+				}
+				sRows.Close()
+			}
+		}
+	}
+	lRows, err := r.Query(`SELECT run_id FROM lanes WHERE run_id IS NOT NULL AND run_id != ''`)
+	if err != nil && !strings.Contains(err.Error(), "no such table: lanes") {
+		return nil, err
+	}
+	if err == nil {
+		for lRows.Next() {
+			var id string
+			if err := lRows.Scan(&id); err != nil {
+				lRows.Close()
+				return nil, err
+			}
+			add(id)
+		}
+		if err := lRows.Err(); err != nil {
+			lRows.Close()
+			return nil, err
+		}
+		lRows.Close()
+	}
+	return out, nil
+}
 func readNodeAttemptMaxes(r *store.Reader) (map[string]int, error) {
 	rows, err := r.Query(`SELECT n.item_id, MAX(n.attempt) FROM node_runs n
  JOIN runs r ON r.run_id=n.run_id AND r.item_id=n.item_id GROUP BY n.item_id`)
@@ -2733,6 +2947,47 @@ func readNodeAttemptMaxes(r *store.Reader) (map[string]int, error) {
 		out[itemID] = maxAttempt
 	}
 	return out, rows.Err()
+}
+
+func readNodeAttemptMaxesForItems(r *store.Reader, itemIDs []string) (map[string]int, error) {
+	out := map[string]int{}
+	if len(itemIDs) == 0 {
+		return out, nil
+	}
+	const chunk = 400
+	for start := 0; start < len(itemIDs); start += chunk {
+		end := start + chunk
+		if end > len(itemIDs) {
+			end = len(itemIDs)
+		}
+		batch := itemIDs[start:end]
+		args := make([]any, len(batch))
+		for i, id := range batch {
+			args[i] = id
+		}
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(batch)), ",")
+		rows, err := r.Query(`SELECT n.item_id, MAX(n.attempt) FROM node_runs n
+ JOIN runs r ON r.run_id=n.run_id AND r.item_id=n.item_id
+ WHERE n.item_id IN (`+placeholders+`) GROUP BY n.item_id`, args...)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var itemID string
+			var maxAttempt int
+			if err := rows.Scan(&itemID, &maxAttempt); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			out[itemID] = maxAttempt
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		rows.Close()
+	}
+	return out, nil
 }
 
 func (p *planner) inputDecision(runID string) Decision {
@@ -2804,7 +3059,47 @@ func readRequestIDs(r *store.Reader) (map[string]bool, error) {
 	return out, rows.Err()
 }
 
-// An interruption retains the same backend.
+func readRequestIDsForItems(r *store.Reader, itemIDs []string) (map[string]bool, error) {
+	out := map[string]bool{}
+	if len(itemIDs) == 0 {
+		return out, nil
+	}
+	var present int
+	if err := r.QueryRow(`SELECT count(*) FROM sqlite_master WHERE type='table' AND name='request_words'`).Scan(&present); err != nil || present == 0 {
+		return out, err
+	}
+	const chunk = 400
+	for start := 0; start < len(itemIDs); start += chunk {
+		end := start + chunk
+		if end > len(itemIDs) {
+			end = len(itemIDs)
+		}
+		batch := itemIDs[start:end]
+		args := make([]any, len(batch))
+		for i, id := range batch {
+			args[i] = id
+		}
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(batch)), ",")
+		rows, err := r.Query(`SELECT item_id FROM request_words WHERE item_id IN (`+placeholders+`)`, args...)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			out[id] = true
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		rows.Close()
+	}
+	return out, nil
+}
 func attemptForInterruption(priors []priorRun) attempt {
 	return attempt{backend: priors[len(priors)-1].Backend}
 }
@@ -2993,10 +3288,137 @@ func readItems(r *store.Reader) ([]itemRow, error) {
 		row.Delivery = deliveries[row.ItemID]
 		items = append(items, row)
 	}
+	return items, nil
+}
+
+func overrideIDs(policy *Policy) []string {
+	if policy == nil || len(policy.Overrides) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, len(policy.Overrides))
+	for id := range policy.Overrides {
+		if id != "" {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
+func readOpenItems(r *store.Reader, def definition.Definition, extraIDs ...string) ([]itemRow, error) {
+	query, err := itemSelect(r)
+	if err != nil {
+		return nil, err
+	}
+	var whereParts []string
+	var args []any
+	if len(def.Finished) > 0 {
+		whereParts = append(whereParts, `state NOT IN (`+strings.TrimSuffix(strings.Repeat("?,", len(def.Finished)), ",")+`)`)
+		for _, s := range def.Finished {
+			args = append(args, s)
+		}
+	}
+	seenExtra := map[string]bool{}
+	var cleanExtra []string
+	for _, id := range extraIDs {
+		if id != "" && !seenExtra[id] {
+			seenExtra[id] = true
+			cleanExtra = append(cleanExtra, id)
+		}
+	}
+	whereSQL := ""
+	if len(whereParts) > 0 {
+		if len(cleanExtra) > 0 {
+			whereSQL = `WHERE (` + strings.Join(whereParts, " AND ") + ` OR item_id IN (` + strings.TrimSuffix(strings.Repeat("?,", len(cleanExtra)), ",") + `)) `
+			for _, id := range cleanExtra {
+				args = append(args, id)
+			}
+		} else {
+			whereSQL = `WHERE ` + strings.Join(whereParts, " AND ") + ` `
+		}
+	}
+	rows, err := r.Query(query+whereSQL+queueOrderSQL, args...)
+	if err != nil {
+		return nil, readFailure(err)
+	}
+	defer rows.Close()
+	items := []itemRow{}
+	var itemIDs []string
+	for rows.Next() {
+		row, err := scanItemRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, row)
+		itemIDs = append(itemIDs, row.ItemID)
+	}
 	if err := rows.Err(); err != nil {
 		return nil, readFailure(err)
 	}
+	if len(itemIDs) == 0 {
+		return items, nil
+	}
+	deliveries, err := readDeliveriesForItems(r, itemIDs)
+	if err != nil {
+		return nil, readFailure(err)
+	}
+	owed, err := ownercriteria.ReadOwnerCriteriaForItems(r, itemIDs)
+	if err != nil {
+		return nil, readFailure(err)
+	}
+	for i := range items {
+		items[i].OwnerOwed = owed[items[i].ItemID]
+		items[i].Delivery = deliveries[items[i].ItemID]
+	}
 	return items, nil
+}
+
+func readMissingItemStates(r *store.Reader, states map[string]string, candidateIDs []string) error {
+	var missing []string
+	seen := map[string]bool{}
+	for _, id := range candidateIDs {
+		if id == "" || seen[id] {
+			continue
+		}
+		if _, ok := states[id]; ok {
+			continue
+		}
+		seen[id] = true
+		missing = append(missing, id)
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	const chunk = 400
+	for start := 0; start < len(missing); start += chunk {
+		end := start + chunk
+		if end > len(missing) {
+			end = len(missing)
+		}
+		batch := missing[start:end]
+		args := make([]any, len(batch))
+		for i, id := range batch {
+			args[i] = id
+		}
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(batch)), ",")
+		rows, err := r.Query(`SELECT item_id, state FROM items WHERE item_id IN (`+placeholders+`)`, args...)
+		if err != nil {
+			return readFailure(err)
+		}
+		for rows.Next() {
+			var id, state string
+			if err := rows.Scan(&id, &state); err != nil {
+				rows.Close()
+				return readFailure(err)
+			}
+			states[id] = state
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return readFailure(err)
+		}
+		rows.Close()
+	}
+	return nil
 }
 
 func readItemByID(r *store.Reader, id string) (itemRow, bool, error) {
@@ -3093,7 +3515,52 @@ func readEdges(r *store.Reader) (map[string][]itemEdge, error) {
 	return edges, nil
 }
 
-// readItemEdges answers the scheduling edges for one item.
+func readEdgesForItems(r *store.Reader, itemIDs []string) (map[string][]itemEdge, error) {
+	edges := map[string][]itemEdge{}
+	if len(itemIDs) == 0 {
+		return edges, nil
+	}
+	hasKind, err := hasItemEdgesKindColumn(r)
+	if err != nil {
+		return nil, err
+	}
+	const chunk = 400
+	for start := 0; start < len(itemIDs); start += chunk {
+		end := start + chunk
+		if end > len(itemIDs) {
+			end = len(itemIDs)
+		}
+		batch := itemIDs[start:end]
+		args := make([]any, len(batch))
+		for i, id := range batch {
+			args[i] = id
+		}
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(batch)), ",")
+		query := `SELECT item_id, blocked_by, '` + item.EdgeKindBlockedBy + `' FROM item_edges WHERE item_id IN (` + placeholders + `) ORDER BY item_id, blocked_by`
+		if hasKind {
+			query = `SELECT item_id, blocked_by, COALESCE(NULLIF(kind, ''), '` + item.EdgeKindBlockedBy + `') FROM item_edges WHERE item_id IN (` + placeholders + `) ORDER BY item_id, blocked_by`
+		}
+		rows, err := r.Query(query, args...)
+		if err != nil {
+			return nil, readFailure(err)
+		}
+		for rows.Next() {
+			var itemID string
+			var edge itemEdge
+			if err := rows.Scan(&itemID, &edge.Target, &edge.Kind); err != nil {
+				rows.Close()
+				return nil, readFailure(err)
+			}
+			edges[itemID] = append(edges[itemID], edge)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, readFailure(err)
+		}
+		rows.Close()
+	}
+	return edges, nil
+}
 func readItemEdges(r *store.Reader, itemID string) ([]itemEdge, error) {
 	hasKind, err := hasItemEdgesKindColumn(r)
 	if err != nil {
@@ -3303,6 +3770,93 @@ func readRunHistory(r *store.Reader) (runHistory, error) {
 	if err != nil {
 		return runHistory{}, readFailure(err)
 	}
+	history, err := foldRunHistoryEvents(r, events)
+	if err != nil {
+		return runHistory{}, err
+	}
+	if err := readItemStateHistory(r, &history); err != nil {
+		return history, readFailure(err)
+	}
+	return history, nil
+}
+
+func readRunHistoryForItems(r *store.Reader, itemIDs, runIDs []string) (runHistory, error) {
+	objectIDs := make([]string, 0, len(itemIDs)+len(runIDs))
+	objectIDs = append(objectIDs, itemIDs...)
+	objectIDs = append(objectIDs, runIDs...)
+	events, err := r.EventsForObjects(0, objectIDs, GateVerdictKind, RefusalKind, obstacles.HeldKind, item.WaitReleasedKind)
+	if err != nil {
+		return runHistory{}, readFailure(err)
+	}
+	if len(runIDs) > 0 {
+		const chunk = 400
+		for start := 0; start < len(runIDs); start += chunk {
+			end := start + chunk
+			if end > len(runIDs) {
+				end = len(runIDs)
+			}
+			batch := runIDs[start:end]
+			args := make([]any, 0, len(batch)+1)
+			args = append(args, callOffered)
+			for _, id := range batch {
+				args = append(args, id)
+			}
+			placeholders := strings.TrimSuffix(strings.Repeat("?,", len(batch)), ",")
+			rows, err := r.Query(`SELECT seq, ts, kind, object_type, object_id, revision, payload FROM events WHERE kind=? AND json_valid(payload) AND json_extract(payload,'$.run_id') IN (`+placeholders+`) ORDER BY seq`, args...)
+			if err != nil {
+				return runHistory{}, readFailure(err)
+			}
+			for rows.Next() {
+				var (
+					seq        int64
+					ts         int64
+					kind       string
+					objectType sql.NullString
+					objectID   sql.NullString
+					revision   sql.NullInt64
+					payload    string
+				)
+				if err := rows.Scan(&seq, &ts, &kind, &objectType, &objectID, &revision, &payload); err != nil {
+					rows.Close()
+					return runHistory{}, readFailure(err)
+				}
+				e := event.Event{
+					Seq:     seq,
+					Kind:    kind,
+					Payload: json.RawMessage(payload),
+					At:      time.UnixMilli(ts).UTC(),
+				}
+				if objectType.Valid {
+					e.ObjectType = objectType.String
+				}
+				if objectID.Valid {
+					id := objectID.String
+					e.ObjectID = &id
+				}
+				if revision.Valid {
+					rev := revision.Int64
+					e.Revision = &rev
+				}
+				events = append(events, e)
+			}
+			if err := rows.Err(); err != nil {
+				rows.Close()
+				return runHistory{}, readFailure(err)
+			}
+			rows.Close()
+		}
+	}
+	history, err := foldRunHistoryEvents(r, events)
+	if err != nil {
+		return runHistory{}, err
+	}
+	if err := readItemStateHistoryForItems(r, itemIDs, &history); err != nil {
+		return history, readFailure(err)
+	}
+	return history, nil
+}
+
+func foldRunHistoryEvents(r *store.Reader, events []event.Event) (runHistory, error) {
 	history := runHistory{
 		known: map[string]bool{}, ranBefore: map[string]bool{}, judged: map[string]bool{}, waitReleases: map[string]string{},
 		refusals: map[string]string{}, judgeHolds: map[string]string{}, gateResults: map[string]string{},
@@ -3384,9 +3938,6 @@ func readRunHistory(r *store.Reader) (runHistory, error) {
 		if err := populateObstacleCallBackends(r, obstacleRunIDs, history.obstacleCalls); err != nil {
 			return history, readFailure(err)
 		}
-	}
-	if err := readItemStateHistory(r, &history); err != nil {
-		return history, readFailure(err)
 	}
 	return history, nil
 }
@@ -3484,6 +4035,56 @@ func readItemStateHistory(r *store.Reader, history *runHistory) error {
 		}
 	}
 	return rows.Err()
+}
+
+func readItemStateHistoryForItems(r *store.Reader, itemIDs []string, history *runHistory) error {
+	if len(itemIDs) == 0 {
+		return nil
+	}
+	const chunk = 400
+	for start := 0; start < len(itemIDs); start += chunk {
+		end := start + chunk
+		if end > len(itemIDs) {
+			end = len(itemIDs)
+		}
+		batch := itemIDs[start:end]
+		args := make([]any, 0, len(batch)+1)
+		args = append(args, StateInProgress)
+		for _, id := range batch {
+			args = append(args, id)
+		}
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(batch)), ",")
+		rows, err := r.Query(`SELECT object_id,
+ MAX(CASE WHEN json_extract(payload, '$.state') = ? THEN 1 ELSE 0 END)
+ FROM events
+ WHERE object_id IN (`+placeholders+`)
+  AND object_type = 'item'
+  AND json_valid(payload)
+  AND json_type(payload, '$.state') = 'text'
+  AND json_extract(payload, '$.state') <> ''
+ GROUP BY object_id`, args...)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			var id string
+			var ran bool
+			if err := rows.Scan(&id, &ran); err != nil {
+				rows.Close()
+				return err
+			}
+			history.known[id] = true
+			if ran {
+				history.ranBefore[id] = true
+			}
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return err
+		}
+		rows.Close()
+	}
+	return nil
 }
 
 // publishedForOthers answers the ids of the questions published in the item's design
