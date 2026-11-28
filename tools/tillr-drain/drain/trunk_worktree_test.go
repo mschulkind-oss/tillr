@@ -43,9 +43,6 @@ func TestPassRecordsSharedCoreWorktreeWithoutChangingConfig(t *testing.T) {
 		}
 		return seen
 	}
-	if err := l.runTrunkProofStep(ctx, &LoopResult{}, false); err != nil {
-		t.Fatal(err)
-	}
 	if _, err := l.pass(ctx, &LoopResult{}); err != nil {
 		t.Fatal(err)
 	}
@@ -62,11 +59,10 @@ func TestPassRecordsSharedCoreWorktreeWithoutChangingConfig(t *testing.T) {
 	}
 	// Later Git operations may fail with the bad setting; the trunk-observation
 	// event must already have been written regardless of that outcome.
-	stepErr := l.runTrunkProofStep(ctx, &LoopResult{}, false)
 	_, passErr := l.pass(ctx, &LoopResult{})
 	seen := readEvents()
 	if len(seen) != 1 || seen[0]["config_path"] != config || seen[0]["worktree"] != worktree {
-		t.Fatalf("want one event naming %q and %q; got %+v (trunk-proof error: %v, pass error: %v)", config, worktree, seen, stepErr, passErr)
+		t.Fatalf("want one event naming %q and %q; got %+v (pass error: %v)", config, worktree, seen, passErr)
 	}
 	after, err := os.ReadFile(config)
 	if err != nil {
@@ -79,11 +75,10 @@ func TestPassRecordsSharedCoreWorktreeWithoutChangingConfig(t *testing.T) {
 	// An empty value is still set. An ordinary Git read may refuse to chdir
 	// to it, but the observation must still work.
 	runGit(t, f.root, "config", "--file", config, "core.worktree", "")
-	stepErr = l.runTrunkProofStep(ctx, &LoopResult{}, false)
 	_, passErr = l.pass(ctx, &LoopResult{})
 	seen = readEvents()
 	if len(seen) != 2 || seen[1]["config_path"] != config || seen[1]["worktree"] != "" {
-		t.Fatalf("want an observation of the empty value in %q; got %+v (trunk-proof error: %v, pass error: %v)", config, seen, stepErr, passErr)
+		t.Fatalf("want an observation of the empty value in %q; got %+v (pass error: %v)", config, seen, passErr)
 	}
 }
 
