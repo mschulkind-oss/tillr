@@ -248,7 +248,7 @@ func (r HeavyRunner) RunAttempt(ctx context.Context, requested string) (out Heav
 	}()
 	for {
 		if err = ctx.Err(); err != nil {
-			return out, err
+			return out, context.Cause(ctx)
 		}
 		if r.BeforeTip != nil {
 			if err = r.BeforeTip(ctx); err != nil {
@@ -296,7 +296,7 @@ func (r HeavyRunner) RunAttempt(ctx context.Context, requested string) (out Heav
 				out.Runs = append(out.Runs, prior)
 				out.PendingTip = ""
 				switch err := r.requireCurrentTip(ctx, tip); {
-				case errors.Is(err, errHeavyTipMoved):
+				case errors.Is(err, ErrHeavyTipMoved):
 					continue
 				default:
 					return out, err
@@ -308,7 +308,7 @@ func (r HeavyRunner) RunAttempt(ctx context.Context, requested string) (out Heav
 			return out, e
 		}
 		if err = ctx.Err(); err != nil {
-			return out, err
+			return out, context.Cause(ctx)
 		}
 		started := r.Now()
 		stopRunning, e := startRunningHeavy(dir, base, tip, started)
@@ -320,10 +320,18 @@ func (r HeavyRunner) RunAttempt(ctx context.Context, requested string) (out Heav
 		attemptCtx = WithHeavyFailingTests(attemptCtx, r.Store, r.Trunk, tip, r.Now)
 		run, e = r.judgeTip(context.WithValue(attemptCtx, HeavyProgressKey{}, progress), run)
 		run.ReusedChecks = progress.reused
-		if ctx.Err() != nil {
+		if ctx.Err() != nil || IsHeavyCancelled(e) {
 			stopRunning()
-			storeProgress.Finish("cancelled")
-			return out, ctx.Err()
+			cancelErr := e
+			if ctx.Err() != nil {
+				cancelErr = context.Cause(ctx)
+			}
+			reason := HeavyCancelReason(ctx, cancelErr)
+			storeProgress.FinishWithReason("cancelled", reason)
+			if !IsHeavyCancelled(cancelErr) && reason != "" {
+				cancelErr = &HeavyCancelError{Reason: reason, Err: cancelErr}
+			}
+			return out, cancelErr
 		}
 		if e == nil && run.Result == "green" {
 			unrecorded, unrecErr := r.unrecordedCommits(ctx, base, tip)
@@ -377,7 +385,7 @@ func (r HeavyRunner) RunAttempt(ctx context.Context, requested string) (out Heav
 			if pe := PublishHeavy(dir, run); pe != nil {
 				stopRunning()
 				endedOutcome := heavyEndedOutcome(ctx, run.Result, pe)
-				storeProgress.Finish(endedOutcome, heavyEndedFailingChecks(endedOutcome, run.Checks)...)
+				storeProgress.FinishWithReason(endedOutcome, HeavyCancelReason(ctx, pe), heavyEndedFailingChecks(endedOutcome, run.Checks)...)
 				return out, pe
 			}
 		}
@@ -390,7 +398,7 @@ func (r HeavyRunner) RunAttempt(ctx context.Context, requested string) (out Heav
 			r.Report(run)
 		}
 		endedOutcome := heavyEndedOutcome(ctx, run.Result, e)
-		storeProgress.Finish(endedOutcome, heavyEndedFailingChecks(endedOutcome, run.Checks)...)
+		storeProgress.FinishWithReason(endedOutcome, HeavyCancelReason(ctx, e), heavyEndedFailingChecks(endedOutcome, run.Checks)...)
 		if e != nil {
 			return out, e
 		}
@@ -1095,7 +1103,7 @@ func (r HeavyRunner) offerRevert(ctx context.Context, tip, sha string, checks []
 		return RevertOutcome{Reverted: prior}, nil
 	}
 	if err := r.requireCurrentTip(ctx, tip); err != nil {
-		if errors.Is(err, errHeavyTipMoved) {
+		if errors.Is(err, ErrHeavyTipMoved) {
 			return RevertOutcome{Refused: "trunk advanced beyond the proved commit"}, nil
 		}
 		return RevertOutcome{}, err

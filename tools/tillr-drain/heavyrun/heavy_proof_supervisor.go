@@ -79,6 +79,7 @@ type HeavyProofDone struct {
 	Error        string         `json:"error,omitempty"`
 	CleanupLost  bool           `json:"cleanup_lost,omitempty"`
 	Interrupted  bool           `json:"interrupted,omitempty"`
+	CancelReason string         `json:"cancel_reason,omitempty"`
 	FinishedAtMS int64          `json:"finished_at_ms"`
 }
 
@@ -215,8 +216,8 @@ func SuperviseHeavyProof(args []string, cb HeavyProofCallbacks) int {
 		return 4
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx, cancel := context.WithCancelCause(context.Background())
+	defer cancel(nil)
 
 	hold, busy, holdErr := AcquireLoopLock(ctx, spec.Root)
 	if holdErr != nil {
@@ -270,6 +271,20 @@ func SuperviseHeavyProof(args []string, cb HeavyProofCallbacks) int {
 	_ = ready.Close()
 
 	var interrupted atomic.Bool
+	var cancelReasonMu sync.Mutex
+	var cancelReason string
+	setCancelReason := func(reason string) {
+		cancelReasonMu.Lock()
+		if cancelReason == "" {
+			cancelReason = reason
+		}
+		cancelReasonMu.Unlock()
+	}
+	getCancelReason := func() string {
+		cancelReasonMu.Lock()
+		defer cancelReasonMu.Unlock()
+		return cancelReason
+	}
 	watchDone := make(chan struct{})
 	go func() {
 		defer close(watchDone)
@@ -279,15 +294,24 @@ func SuperviseHeavyProof(args []string, cb HeavyProofCallbacks) int {
 			select {
 			case <-ctx.Done():
 				return
-			case <-sigCh:
+			case sig := <-sigCh:
+				reason := "operator signal"
+				if s, ok := sig.(syscall.Signal); ok {
+					if name := unix.SignalName(s); name != "" {
+						reason = "operator signal: " + name
+					}
+				}
+				setCancelReason(reason)
 				interrupted.Store(true)
-				cancel()
+				cancel(CancelHeavyError(reason))
 				return
 			case <-ticker.C:
 				if spec.OwnerPID > 0 && spec.OwnerStartTicks != "" {
 					if running, err := HeavySupervisorRunning(spec.OwnerPID, spec.OwnerStartTicks); err == nil && !running {
+						const reason = "loop stopped or restarted"
+						setCancelReason(reason)
 						interrupted.Store(true)
-						cancel()
+						cancel(CancelHeavyError(reason))
 						return
 					}
 				}
@@ -303,13 +327,14 @@ func SuperviseHeavyProof(args []string, cb HeavyProofCallbacks) int {
 		makeErr = Usagef("heavy proof supervisor has no judge factory")
 	}
 	if makeErr != nil {
-		cancel()
+		cancel(nil)
 		<-watchDone
 		_ = FinishHeavyTree()
 		_ = PublishHeavyJSON(spec.Dir, HeavyAttemptDoneFile, HeavyProofDone{
 			Attempt:      HeavyAttempt{PendingTip: spec.RequestedTip},
 			Error:        makeErr.Error(),
 			Interrupted:  interrupted.Load(),
+			CancelReason: getCancelReason(),
 			FinishedAtMS: time.Now().UnixMilli(),
 		})
 		return 0
@@ -385,13 +410,22 @@ func SuperviseHeavyProof(args []string, cb HeavyProofCallbacks) int {
 	}
 
 	attempt, runErr := runner.RunAttempt(ctx, spec.RequestedTip)
-	cancel()
+	cancel(nil)
 	<-watchDone
 	_ = FinishHeavyTree()
 
+	reason := getCancelReason()
+	wasInterrupted := interrupted.Load()
+	if !wasInterrupted && IsHeavyCancelled(runErr) {
+		wasInterrupted = true
+	}
+	if reason == "" && wasInterrupted {
+		reason = HeavyCancelReason(ctx, runErr)
+	}
 	done := HeavyProofDone{
 		Attempt:      attempt,
-		Interrupted:  interrupted.Load(),
+		Interrupted:  wasInterrupted,
+		CancelReason: reason,
 		FinishedAtMS: time.Now().UnixMilli(),
 	}
 	fixMu.Lock()

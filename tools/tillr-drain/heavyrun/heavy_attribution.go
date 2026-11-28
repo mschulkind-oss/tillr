@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -18,12 +17,10 @@ import (
 	"github.com/mschulkind-oss/tillr/checkresult"
 )
 
-var errHeavyTipMoved = errors.New("trunk moved beyond the proved commit")
-
 func (r HeavyRunner) requireCurrentTip(ctx context.Context, tip string) error {
 	current, err := heavy.GitOutput(ctx, r.Root, "rev-parse", r.Trunk+"^{commit}")
 	if err == nil && current != tip {
-		return errHeavyTipMoved
+		return ErrHeavyTipMoved
 	}
 	return err
 }

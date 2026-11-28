@@ -31,6 +31,7 @@ type HeavyProgressFact struct {
 	CheckID       string `json:"check_id,omitempty"`
 	Outcome       string `json:"outcome,omitempty"`
 	FailingChecks string `json:"failing_checks,omitempty"`
+	CancelReason  string `json:"cancel_reason,omitempty"`
 }
 
 type heavyStoreProgressKey struct{}
@@ -92,6 +93,10 @@ func (p *heavyStoreProgress) WholeStepCount() int {
 }
 
 func (p *heavyStoreProgress) Finish(outcome string, failingChecks ...string) {
+	p.FinishWithReason(outcome, "", failingChecks...)
+}
+
+func (p *heavyStoreProgress) FinishWithReason(outcome, cancelReason string, failingChecks ...string) {
 	if p == nil {
 		return
 	}
@@ -111,11 +116,16 @@ func (p *heavyStoreProgress) Finish(outcome string, failingChecks ...string) {
 	if outcome == "red" && len(failingChecks) > 0 {
 		joinedFailing = strings.Join(failingChecks, ", ")
 	}
+	var reason string
+	if outcome == "cancelled" {
+		reason = strings.TrimSpace(cancelReason)
+	}
 	p.writeLocked(writeCtx, HeavyProgressFact{
 		TipSHA:        p.tipSHA,
 		Phase:         "ended",
 		Outcome:       outcome,
 		FailingChecks: joinedFailing,
+		CancelReason:  reason,
 	})
 }
 
@@ -310,7 +320,7 @@ func startHeavySizeProgressWatcher(ctx context.Context, checkID string, interval
 }
 
 func heavyEndedOutcome(ctx context.Context, result string, err error) string {
-	if ctx.Err() != nil || errors.Is(err, ErrRestartPending) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+	if ctx.Err() != nil || IsHeavyCancelled(err) || errors.Is(err, ErrRestartPending) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return "cancelled"
 	}
 	if err != nil {

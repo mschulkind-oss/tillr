@@ -44,7 +44,79 @@ func Internalf(format string, args ...any) error {
 	return &CodeError{Code: record.ExitInternal, Msg: fmt.Sprintf(format, args...)}
 }
 
-var ErrRestartPending = errors.New("loop replacement pending")
+var (
+	ErrRestartPending = errors.New("loop replacement pending")
+	// ErrHeavyTipMoved is returned or passed as a context cancel cause when a
+	// trunk proof is cancelled because the trunk tip moved.
+	ErrHeavyTipMoved = errors.New("trunk moved beyond the proved commit")
+)
+
+// HeavyCancelError wraps an intentional trunk-proof cancellation with the
+// reason or actor that cancelled it (tip move, loop stop/restart, or operator signal).
+type HeavyCancelError struct {
+	Reason string
+	Err    error
+}
+
+func (e *HeavyCancelError) Error() string {
+	if e.Reason != "" {
+		return "heavy proof cancelled: " + e.Reason
+	}
+	if e.Err != nil {
+		return e.Err.Error()
+	}
+	return context.Canceled.Error()
+}
+
+func (e *HeavyCancelError) Unwrap() []error {
+	if e.Err == nil || errors.Is(e.Err, context.Canceled) {
+		if e.Err != nil {
+			return []error{e.Err}
+		}
+		return []error{context.Canceled}
+	}
+	return []error{e.Err, context.Canceled}
+}
+
+// CancelHeavyError builds a cancellation error naming what cancelled the proof.
+func CancelHeavyError(reason string) error {
+	return &HeavyCancelError{Reason: strings.TrimSpace(reason), Err: context.Canceled}
+}
+
+// IsHeavyCancelled reports whether err represents an intentional trunk-proof
+// cancellation (tip move, loop stop/restart, or operator signal) rather than a fault.
+func IsHeavyCancelled(err error) bool {
+	if err == nil {
+		return false
+	}
+	var ce *HeavyCancelError
+	return errors.As(err, &ce) || errors.Is(err, ErrHeavyTipMoved) || errors.Is(err, ErrRestartPending)
+}
+
+// HeavyCancelReason returns the human-readable reason for a cancelled trunk proof,
+// or "" when the cancellation carried no specific cause beyond context.Canceled.
+func HeavyCancelReason(ctx context.Context, err error) string {
+	var ce *HeavyCancelError
+	if errors.As(err, &ce) && strings.TrimSpace(ce.Reason) != "" {
+		return strings.TrimSpace(ce.Reason)
+	}
+	if ctx != nil && ctx.Err() != nil {
+		cause := context.Cause(ctx)
+		if errors.As(cause, &ce) && strings.TrimSpace(ce.Reason) != "" {
+			return strings.TrimSpace(ce.Reason)
+		}
+		if cause != nil && cause != context.Canceled && cause != context.DeadlineExceeded {
+			return strings.TrimSpace(cause.Error())
+		}
+	}
+	if errors.Is(err, ErrHeavyTipMoved) {
+		return ErrHeavyTipMoved.Error()
+	}
+	if errors.Is(err, ErrRestartPending) {
+		return ErrRestartPending.Error()
+	}
+	return ""
+}
 
 const (
 	DefaultTrunkRef = "refs/heads/" + settings.DefaultTrunkBranch

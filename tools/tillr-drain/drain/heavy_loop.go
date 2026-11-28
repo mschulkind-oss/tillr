@@ -119,11 +119,17 @@ func (l *Loop) startHeavy(ctx context.Context, tip string) error {
 					err = errRestartPending
 				}
 			}
-			if err != nil && heavyCtx.Err() == nil && !errors.Is(err, errRestartPending) {
-				l.reportf("loop: heavy runner fault: %v\n", err)
-				if out.PendingTip != "" {
-					if eventErr := l.recordHeavyFault(heavyCtx, out.PendingTip, err); eventErr != nil {
-						l.reportf("loop: recording heavy runner fault: %v\n", eventErr)
+			if err != nil {
+				if heavyrun.IsHeavyCancelled(err) || heavyCtx.Err() != nil || errors.Is(err, errRestartPending) {
+					if reason := heavyrun.HeavyCancelReason(heavyCtx, err); reason != "" {
+						l.reportf("loop: heavy proof cancelled: %s\n", reason)
+					}
+				} else {
+					l.reportf("loop: heavy runner fault: %v\n", err)
+					if out.PendingTip != "" {
+						if eventErr := l.recordHeavyFault(heavyCtx, out.PendingTip, err); eventErr != nil {
+							l.reportf("loop: recording heavy runner fault: %v\n", eventErr)
+						}
 					}
 				}
 			}
@@ -521,15 +527,21 @@ func (l *Loop) runDetachedHeavyLoop(heavyCtx context.Context, procSteps *Process
 		if err == nil {
 			err = l.settleDetachedHeavyProof(heavyCtx, handle.dir, done)
 		}
-		if err != nil && heavyCtx.Err() == nil && !errors.Is(err, errRestartPending) {
-			l.reportf("loop: heavy runner fault: %v\n", err)
-			pendingTip := requested
-			if done.Attempt.PendingTip != "" {
-				pendingTip = done.Attempt.PendingTip
-			}
-			if pendingTip != "" {
-				if eventErr := l.recordHeavyFault(heavyCtx, pendingTip, err); eventErr != nil {
-					l.reportf("loop: recording heavy runner fault: %v\n", eventErr)
+		if err != nil {
+			if heavyrun.IsHeavyCancelled(err) || heavyCtx.Err() != nil || errors.Is(err, errRestartPending) {
+				if reason := heavyrun.HeavyCancelReason(heavyCtx, err); reason != "" {
+					l.reportf("loop: heavy proof cancelled: %s\n", reason)
+				}
+			} else {
+				l.reportf("loop: heavy runner fault: %v\n", err)
+				pendingTip := requested
+				if done.Attempt.PendingTip != "" {
+					pendingTip = done.Attempt.PendingTip
+				}
+				if pendingTip != "" {
+					if eventErr := l.recordHeavyFault(heavyCtx, pendingTip, err); eventErr != nil {
+						l.reportf("loop: recording heavy runner fault: %v\n", eventErr)
+					}
 				}
 			}
 		}
@@ -745,7 +757,7 @@ func (l *Loop) handleDetachedHeavyEarly(ctx context.Context, procSteps *ProcessS
 func (l *Loop) settleDetachedHeavyProof(ctx context.Context, dir string, done heavyrun.HeavyProofDone) error {
 	if done.Interrupted && len(done.Attempt.Runs) == 0 {
 		l.clearDetachedHeavyFiles(dir)
-		return context.Canceled
+		return heavyrun.CancelHeavyError(done.CancelReason)
 	}
 	if done.Attempt.Busy {
 		l.clearDetachedHeavyFiles(dir)
@@ -845,8 +857,12 @@ func (l *Loop) settleDetachedHeavyProof(ctx context.Context, dir string, done he
 			}
 		}
 	}
-	if settleErr == nil && done.Error != "" {
-		settleErr = errors.New(done.Error)
+	if settleErr == nil {
+		if done.Interrupted {
+			settleErr = heavyrun.CancelHeavyError(done.CancelReason)
+		} else if done.Error != "" {
+			settleErr = errors.New(done.Error)
+		}
 	}
 	l.clearDetachedHeavyFiles(dir)
 	return settleErr
