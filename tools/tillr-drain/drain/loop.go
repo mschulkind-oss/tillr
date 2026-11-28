@@ -5479,9 +5479,16 @@ func (l *Loop) runInlineHousekeeping(ctx context.Context, result *LoopResult, ge
 	if err := l.runGCMaintenanceStep(ctx, result, generation); err != nil {
 		return err
 	}
+	var trunkErr error
 	if !l.nonLanding {
 		if err := l.runTrunkProofStep(ctx, result, false); err != nil {
-			return err
+			// A pending restart defers new rolling runs inside runTrunkProofStep,
+			// but inline passes waiting on an in-flight mechanical step still run
+			// document sync before yielding to passMode's deferred gateRestart.
+			if !errors.Is(err, errRestartPending) {
+				return err
+			}
+			trunkErr = err
 		}
 	} else {
 		l.actors.SetCachedTrunk(bgactors.TrunkCache{Valid: true})
@@ -5489,7 +5496,7 @@ func (l *Loop) runInlineHousekeeping(ctx context.Context, result *LoopResult, ge
 	if err := l.runSyncStep(ctx, result, false); err != nil {
 		return err
 	}
-	return nil
+	return trunkErr
 }
 
 // settleActorsBeforeDrained runs one barrier cycle of the three background
