@@ -2,9 +2,13 @@ package gateland
 
 import (
 	"context"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/mschulkind-oss/tillr/event"
+	"github.com/mschulkind-oss/tillr/store"
 )
 
 func TestStateTrackingAndWake(t *testing.T) {
@@ -146,4 +150,53 @@ func TestRunLoopWakeAndTimer(t *testing.T) {
 	}
 	cancel()
 	<-done
+}
+
+func TestReadGatedSeqs(t *testing.T) {
+	ctx := context.Background()
+	s, err := store.Open(ctx, filepath.Join(t.TempDir(), "state.db"), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	run1, run2, item1 := "run-1", "run-2", "item-1"
+	const (
+		gatedKind = "drain.gated"
+		otherKind = "drain.other"
+	)
+	_ = event.Register(gatedKind, "tillr-drain")
+	_ = event.Register(otherKind, "tillr-drain")
+	var seq1, seq2 int64
+	if err := s.WriteTx(ctx, func(tx *store.Tx) error {
+		var err error
+		if _, err = tx.Append(event.Event{Kind: gatedKind, ObjectType: "run", ObjectID: &run1, Payload: []byte(`{}`)}); err != nil {
+			return err
+		}
+		if seq1, err = tx.Append(event.Event{Kind: gatedKind, ObjectType: "run", ObjectID: &run1, Payload: []byte(`{}`)}); err != nil {
+			return err
+		}
+		if _, err = tx.Append(event.Event{Kind: otherKind, ObjectType: "run", ObjectID: &run2, Payload: []byte(`{}`)}); err != nil {
+			return err
+		}
+		if _, err = tx.Append(event.Event{Kind: gatedKind, ObjectType: "item", ObjectID: &item1, Payload: []byte(`{}`)}); err != nil {
+			return err
+		}
+		seq2, err = tx.Append(event.Event{Kind: gatedKind, ObjectType: "run", ObjectID: &run2, Payload: []byte(`{}`)})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var got map[string]int64
+	if err := s.ReadTx(ctx, func(r *store.Reader) error {
+		var err error
+		got, err = ReadGatedSeqs(r, gatedKind)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[run1] != seq1 || got[run2] != seq2 {
+		t.Fatalf("ReadGatedSeqs = %v, want %s:%d and %s:%d", got, run1, seq1, run2, seq2)
+	}
 }

@@ -276,7 +276,7 @@ func ReadGatedSeqs(r *store.Reader, kind string) (map[string]int64, error) {
 	}
 	seqs := make(map[string]int64, len(events))
 	for _, e := range events {
-		if e.ObjectType == "run" && e.ObjectID != nil {
+		if e.Kind == kind && e.ObjectType == "run" && e.ObjectID != nil {
 			seqs[*e.ObjectID] = e.Seq
 		}
 	}
