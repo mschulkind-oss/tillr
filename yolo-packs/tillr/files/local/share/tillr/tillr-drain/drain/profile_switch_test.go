@@ -353,3 +353,61 @@ func TestPassQuotaRefreshDrivesTheProfileSwitch(t *testing.T) {
 		t.Fatalf("switch events = %d, want 2", n)
 	}
 }
+
+// An infrastructure closure on the fallback's backend (backend_outcomes) keeps
+// the closed preferred profile in force instead of moving dispatch onto it, and
+// an infrastructure closure on the profile in force never switches it.
+func TestProfileNeverSwitchesOntoAnInfrastructureClosedProfile(t *testing.T) {
+	ctx := context.Background()
+	sf := newSwitchFixture(t)
+	l := sf.l
+	backendRun(t, sf.f, "fall-broken", "fall", 2)
+	sf.reading(t, sf.at, "", 0.9)
+	if err := l.selectProfile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if sf.profile() != "pref" || len(sf.switches(t)) != 0 {
+		t.Fatalf("switched onto an infrastructure-closed fallback: profile %q, %d events", sf.profile(), len(sf.switches(t)))
+	}
+	backendRun(t, sf.f, "pref-broken", "pref", 2)
+	sf.reading(t, sf.at, "", 0.1)
+	if err := l.selectProfile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if sf.profile() != "pref" || len(sf.switches(t)) != 0 {
+		t.Fatalf("an infrastructure failure switched the profile in force to %q", sf.profile())
+	}
+}
+
+// NewLoop (loop startup and --check) evaluates the stored readings: a quota-
+// closed preferred profile starts on the fallback as startup state, with the
+// startup line naming it and no drain.profile-switched event recorded.
+func TestNewLoopChoosesTheStartingProfileFromStoredReadingsWithoutASwitchEvent(t *testing.T) {
+	sf := newSwitchFixture(t)
+	sf.reading(t, sf.at, "", 0.9)
+	cfg := sf.l.cfg
+	cfg.Policy = nil
+	started, err := NewLoop(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	line := started.ProfileStartLine()
+	if !strings.Contains(line, "loop: profile fall (2/2 of [pref, fall]") || !strings.Contains(line, "fallback profile (2/2) at startup: pref five_hour used 0.90 >= 0.80") {
+		t.Fatalf("startup line = %q", line)
+	}
+	if started.cfg.Policy.DefaultBackend != "fall" || started.policyState.ProfileIndex != 1 || started.policyState.Ref != cfg.PolicyProfileRefs[1] || started.policyState.SwitchedFrom != "" {
+		t.Fatalf("startup state = %+v (default %q)", started.policyState, started.cfg.Policy.DefaultBackend)
+	}
+	if n := len(sf.switches(t)); n != 0 {
+		t.Fatalf("startup recorded %d drain.profile-switched events", n)
+	}
+
+	sf.reading(t, sf.at, "", 0.1)
+	started, err = NewLoop(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if line := started.ProfileStartLine(); !strings.Contains(line, "loop: profile pref (1/2 of [pref, fall]") || !strings.Contains(line, "preferred profile (1/2); all quota windows open") {
+		t.Fatalf("open preferred startup line = %q", line)
+	}
+}

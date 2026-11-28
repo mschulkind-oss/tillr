@@ -1078,6 +1078,9 @@ func NewLoop(cfg LoopConfig) (*Loop, error) {
 			}
 		}
 	}
+	if err := l.selectStartupProfile(context.Background()); err != nil {
+		l.reportf("loop: startup profile selection read no stored quota facts (%v); the preferred profile starts in force\n", err)
+	}
 	for _, diagnostic := range WorkflowDefaultDiagnostics(cfg.Root, cfg.WorkflowDefaults, l.cfg.Policy) {
 		l.reportf("workflow-invalid: %s\n", diagnostic)
 	}

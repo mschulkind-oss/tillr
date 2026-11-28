@@ -274,5 +274,15 @@ func resolveStepBackend(p *Policy, itemID, seat, prevBackend string, shut map[st
 
 // Forwarding wrapper for profile_select.go: switch the profile in force on a quota fact.
 func (l *Loop) selectProfile(ctx context.Context) error {
-	return policy.ProfileSwitcher{Root: l.cfg.Root, Store: l.cfg.Store, PolicyRef: l.cfg.PolicyRef, Refs: l.cfg.PolicyProfileRefs, Now: l.cfg.Now, Mu: &l.policyMu, Active: &l.cfg.Policy, Profiles: l.profilePolicies, State: &l.policyState, Recorded: &l.policyRecorded, Reportf: l.reportf}.Select(ctx)
+	return l.profileSwitcher().Select(ctx)
+}
+
+func (l *Loop) profileSwitcher() policy.ProfileSwitcher {
+	return policy.ProfileSwitcher{Root: l.cfg.Root, Store: l.cfg.Store, PolicyRef: l.cfg.PolicyRef, Refs: l.cfg.PolicyProfileRefs, Now: l.cfg.Now, Mu: &l.policyMu, Active: &l.cfg.Policy, Profiles: l.profilePolicies, State: &l.policyState, Recorded: &l.policyRecorded, Reportf: l.reportf, ReadClosed: readInfrastructureClosed}
+}
+
+// selectStartupProfile puts the profile the stored quota facts choose in force as
+// startup state, recording no drain.profile-switched event (profile_select.go).
+func (l *Loop) selectStartupProfile(ctx context.Context) error {
+	return l.profileSwitcher().Startup(ctx)
 }

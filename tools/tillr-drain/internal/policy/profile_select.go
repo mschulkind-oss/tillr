@@ -2,7 +2,9 @@ package policy
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"sort"
 	"strings"
 	"sync"
@@ -70,7 +72,11 @@ type ProfileInputs struct {
 	Active   int
 	Statuses []QuotaStatus
 	Windows  map[string]time.Time
-	At       time.Time
+	// Closed is the backends an infrastructure ending holds closed in
+	// backend_outcomes. A closed backend makes its profile not open as a target,
+	// and never closes the profile in force (D-JL24).
+	Closed map[string]bool
+	At     time.Time
 }
 
 // ProfileSelection is the answer: the index to run, why it changed, and the
@@ -133,8 +139,9 @@ func (in ProfileInputs) status(name string) (QuotaStatus, bool) {
 }
 
 // profileState classifies one profile: closed by a verified quota condition,
-// strictly open (every probed backend freshly read and under its reserve line)
-// or unknown (a stale, missing or failed reading, which never switches).
+// strictly open (every probed backend freshly read and under its reserve line,
+// and no backend infrastructure-closed) or unknown (a stale, missing or failed
+// reading, or an infrastructure closure, which never switches away).
 func (in ProfileInputs) profileState(p *Policy) (closure *ProfileClosure, strictOpen bool) {
 	strictOpen = true
 	if p == nil {
@@ -148,6 +155,9 @@ func (in ProfileInputs) profileState(p *Policy) (closure *ProfileClosure, strict
 		if reset, shut := in.Windows[name]; shut && reset.After(in.At) {
 			reset := reset
 			return &ProfileClosure{Backend: name, Pool: QuotaPoolKey(name, b), Reading: ProfileReading{Source: "refusal", Reserve: b.Reserve, ResetAt: &reset}}, false
+		}
+		if in.Closed[name] {
+			strictOpen = false
 		}
 		if len(b.Quota) == 0 {
 			continue
@@ -195,6 +205,8 @@ func (in ProfileInputs) openedReading(p *Policy) *ProfileClosure {
 //     next strictly open profile below it takes over.
 //   - A stale reading, a failed quota command and a missing reading never
 //     switch anything; they leave the profile in force.
+//   - An infrastructure-closed backend never switches away from the profile in
+//     force, and a profile with one is not open as a switch-away or switch-back target.
 //   - When every profile is verifiably closed, profile 0 stays in force.
 func SelectProfile(in ProfileInputs) ProfileSelection {
 	n := len(in.Policies)
@@ -336,24 +348,51 @@ func SwitchEvent(names []string, from int, sel ProfileSelection) ProfileSwitched
 	return ev
 }
 
-// ReadProfileInputs reads the stored quota readings and unexpired refusal windows.
-func ReadProfileInputs(ctx context.Context, storePath string, at time.Time) ([]QuotaStatus, map[string]time.Time, error) {
+// ReadProfileInputs reads the stored quota readings, unexpired refusal windows
+// and, when readClosed is given, the infrastructure-closed backends, in one read
+// transaction.
+func ReadProfileInputs(ctx context.Context, storePath string, at time.Time, readClosed func(*store.Reader) (map[string]bool, error)) (ProfileInputs, error) {
+	in := ProfileInputs{At: at}
 	reader, err := store.OpenRead(ctx, storePath)
 	if err != nil {
-		return nil, nil, err
+		return in, err
 	}
 	defer reader.Close()
-	var statuses []QuotaStatus
-	var windows map[string]time.Time
 	err = reader.ReadTx(ctx, func(r *store.Reader) error {
 		var e error
-		if statuses, e = ReadQuotaStatuses(r); e != nil {
+		if in.Statuses, e = ReadQuotaStatuses(r); e != nil {
 			return e
 		}
-		windows, e = ReadBackendWindows(r, at)
+		if in.Windows, e = ReadBackendWindows(r, at); e != nil {
+			return e
+		}
+		if readClosed != nil {
+			in.Closed, e = readClosed(r)
+		}
 		return e
 	})
-	return statuses, windows, err
+	return in, err
+}
+
+// StartupProfile evaluates the ordered profile list on stored readings as the
+// loop starts. The answer is startup state, not a switch: the caller records no
+// drain.profile-switched event. Why describes the profile chosen.
+func StartupProfile(in ProfileInputs) (sel ProfileSelection, why string) {
+	in.Active = 0
+	sel = SelectProfile(in)
+	n := len(in.Policies)
+	switch {
+	case sel.Index > 0:
+		why = fmt.Sprintf("fallback profile (%d/%d) at startup", sel.Index+1, n)
+		if detail := ProfileDetail(in.Names, sel); detail != "" {
+			why += ": " + detail
+		}
+	case sel.AllClosed:
+		why = ProfileWhy(in.Names, 0, ProfileSelection{Index: 0, Cause: CauseAllQuotaClosed, Closure: sel.Closure}, in.At)
+	default:
+		why = fmt.Sprintf("preferred profile (1/%d); all quota windows open", n)
+	}
+	return sel, why
 }
 
 // RecordProfileSwitch appends the drain.profile-switched event in one write transaction.
@@ -382,6 +421,8 @@ type ProfileSwitcher struct {
 	State                  *PolicyState
 	Recorded               *bool
 	Reportf                func(string, ...any)
+	// ReadClosed reads the infrastructure-closed backends; nil reads none.
+	ReadClosed func(*store.Reader) (map[string]bool, error)
 }
 
 // ActivePolicyRef is the file the profile in force came from, so a pass-boundary
@@ -409,15 +450,50 @@ func (s ProfileSwitcher) Select(ctx context.Context) error {
 		return nil
 	}
 	at := s.Now().UTC()
-	statuses, windows, err := ReadProfileInputs(ctx, s.Store, at)
+	in, err := ReadProfileInputs(ctx, s.Store, at, s.ReadClosed)
 	if err != nil {
 		return err
 	}
-	sel := SelectProfile(ProfileInputs{Policies: policies, Names: names, Active: active, Statuses: statuses, Windows: windows, At: at})
+	in.Policies, in.Names, in.Active = policies, names, active
+	sel := SelectProfile(in)
 	if !sel.Changed {
 		return nil
 	}
 	return s.apply(ctx, names, active, sel, at)
+}
+
+// Startup evaluates the ordered profile list on the stored quota readings,
+// refusal windows and infrastructure closures as the loop starts (and at
+// --check), and puts the chosen profile in force as startup state: it records no
+// drain.profile-switched event. A missing store or ref leaves the preferred profile.
+func (s ProfileSwitcher) Startup(ctx context.Context) error {
+	if s.Store == "" || s.PolicyRef == "" || len(s.Profiles) < 2 {
+		return nil
+	}
+	in, err := ReadProfileInputs(ctx, s.Store, s.Now().UTC(), s.ReadClosed)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	in.Policies, in.Names = s.Profiles, s.State.Profiles
+	sel, why := StartupProfile(in)
+	s.State.Why, s.State.SkippedProfiles = why, sel.Skipped
+	if sel.Index == 0 || sel.Index >= len(s.Refs) {
+		return nil
+	}
+	_, raw, hash, err := ReadPolicyContent(s.Refs[sel.Index])
+	if err != nil {
+		return err
+	}
+	*s.Active = s.Profiles[sel.Index]
+	s.State.Ref, s.State.ProfileIndex = s.Refs[sel.Index], sel.Index
+	if sel.Index < len(s.State.Profiles) {
+		s.State.Profile = s.State.Profiles[sel.Index]
+	}
+	s.State.Hash, s.State.DiskHash, s.State.Content = hash, hash, string(raw)
+	return nil
 }
 
 func (s ProfileSwitcher) apply(ctx context.Context, names []string, from int, sel ProfileSelection, at time.Time) error {

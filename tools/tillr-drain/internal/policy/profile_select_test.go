@@ -164,3 +164,40 @@ func TestSelectProfileRecordsSkippedClosedProfile(t *testing.T) {
 		t.Fatalf("skipped = %+v; reopen headroom must stay unset (OQ-QPS2 option B)", sp)
 	}
 }
+
+// An infrastructure closure (backend_outcomes) is never a reason to leave the
+// profile in force, and a profile holding one is not open as a target in
+// either direction.
+func TestSelectProfileTreatsAnInfrastructureClosedTargetAsNotOpen(t *testing.T) {
+	away := selInputs(0, nil, poolStatuses(0.9)...)
+	away.Closed = map[string]bool{"b1": true}
+	if sel := SelectProfile(away); sel.Changed || sel.Index != 0 {
+		t.Fatalf("switched away onto an infrastructure-closed fallback: %+v", sel)
+	}
+	back := selInputs(1, nil, poolStatuses(0.0)...)
+	back.Closed = map[string]bool{"a2": true}
+	if sel := SelectProfile(back); sel.Changed || sel.Index != 1 {
+		t.Fatalf("switched back onto an infrastructure-closed preferred profile: %+v", sel)
+	}
+	stay := selInputs(0, nil, poolStatuses(0.1)...)
+	stay.Closed = map[string]bool{"a1": true}
+	if sel := SelectProfile(stay); sel.Changed || sel.Index != 0 {
+		t.Fatalf("an infrastructure failure on the profile in force switched it: %+v", sel)
+	}
+}
+
+func TestStartupProfileChoosesTheFirstOpenProfileAsStartupState(t *testing.T) {
+	sel, why := StartupProfile(selInputs(1, nil, poolStatuses(0.9)...))
+	if sel.Index != 1 || !strings.HasPrefix(why, "fallback profile (2/2) at startup: a1 five_hour used 0.90 >= 0.80") || len(sel.Skipped) != 1 {
+		t.Fatalf("closed preferred profile at startup: index %d why %q skipped %+v", sel.Index, why, sel.Skipped)
+	}
+	sel, why = StartupProfile(selInputs(1, nil, poolStatuses(0.1)...))
+	if sel.Index != 0 || why != "preferred profile (1/2); all quota windows open" {
+		t.Fatalf("open preferred profile at startup: index %d why %q", sel.Index, why)
+	}
+	closed := selInputs(0, nil, poolStatuses(0.9)...)
+	closed.Closed = map[string]bool{"b1": true}
+	if sel, _ = StartupProfile(closed); sel.Index != 0 {
+		t.Fatalf("startup chose an infrastructure-closed fallback: %+v", sel)
+	}
+}
