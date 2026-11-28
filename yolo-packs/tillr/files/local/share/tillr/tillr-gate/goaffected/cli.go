@@ -42,6 +42,7 @@ func Run(args []string) int {
 	activeTestsRaw := ""
 	missingEdges := false
 	scanTestsDir := ""
+	var proveDisabled []string
 
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
@@ -151,6 +152,13 @@ func Run(args []string) int {
 			}
 			hasActiveTests = true
 			activeTestsRaw = v
+		case "--prove-disabled":
+			v, ok := nextVal()
+			if !ok {
+				fmt.Fprintln(os.Stderr, "go-affected: --prove-disabled requires a value")
+				return 2
+			}
+			proveDisabled = append(proveDisabled, v)
 		case "--scan-tests":
 			v, ok := nextVal()
 			if !ok {
@@ -233,6 +241,12 @@ func Run(args []string) int {
 		}
 	}
 
+	disabled, err := LoadDisabledTests(root, proveDisabled, os.Stderr)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "go-affected: %v\n", err)
+		return 1
+	}
+
 	evPath := evidenceOut
 	if evPath == "" {
 		evPath = os.Getenv("TILLR_GO_AFFECTED_EVIDENCE_OUT")
@@ -242,6 +256,7 @@ func Run(args []string) int {
 		Graph:        graph,
 		VerdictsIn:   verdictsIn,
 		VerdictsOut:  verdictsOut,
+		Disabled:     disabled,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "go-affected: %v\n", err)
@@ -358,6 +373,7 @@ Options:
   --drop-module MOD         Module to drop from selection (repeatable)
   --select-only             Print selection JSON and exit 0
   --evidence-out PATH       Write evidence JSON to this path
+  --prove-disabled SEL      Run this listed disabled test anyway (repeatable)
   --verdicts-in PATH        Read prior passing package verdicts JSON from this path
   --verdicts-out PATH       Write passing package verdicts JSON to this path
   --edge-digest PKG         Print TILLR_GATE_EDGE_INPUTS digest for PKG and exit 0

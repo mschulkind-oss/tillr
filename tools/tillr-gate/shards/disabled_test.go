@@ -208,3 +208,14 @@ func TestMalformedDisabledListRefusesTheRun(t *testing.T) {
 		t.Fatalf("exit %d, stderr %s", code, stderr)
 	}
 }
+
+func TestFullSkipPatternJoinsTopLevelAndSubtestSelectors(t *testing.T) {
+	got := FullSkipPattern([]string{"TestB", "TestA/sub1", "TestA/sub1/deep", "TestC", "TestC/x", "TestD/x.y/z"})
+	want := `^TestA$/^sub1$|^TestB$|^TestC$|^TestD$/^x\.y$/^z$`
+	if got != want {
+		t.Fatalf("FullSkipPattern = %q, want %q", got, want)
+	}
+	if strings.Contains(got, "(") || FullSkipPattern(nil) != "" {
+		t.Fatalf("a pattern is never parenthesized and nothing listed is empty: %q", got)
+	}
+}

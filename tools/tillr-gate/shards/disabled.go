@@ -2,11 +2,11 @@ package shards
 
 import (
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"sync"
 
+	"github.com/mschulkind-oss/tillr-gate/internal/skip"
 	"github.com/mschulkind-oss/tillr/disabledtests"
 	"github.com/mschulkind-oss/tillr/settings"
 )
@@ -86,44 +86,9 @@ func (d *DisabledSet) SkipFor(pkg string) string {
 	return SkipPattern(d.byPackage[pkg])
 }
 
-// SkipPattern builds the Go -skip pattern for the subtest selectors in listed.
-//
-// Execution against Go's testing/match.go fixes two rules: slash-separated patterns are
-// never wrapped in parentheses, because the matcher splits on "/" only at parenthesis
-// depth zero, so the selectors are joined by an unparenthesized top-level "|" with each
-// segment anchored; and a selector under a listed ancestor is pruned, because the
-// matcher returns the first matching alternative even when it matches only in part.
-// Top-level selectors are left out: they are removed from the run list instead.
-func SkipPattern(listed []string) string {
-	set := make(map[string]struct{}, len(listed))
-	for _, sel := range listed {
-		set[sel] = struct{}{}
-	}
-	var patterns []string
-	for sel := range set {
-		if !strings.Contains(sel, "/") || hasListedAncestor(sel, set) {
-			continue
-		}
-		segs := strings.Split(sel, "/")
-		for i, s := range segs {
-			segs[i] = "^" + regexp.QuoteMeta(s) + "$"
-		}
-		patterns = append(patterns, strings.Join(segs, "/"))
-	}
-	sort.Strings(patterns)
-	return strings.Join(patterns, "|")
-}
-
-func hasListedAncestor(sel string, set map[string]struct{}) bool {
-	for i := 0; i < len(sel); i++ {
-		if sel[i] == '/' {
-			if _, ok := set[sel[:i]]; ok {
-				return true
-			}
-		}
-	}
-	return false
-}
+// SkipPattern builds the Go -skip pattern for the subtest selectors in listed; see
+// skip.Subtests. Top-level selectors are left out: they are removed from the run list instead.
+func SkipPattern(listed []string) string { return skip.Subtests(listed) }
 
 // FailedTest is one test that failed in a run, with only its own output.
 type FailedTest struct {
@@ -201,6 +166,47 @@ func FailedTests(events []TestEvent) []FailedTest {
 	return out
 }
 
+// FullSkipPattern builds the Go -skip pattern for a direct `go test` call over one package:
+// listed top-level tests and listed subtests together; see skip.Full.
+func FullSkipPattern(listed []string) string { return skip.Full(listed) }
+
+// LoadModuleSelectors reads the tracked disabled list of the repository at root and returns
+// the listed go-test selectors of module (slash-separated, relative to root) keyed by package
+// import path, less any selector named in prove. The list path comes from `.tillr.toml`
+// `[gate] disabled_tests`; a missing list disables nothing, and a malformed one is an error.
+func LoadModuleSelectors(root, module string, prove []string) (map[string][]string, error) {
+	cfg, err := settings.Read(root)
+	if err != nil {
+		return nil, err
+	}
+	list, err := disabledtests.Load(filepath.Join(root, filepath.FromSlash(cfg.DisabledTestsPath())))
+	if err != nil {
+		return nil, err
+	}
+	return SelectorsByPackage(list, module, prove), nil
+}
+
+// SelectorsByPackage groups the go-test selectors of list that belong to module by package
+// import path, less any selector named in prove.
+func SelectorsByPackage(list disabledtests.List, module string, prove []string) map[string][]string {
+	proved := make(map[string]struct{}, len(prove))
+	for _, sel := range prove {
+		proved[sel] = struct{}{}
+	}
+	byPackage := map[string][]string{}
+	for _, e := range list.Disabled {
+		if _, ok := proved[e.Selector]; ok {
+			continue
+		}
+		g, ok := disabledtests.ParseGoSelector(e.Selector)
+		if !ok || g.Module != module {
+			continue
+		}
+		byPackage[g.Package] = append(byPackage[g.Package], g.Test)
+	}
+	return byPackage
+}
+
 // loadDisabledSet reads the tracked disabled list of the repository holding module and
 // returns the module's tests, less any selector named in prove. The list path comes from
 // `.tillr.toml` `[gate] disabled_tests`; a missing list disables nothing. A module outside
@@ -215,28 +221,9 @@ func loadDisabledSet(module string, prove []string) (*DisabledSet, error) {
 		return nil, nil
 	}
 	rel = filepath.ToSlash(rel)
-	cfg, err := settings.Read(root)
+	byPackage, err := LoadModuleSelectors(root, rel, prove)
 	if err != nil {
 		return nil, err
-	}
-	list, err := disabledtests.Load(filepath.Join(root, filepath.FromSlash(cfg.DisabledTestsPath())))
-	if err != nil {
-		return nil, err
-	}
-	proved := make(map[string]struct{}, len(prove))
-	for _, sel := range prove {
-		proved[sel] = struct{}{}
-	}
-	byPackage := map[string][]string{}
-	for _, e := range list.Disabled {
-		if _, ok := proved[e.Selector]; ok {
-			continue
-		}
-		g, ok := disabledtests.ParseGoSelector(e.Selector)
-		if !ok || g.Module != rel {
-			continue
-		}
-		byPackage[g.Package] = append(byPackage[g.Package], g.Test)
 	}
 	return NewDisabledSet(byPackage), nil
 }

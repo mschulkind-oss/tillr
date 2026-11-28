@@ -52,7 +52,30 @@ test *args:
         if [ "$#" -eq 0 ] && [ "$dir" = "tools/tillr-drain" ]; then
             go run -C tools/tillr-gate . shards "$dir" -k 6
         else
-            (cd "$dir" && go test ./... "$@")
+            # Go's -skip has no package qualifier, so a listed test is skipped per package:
+            # packages with none run together, each listed package runs on its own.
+            listed="$(go run -C tools/tillr-gate . disabled-args --root "$PWD" --module "$dir" --packages)"
+            if [ -z "$listed" ]; then
+                (cd "$dir" && go test ./... "$@")
+                continue
+            fi
+            unlisted=()
+            while IFS= read -r pkg; do
+                case $'\n'"$listed"$'\n' in
+                    *$'\n'"$pkg"$'\n'*) ;;
+                    *) unlisted+=("$pkg") ;;
+                esac
+            done < <(cd "$dir" && go list ./...)
+            if [ "${#unlisted[@]}" -gt 0 ]; then
+                (cd "$dir" && go test "${unlisted[@]}" "$@")
+            fi
+            while IFS= read -r pkg; do
+                skip=()
+                while IFS= read -r arg; do
+                    skip+=("$arg")
+                done < <(go run -C tools/tillr-gate . disabled-args --root "$PWD" --module "$dir" --package "$pkg")
+                (cd "$dir" && go test "${skip[@]}" "$pkg" "$@")
+            done <<< "$listed"
         fi
     done
 

@@ -58,6 +58,10 @@ type VerdictDigestCache struct {
 	ModFailed    map[string]bool
 	GoVersion    string
 	HasGoVersion bool
+	// Disabled is the active disabled-test set; ComputePackageVerdictDigest folds a
+	// package's listed selectors into its digest, so a verdict recorded while a test was
+	// disabled is not reused once it is re-enabled. Nil folds in nothing.
+	Disabled *DisabledTests
 }
 
 type dirHashKey struct {
@@ -596,6 +600,10 @@ func ComputePackageVerdictDigest(
 			return ""
 		}
 		fmt.Fprintf(hasher, "edge:%s:%s\n", edgeSpec, edgeDig)
+	}
+
+	if listed := cache.Disabled.For(graph.PkgInfo[importPath].Module, importPath); len(listed) > 0 {
+		fmt.Fprintf(hasher, "disabled:%s\n", strings.Join(listed, ","))
 	}
 
 	return hex.EncodeToString(hasher.Sum(nil))

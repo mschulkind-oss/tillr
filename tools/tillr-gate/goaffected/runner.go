@@ -644,7 +644,9 @@ type RunOptions struct {
 	Graph           *Graph
 	VerdictsIn      string
 	VerdictsOut     string
-	RunCommand      func(cmd []string, cwd string, env []string, onLine func(string)) (int, string, error)
+	// Disabled lists tests to exclude from every selected package; nil excludes nothing.
+	Disabled   *DisabledTests
+	RunCommand func(cmd []string, cwd string, env []string, onLine func(string)) (int, string, error)
 }
 
 // RunSelectedTests runs the selected Go test packages with sharding, caching,
@@ -694,6 +696,7 @@ func RunSelectedTests(root string, selection *Selection, opts RunOptions) (int, 
 		priorVerdicts = LoadPackageVerdictsFile(opts.VerdictsIn)
 	}
 	digestCache := NewVerdictDigestCache()
+	digestCache.Disabled = opts.Disabled
 	reusedIPs := make(map[string]bool)
 	var activeSelected []SelectedPackage
 	for _, item := range selected {
@@ -754,6 +757,7 @@ func RunSelectedTests(root string, selection *Selection, opts RunOptions) (int, 
 		digest     *string
 		runPattern string
 		hasPattern bool
+		skip       string
 		scratchKey string
 	}
 
@@ -763,13 +767,25 @@ func RunSelectedTests(root string, selection *Selection, opts RunOptions) (int, 
 
 	for _, item := range activeSelected {
 		tests, _ := ScanPackageTests(resolvedRoot, item.DirRel, item.TestFiles)
+		listedTop, listedSubs := opts.Disabled.Split(item.Module, item.ImportPath)
+		if item.ImportPath == "./..." {
+			listedTop, listedSubs = nil, nil
+		}
+		tests = withoutNames(tests, listedTop)
 		hasEdgeTest := containsString(tests, "TestEdgeInputs")
+		subSkip := subtestSkip(listedSubs)
 		if item.SelectedTests != nil {
 			var readerTests []string
 			for _, t := range item.SelectedTests {
 				if t != "TestEdgeInputs" {
 					readerTests = append(readerTests, t)
 				}
+			}
+			if kept := withoutNames(readerTests, listedTop); len(kept) == 0 && len(readerTests) > 0 {
+				// Every selected test is listed: nothing is left to run in this package.
+				continue
+			} else {
+				readerTests = kept
 			}
 			pkgDurations := durations[item.ImportPath]
 			subsetDurations := make(map[string]float64, len(readerTests))
@@ -818,6 +834,7 @@ func RunSelectedTests(root string, selection *Selection, opts RunOptions) (int, 
 						digest:     invocationDigest(item, bucket),
 						runPattern: pattern,
 						hasPattern: true,
+						skip:       subSkip,
 						scratchKey: fmt.Sprintf("%s#tests-%s-shard-%d-%s", item.ImportPath, subsetSig, shardIdx, bucketSig),
 					})
 				}
@@ -838,6 +855,7 @@ func RunSelectedTests(root string, selection *Selection, opts RunOptions) (int, 
 					digest:     invocationDigest(item, readerTests),
 					runPattern: pattern,
 					hasPattern: true,
+					skip:       subSkip,
 					scratchKey: fmt.Sprintf("%s#tests-%s", item.ImportPath, subsetSig),
 				})
 			}
@@ -898,6 +916,7 @@ func RunSelectedTests(root string, selection *Selection, opts RunOptions) (int, 
 						digest:     invocationDigest(item, bucket),
 						runPattern: pattern,
 						hasPattern: true,
+						skip:       subSkip,
 						scratchKey: fmt.Sprintf("%s#shard-%d", item.ImportPath, shardIdx),
 					})
 				}
@@ -906,6 +925,7 @@ func RunSelectedTests(root string, selection *Selection, opts RunOptions) (int, 
 					module:     item.Module,
 					items:      []SelectedPackage{item},
 					digest:     item.EdgeDigest,
+					skip:       fullSkip(opts.Disabled.For(item.Module, item.ImportPath)),
 					scratchKey: item.ImportPath,
 				})
 			}
@@ -964,6 +984,9 @@ func RunSelectedTests(root string, selection *Selection, opts RunOptions) (int, 
 		cmd := []string{"go", "test", "-json", "-timeout", "0", "-p", "1", "-parallel", "1"}
 		if inv.hasPattern {
 			cmd = append(cmd, "-run", inv.runPattern)
+		}
+		if inv.skip != "" {
+			cmd = append(cmd, "-skip", inv.skip)
 		}
 		for _, item := range inv.items {
 			cmd = append(cmd, item.ImportPath)
@@ -1259,4 +1282,19 @@ func RunSelectedTests(root string, selection *Selection, opts RunOptions) (int, 
 		body += "\n"
 	}
 	return rcAll, summary + body + triageBlock + failureSummary, evidence, nil
+}
+
+// withoutNames returns names less every name in drop, keeping the order; names itself when
+// drop is empty.
+func withoutNames(names, drop []string) []string {
+	if len(drop) == 0 {
+		return names
+	}
+	out := make([]string, 0, len(names))
+	for _, n := range names {
+		if !containsString(drop, n) {
+			out = append(out, n)
+		}
+	}
+	return out
 }
