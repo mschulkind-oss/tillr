@@ -107,8 +107,8 @@ func readEscalations(r *store.Reader) (map[string][]seatEscalation, error) {
 func readEscalationsForItems(r *store.Reader, itemIDs, runIDs []string) (map[string][]seatEscalation, error) {
 	return policy.ReadEscalationsForItems(r, itemIDs, runIDs)
 }
-func escalatedBackend(escalations []seatEscalation) string {
-	return policy.EscalatedBackend(escalations)
+func escalatedBackend(escalations []seatEscalation, p *Policy) string {
+	return policy.EscalatedBackend(escalations, p)
 }
 func (l *Loop) escalateSeat(ctx context.Context, itemID, runID, seat, from string) (string, error) {
 	return policy.EscalateSeat(ctx, l.cfg.Store, l.cfg.Policy, l.cfg.Now, itemID, runID, seat, from)

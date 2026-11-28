@@ -1023,11 +1023,19 @@ func NewLoop(cfg LoopConfig) (*Loop, error) {
 		if err := CheckQuotaGroups(loaded...); err != nil {
 			return nil, err
 		}
+		for i, lp := range loaded {
+			if i < len(cfg.PolicyProfiles) {
+				lp.Profile = cfg.PolicyProfiles[i]
+			}
+		}
 		l.cfg.Policy = p
 		l.profilePolicies = loaded
 		activeProfile := cfg.PolicyProfile
 		if activeProfile == "" && len(cfg.PolicyProfiles) > 0 {
 			activeProfile = cfg.PolicyProfiles[0]
+		}
+		if p.Profile == "" {
+			p.Profile = activeProfile
 		}
 		why := ""
 		if len(cfg.PolicyProfiles) > 1 {

@@ -38,6 +38,23 @@ type SeatEscalation struct {
 	RunID  string `json:"run_id"`
 	From   string `json:"from"`
 	To     string `json:"to"`
+	// Profile names the seat profile in force when the escalation was recorded.
+	// An escalation applies only while that profile is in force. A row with no
+	// profile (recorded before profile switching, or under --policy) applies
+	// while the policy in force defines the backend it moved to.
+	Profile string `json:"profile,omitempty"`
+}
+
+// AppliesTo reports whether the escalation holds under policy p.
+func (e SeatEscalation) AppliesTo(p *Policy) bool {
+	if e.Profile != "" {
+		return p != nil && e.Profile == p.Profile
+	}
+	if p == nil {
+		return true
+	}
+	_, ok := p.Backends[e.To]
+	return ok
 }
 
 // EscalationNext answers the backend after `from` on the seat's escalation list that the
@@ -132,12 +149,17 @@ func ReadEscalationsForItems(r *store.Reader, itemIDs, runIDs []string) (map[str
 	return out, nil
 }
 
-// EscalatedBackend answers the backend an item's latest escalation moved it to, or "".
-func EscalatedBackend(escalations []SeatEscalation) string {
-	if len(escalations) == 0 {
-		return ""
+// EscalatedBackend answers the backend an item's latest escalation that holds under
+// policy p moved it to, or "". An escalation recorded under another profile is skipped,
+// so an item escalated on a preferred profile starts at the fallback profile's own
+// backend for the seat, and escalates again on the preferred profile after switch-back.
+func EscalatedBackend(escalations []SeatEscalation, p *Policy) string {
+	for i := len(escalations) - 1; i >= 0; i-- {
+		if escalations[i].AppliesTo(p) {
+			return escalations[i].To
+		}
 	}
-	return escalations[len(escalations)-1].To
+	return ""
 }
 
 // EscalateSeat records a seat obstacle's move for an item from the run's backend to the
@@ -162,11 +184,13 @@ func EscalateSeat(ctx context.Context, storePath string, p *Policy, now func() t
 	}
 	tried := map[string]bool{from: true}
 	for _, e := range prior {
-		tried[e.From] = true
+		if e.AppliesTo(p) {
+			tried[e.From] = true
+		}
 	}
 	next := p.EscalationNext(seat, from, tried)
 	if next == "" {
 		return "", nil
 	}
-	return next, storelog.AppendJudgment(ctx, storePath, SeatEscalatedKind, "run", runID, SeatEscalation{ItemID: itemID, RunID: runID, From: from, To: next}, now().UTC())
+	return next, storelog.AppendJudgment(ctx, storePath, SeatEscalatedKind, "run", runID, SeatEscalation{ItemID: itemID, RunID: runID, From: from, To: next, Profile: p.Profile}, now().UTC())
 }

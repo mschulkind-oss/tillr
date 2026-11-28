@@ -247,6 +247,9 @@ type itemRow struct {
 	Express   bool
 	JudgeMode string
 	Designer  *lastDesigner
+	// Designers holds every saved designer for the item's document, one per
+	// (backend, route), so dispatch resumes the one the seat now maps to.
+	Designers []*lastDesigner
 	Workflow  string
 	// WorkflowArgs binds the item's own workflow's top-level args (item's workflow_args):
 	// nil for an item that supplies none, which is every document-declared item.
@@ -393,6 +396,10 @@ func planWithDetails(r *store.Reader, tick Pass, policy *Policy, questions Quest
 			if err != nil {
 				return nil, readFailure(err)
 			}
+			items[i].Designers, err = readDesignersFor(r, doc)
+			if err != nil {
+				return nil, readFailure(err)
+			}
 		}
 	}
 	var edges map[string][]itemEdge
@@ -438,7 +445,7 @@ func planWithDetails(r *store.Reader, tick Pass, policy *Policy, questions Quest
 	}
 	escalated := map[string]string{}
 	for id, list := range escalations {
-		escalated[id] = escalatedBackend(list)
+		escalated[id] = escalatedBackend(list, policy)
 	}
 	inputDecisions := map[string]Decision{}
 	inputDecisionsLoaded := map[string]bool{}
@@ -1997,12 +2004,13 @@ func (p *planner) decide(item itemRow, edges []itemEdge) Decision {
 		decision.SelectSeat = !decision.RunRequest.SessionTurn && !interrupted && repeated == nil && (!attempt.infrastructureFailure || retry != nil || decision.ConflictID != "")
 	}
 	if decision.DeskDocument != "" && decision.RunRequest != nil {
+		chosen := pickDesigner(item.Designer, item.Designers, decision.RunRequest)
 		previousAdapter := ""
-		if item.Designer != nil && p.policy != nil {
-			previousAdapter = p.policy.Backends[item.Designer.Backend].Adapter
+		if chosen != nil && p.policy != nil {
+			previousAdapter = p.policy.Backends[chosen.Backend].Adapter
 		}
-		decision.Designer = item.Designer
-		decision.DesignerSessionID, decision.DesignerReason = chooseDesigner(item.Designer, decision.RunRequest, p.at, previousAdapter)
+		decision.Designer = chosen
+		decision.DesignerSessionID, decision.DesignerReason = chooseDesigner(chosen, decision.RunRequest, p.at, previousAdapter)
 	}
 	if decision.RunRequest != nil {
 		stampDecisionRequest(decision, decision.RunRequest)
@@ -4163,4 +4171,15 @@ func (p *planner) publishedForOthers(row itemRow) []string {
 		}
 	}
 	return ids
+}
+
+// pickDesigner answers the saved designer whose backend and route match the request,
+// else the document's latest one (which chooseDesigner then reports as seat-changed).
+func pickDesigner(latest *lastDesigner, saved []*lastDesigner, req *run.Request) *lastDesigner {
+	for _, d := range saved {
+		if d.Backend == req.Backend && d.Model == req.Route() {
+			return d
+		}
+	}
+	return latest
 }

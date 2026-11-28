@@ -73,6 +73,48 @@ func readDesigner(r *store.Reader, doc string) (*lastDesigner, error) {
 	return &d, nil
 }
 
+// designerSep joins the parts of a keyed last_designers row. last_designers keeps one
+// row per document (the latest designer, which every older reader sees) and one row
+// per (document, backend, route) so a fallback profile's designer turn never
+// overwrites the preferred profile's saved session.
+const designerSep = "\x1f"
+
+func designerKey(doc, backend, route string) string {
+	return doc + designerSep + backend + designerSep + route
+}
+
+// readDesignerFor answers the saved designer for exactly this document, backend and
+// route, or nil. It does not fall back to the document's latest row.
+func readDesignerFor(r *store.Reader, doc, backend, route string) (*lastDesigner, error) {
+	return readDesigner(r, designerKey(doc, backend, route))
+}
+
+// readDesignersFor answers every keyed designer saved for the document.
+func readDesignersFor(r *store.Reader, doc string) ([]*lastDesigner, error) {
+	var exists bool
+	if err := r.QueryRow("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='last_designers')").Scan(&exists); err != nil || !exists {
+		return nil, err
+	}
+	rows, err := r.Query("SELECT record FROM last_designers WHERE substr(document,1,?)=? ORDER BY document", len(doc+designerSep), doc+designerSep)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*lastDesigner
+	for rows.Next() {
+		var raw string
+		if err := rows.Scan(&raw); err != nil {
+			return nil, err
+		}
+		var d lastDesigner
+		if err := json.Unmarshal([]byte(raw), &d); err != nil {
+			return nil, err
+		}
+		out = append(out, &d)
+	}
+	return out, rows.Err()
+}
+
 func itemIsComment(id string) bool  { return item.IsCommentItem(id) }
 func commentDesk(doc string) string { return "desk-" + item.CommentDocumentName(doc) }
 
@@ -382,9 +424,19 @@ func (l *Loop) recordDesigner(ctx context.Context, decision Decision, rec run.Re
 	}
 	defer s.Close()
 	return s.WriteTx(ctx, func(tx *store.Tx) error {
-		previous, err := readDesigner(tx.Reader(), doc)
+		previous, err := readDesignerFor(tx.Reader(), doc, d.Backend, d.Model)
 		if err != nil {
 			return err
+		}
+		if previous == nil {
+			// A row saved before keyed rows existed is the document's only entry.
+			legacy, err := readDesigner(tx.Reader(), doc)
+			if err != nil {
+				return err
+			}
+			if legacy != nil && legacy.Backend == d.Backend && legacy.Model == d.Model {
+				previous = legacy
+			}
 		}
 		if previous != nil && previous.SessionID == d.SessionID {
 			d.Compacted = d.Compacted || previous.Compacted
@@ -393,8 +445,12 @@ func (l *Loop) recordDesigner(ctx context.Context, decision Decision, rec run.Re
 		if err != nil {
 			return err
 		}
-		_, err = tx.Exec("INSERT INTO last_designers(document,record) VALUES(?,?) ON CONFLICT(document) DO UPDATE SET record=excluded.record", doc, string(raw))
-		return err
+		for _, key := range []string{doc, designerKey(doc, d.Backend, d.Model)} {
+			if _, err = tx.Exec("INSERT INTO last_designers(document,record) VALUES(?,?) ON CONFLICT(document) DO UPDATE SET record=excluded.record", key, string(raw)); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 }
 

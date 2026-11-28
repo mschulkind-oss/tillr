@@ -145,6 +145,7 @@ func RefreshPolicy(root, policyRef string, now func() time.Time, mu *sync.RWMute
 	next.DiskHash, next.Refusal, next.At = hash, refusal, now().UTC()
 	if err == nil {
 		p.Root = root
+		p.Profile = old.Profile
 		next.Hash, next.Content = hash, string(raw)
 	}
 	change := PolicyChange{At: next.At, OldHash: old.DiskHash, NewHash: hash, InForceHash: next.Hash, Refusal: refusal}

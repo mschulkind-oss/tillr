@@ -234,7 +234,7 @@ func (l *Loop) retireDesigners(ctx context.Context) error {
 		if !exists {
 			return nil
 		}
-		rows, err := r.Query("SELECT document FROM last_designers ORDER BY document")
+		rows, err := r.Query("SELECT document FROM last_designers WHERE instr(document, char(31))=0 ORDER BY document")
 		if err != nil {
 			return err
 		}
@@ -301,7 +301,7 @@ func (l *Loop) retireDesigners(ctx context.Context) error {
 	defer writable.Close()
 	return writable.WriteTx(ctx, func(tx *store.Tx) error {
 		for _, doc := range retired {
-			if _, err := tx.Exec("DELETE FROM last_designers WHERE document=?", doc); err != nil {
+			if _, err := tx.Exec("DELETE FROM last_designers WHERE document=? OR substr(document,1,?)=?", doc, len(doc+designerSep), doc+designerSep); err != nil {
 				return err
 			}
 		}

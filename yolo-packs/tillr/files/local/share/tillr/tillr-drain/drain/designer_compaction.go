@@ -127,6 +127,11 @@ func (l *Loop) ensureDesignerCompaction(ctx context.Context, d Decision) (*compa
 			return fmt.Errorf("comment item %s has no batch", d.ItemID)
 		}
 		previous, e = readDesigner(r, batch.Document)
+		if e == nil && d.RunRequest != nil {
+			if keyed, ke := readDesignerFor(r, batch.Document, d.RunRequest.Backend, d.RunRequest.Route()); ke != nil || keyed != nil {
+				previous, e = keyed, ke
+			}
+		}
 		return e
 	})
 	s.Close()

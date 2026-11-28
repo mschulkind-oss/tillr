@@ -242,7 +242,7 @@ func TestReadDispatchDeclinesAndEscalationsForItems(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if len(esc) != 1 || len(esc["item-open"]) != 2 || EscalatedBackend(esc["item-open"]) != "claude-opus" {
+		if len(esc) != 1 || len(esc["item-open"]) != 2 || EscalatedBackend(esc["item-open"], nil) != "claude-opus" {
 			t.Errorf("escalations = %+v, want item-open -> claude-opus (excluding item-closed)", esc)
 		}
 		return nil

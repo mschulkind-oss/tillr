@@ -113,7 +113,7 @@ func readLastDesigner(r *store.Reader, doc string) (*designerView, error) {
 func (s *server) designsPayload(r *store.Reader, req *http.Request) (any, *apiFailure) {
 	out := designsData{Designs: []designView{}}
 	paths := map[string]bool{}
-	for _, query := range []string{"SELECT document FROM last_designers", "SELECT document FROM comment_batches", "SELECT design_doc FROM items WHERE design_doc IS NOT NULL AND design_doc<>''"} {
+	for _, query := range []string{"SELECT document FROM last_designers WHERE instr(document, char(31))=0", "SELECT document FROM comment_batches", "SELECT design_doc FROM items WHERE design_doc IS NOT NULL AND design_doc<>''"} {
 		rows, err := r.Query(query)
 		if isMissingTable(err) {
 			continue

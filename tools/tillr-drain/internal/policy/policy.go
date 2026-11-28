@@ -45,6 +45,9 @@ type Policy struct {
 	SeatPurposes  map[string]string `json:"seat_purposes,omitempty"`
 	Ref           string            `json:"-"` // Source path, when loaded from a file.
 	Root          string            `json:"-"` // Root repository for relative adapter paths.
+	// Profile is the seat-profile name this policy was loaded as, or "" for a policy
+	// named by path. The loop sets it; it is never read from the document.
+	Profile string `json:"-"`
 
 	DefaultBackend string `json:"default_backend"`
 	// Seats maps each seat the item model defines (seat.go) to the backend that fills it. It is where a role reaches a model: an item names the seat and never a model
