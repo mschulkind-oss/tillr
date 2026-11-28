@@ -75,7 +75,16 @@ func readInfrastructureClosedFrom(r *store.Reader, byRun map[string]*pendingWork
 			rows.Close()
 			return nil, err
 		}
+		if backend == "command" {
+			continue
+		}
+		if backend != "" {
+			if _, seen := candidates[backend]; seen {
+				continue
+			}
+		}
 		o.Saved = true
+		backendOutcomeUnmarshals.Add(1)
 		if err := json.Unmarshal(raw, &o.Rec); err != nil {
 			o.Rec = run.Record{RunID: runID, Backend: backend}
 		}

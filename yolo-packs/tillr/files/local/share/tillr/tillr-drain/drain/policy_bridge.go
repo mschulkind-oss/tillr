@@ -103,8 +103,8 @@ func (l *Loop) refreshPolicy() error {
 func readEscalations(r *store.Reader) (map[string][]seatEscalation, error) {
 	return policy.ReadEscalations(r)
 }
-func readEscalationsForItems(r *store.Reader, itemIDs []string) (map[string][]seatEscalation, error) {
-	return policy.ReadEscalationsForItems(r, itemIDs)
+func readEscalationsForItems(r *store.Reader, itemIDs, runIDs []string) (map[string][]seatEscalation, error) {
+	return policy.ReadEscalationsForItems(r, itemIDs, runIDs)
 }
 func escalatedBackend(escalations []seatEscalation) string {
 	return policy.EscalatedBackend(escalations)

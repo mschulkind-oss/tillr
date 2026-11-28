@@ -2,6 +2,8 @@
 package drain
 
 import (
+	"strings"
+
 	"github.com/mschulkind-oss/tillr-drain/internal/policy"
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/store"
@@ -51,9 +53,24 @@ func readPriorRunsWithOutcomes(r *store.Reader, byRun map[string]*pendingWork, c
 }
 
 func readPriorRunsWithOutcomesForItems(r *store.Reader, itemIDs, runIDs []string, byRun map[string]*pendingWork, latestFinished map[string]string) (map[string][]priorRun, error) {
-	outcomes, _, err := policy.QueryBackendOutcomesForRuns(r, runIDs)
+	outcomes, unsaved, err := policy.QueryBackendOutcomesForRuns(r, runIDs)
 	if err != nil {
 		return nil, err
+	}
+	if unsaved > 0 {
+		var unsavedSeqs []int64
+		for _, o := range outcomes {
+			if !o.Saved {
+				unsavedSeqs = append(unsavedSeqs, o.Seq)
+			}
+		}
+		offered, err := queryOfferedForSeqs(r, unsavedSeqs)
+		if err != nil {
+			return nil, err
+		}
+		if err := classifyUnsavedBackendOutcomes(r, outcomes, offered, byRun); err != nil {
+			return nil, err
+		}
 	}
 	return policy.ReadPriorRunsForItems(r, itemIDs, runIDs, outcomes, latestFinished, func(rec run.Record, saved bool, class AttemptClass) (bool, error) {
 		piErr := false
@@ -67,4 +84,41 @@ func readPriorRunsWithOutcomesForItems(r *store.Reader, itemIDs, runIDs []string
 		}
 		return piErr && isDesignWork(byRun[rec.RunID]), nil
 	})
+}
+
+func queryOfferedForSeqs(r *store.Reader, seqs []int64) (map[int64]bool, error) {
+	offered := map[int64]bool{}
+	if len(seqs) == 0 {
+		return offered, nil
+	}
+	const chunk = 400
+	for start := 0; start < len(seqs); start += chunk {
+		end := start + chunk
+		if end > len(seqs) {
+			end = len(seqs)
+		}
+		batch := seqs[start:end]
+		args := make([]any, 0, 1+len(batch))
+		args = append(args, callOffered)
+		for _, seq := range batch {
+			args = append(args, seq)
+		}
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(batch)), ",")
+		rows, err := r.Query(`SELECT json_extract(payload,'$.terminal_seq') FROM events WHERE kind=? AND json_valid(payload) AND json_extract(payload,'$.terminal_seq') IN (`+placeholders+`)`, args...)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var seq int64
+			if err := rows.Scan(&seq); err == nil && seq > 0 {
+				offered[seq] = true
+			}
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		rows.Close()
+	}
+	return offered, nil
 }

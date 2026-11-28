@@ -103,18 +103,29 @@ func ReadEscalations(r *store.Reader) (map[string][]SeatEscalation, error) {
 }
 
 // ReadEscalationsForItems reads seat escalations for the named items via events_by_object.
-func ReadEscalationsForItems(r *store.Reader, itemIDs []string) (map[string][]SeatEscalation, error) {
+// SeatEscalatedKind is recorded on object_type="run" (object_id=runID), so runIDs
+// must be included alongside itemIDs.
+func ReadEscalationsForItems(r *store.Reader, itemIDs, runIDs []string) (map[string][]SeatEscalation, error) {
 	out := map[string][]SeatEscalation{}
 	if len(itemIDs) == 0 {
 		return out, nil
 	}
-	events, err := r.EventsForObjects(0, itemIDs, SeatEscalatedKind)
+	itemSet := make(map[string]bool, len(itemIDs))
+	objectIDs := make([]string, 0, len(itemIDs)+len(runIDs))
+	for _, id := range itemIDs {
+		if id != "" {
+			itemSet[id] = true
+			objectIDs = append(objectIDs, id)
+		}
+	}
+	objectIDs = append(objectIDs, runIDs...)
+	events, err := r.EventsForObjects(0, objectIDs, SeatEscalatedKind)
 	if err != nil {
 		return nil, err
 	}
 	for _, ev := range events {
 		var e SeatEscalation
-		if json.Unmarshal(ev.Payload, &e) == nil && e.ItemID != "" {
+		if json.Unmarshal(ev.Payload, &e) == nil && e.ItemID != "" && itemSet[e.ItemID] {
 			out[e.ItemID] = append(out[e.ItemID], e)
 		}
 	}

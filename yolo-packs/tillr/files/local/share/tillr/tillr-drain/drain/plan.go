@@ -432,7 +432,7 @@ func planWithDetails(r *store.Reader, tick Pass, policy *Policy, questions Quest
 			}
 		}
 	}
-	escalations, err := readEscalationsForItems(r, openItemIDs)
+	escalations, err := readEscalationsForItems(r, openItemIDs, openRunIDs)
 	if err != nil {
 		return nil, readFailure(err)
 	}
@@ -2907,6 +2907,33 @@ func readOpenRunIDs(r *store.Reader, itemIDs []string) ([]string, error) {
 				}
 				sRows.Close()
 			}
+
+			// Judge refusals and judge requests are recorded on the judge run's object_id,
+			// which may not appear in runs, dispatches, or dispatch.started.
+			for _, evKind := range []string{RefusalKind, judgeRequestKind} {
+				jArgs := make([]any, 0, 1+len(batch))
+				jArgs = append(jArgs, evKind)
+				jArgs = append(jArgs, args...)
+				jRows, err := r.Query(`SELECT object_id FROM events WHERE kind=? AND object_type='run' AND json_valid(payload) AND json_extract(payload,'$.item_id') IN (`+placeholders+`)`, jArgs...)
+				if err != nil {
+					return nil, err
+				}
+				for jRows.Next() {
+					var id sql.NullString
+					if err := jRows.Scan(&id); err != nil {
+						jRows.Close()
+						return nil, err
+					}
+					if id.Valid {
+						add(id.String)
+					}
+				}
+				if err := jRows.Err(); err != nil {
+					jRows.Close()
+					return nil, err
+				}
+				jRows.Close()
+			}
 		}
 	}
 	lRows, err := r.Query(`SELECT run_id FROM lanes WHERE run_id IS NOT NULL AND run_id != ''`)
@@ -2927,6 +2954,44 @@ func readOpenRunIDs(r *store.Reader, itemIDs []string) ([]string, error) {
 			return nil, err
 		}
 		lRows.Close()
+	}
+	if len(out) > 0 {
+		baseRunIDs := append([]string(nil), out...)
+		const chunk = 400
+		for start := 0; start < len(baseRunIDs); start += chunk {
+			end := start + chunk
+			if end > len(baseRunIDs) {
+				end = len(baseRunIDs)
+			}
+			batch := baseRunIDs[start:end]
+			placeholders := strings.TrimSuffix(strings.Repeat("?,", len(batch)), ",")
+			for _, evKind := range []string{RefusalKind, judgeRequestKind} {
+				wArgs := make([]any, 0, 1+len(batch))
+				wArgs = append(wArgs, evKind)
+				for _, id := range batch {
+					wArgs = append(wArgs, id)
+				}
+				wRows, err := r.Query(`SELECT object_id FROM events WHERE kind=? AND object_type='run' AND json_valid(payload) AND json_extract(payload,'$.writer_run_id') IN (`+placeholders+`)`, wArgs...)
+				if err != nil {
+					return nil, err
+				}
+				for wRows.Next() {
+					var id sql.NullString
+					if err := wRows.Scan(&id); err != nil {
+						wRows.Close()
+						return nil, err
+					}
+					if id.Valid {
+						add(id.String)
+					}
+				}
+				if err := wRows.Err(); err != nil {
+					wRows.Close()
+					return nil, err
+				}
+				wRows.Close()
+			}
+		}
 	}
 	return out, nil
 }

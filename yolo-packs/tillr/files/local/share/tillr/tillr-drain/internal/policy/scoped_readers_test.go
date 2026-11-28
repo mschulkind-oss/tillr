@@ -200,6 +200,22 @@ func TestReadDispatchDeclinesAndEscalationsForItems(t *testing.T) {
 		if err := appendItemEv(tx, "item-open", SeatEscalatedKind, SeatEscalation{ItemID: "item-open", From: "codex", To: "claude"}); err != nil {
 			return err
 		}
+		runOpen := "run-open-1"
+		runOpenBody, err := json.Marshal(SeatEscalation{ItemID: "item-open", RunID: runOpen, From: "claude", To: "claude-opus"})
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Append(event.Event{Kind: SeatEscalatedKind, ObjectType: "run", ObjectID: &runOpen, Payload: runOpenBody, At: at}); err != nil {
+			return err
+		}
+		runClosed := "run-closed-1"
+		runClosedBody, err := json.Marshal(SeatEscalation{ItemID: "item-closed", RunID: runClosed, From: "codex", To: "claude"})
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Append(event.Event{Kind: SeatEscalatedKind, ObjectType: "run", ObjectID: &runClosed, Payload: runClosedBody, At: at}); err != nil {
+			return err
+		}
 		return appendItemEv(tx, "item-closed", SeatEscalatedKind, SeatEscalation{ItemID: "item-closed", From: "codex", To: "claude"})
 	}); err != nil {
 		t.Fatal(err)
@@ -218,16 +234,16 @@ func TestReadDispatchDeclinesAndEscalationsForItems(t *testing.T) {
 			t.Errorf("declines = %+v, want latest non-empty WaitingOn for item-open", decl)
 		}
 
-		emptyEsc, err := ReadEscalationsForItems(r, nil)
+		emptyEsc, err := ReadEscalationsForItems(r, nil, nil)
 		if err != nil || len(emptyEsc) != 0 {
 			t.Fatalf("empty escalations = %v, %v", emptyEsc, err)
 		}
-		esc, err := ReadEscalationsForItems(r, []string{"item-open"})
+		esc, err := ReadEscalationsForItems(r, []string{"item-open"}, []string{"run-open-1", "run-closed-1"})
 		if err != nil {
 			return err
 		}
-		if len(esc) != 1 || EscalatedBackend(esc["item-open"]) != "claude" {
-			t.Errorf("escalations = %+v, want item-open -> claude", esc)
+		if len(esc) != 1 || len(esc["item-open"]) != 2 || EscalatedBackend(esc["item-open"]) != "claude-opus" {
+			t.Errorf("escalations = %+v, want item-open -> claude-opus (excluding item-closed)", esc)
 		}
 		return nil
 	}); err != nil {

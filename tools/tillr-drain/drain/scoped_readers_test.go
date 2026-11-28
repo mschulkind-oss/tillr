@@ -420,3 +420,91 @@ func TestRunLinkMissingHoldUsesItemScopedConflicts(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestReadOpenRunIDsIncludesJudgeRefusalsAndRequests(t *testing.T) {
+	ctx := context.Background()
+	s := openDrainScopedTestStore(t)
+	at := time.Date(2026, 11, 28, 12, 0, 0, 0, time.UTC)
+
+	if err := s.WriteTx(ctx, func(tx *store.Tx) error {
+		if _, err := tx.Exec(`INSERT INTO runs(run_id, item_id, lane_id, backend, state, started_at, finished_at) VALUES ('run-open-w1', 'item-open', 'lane-1', 'pi', 'exited', ?, ?), ('run-closed-w1', 'item-closed', 'lane-1', 'pi', 'exited', ?, ?)`, at.UnixMilli(), at.UnixMilli(), at.UnixMilli(), at.UnixMilli()); err != nil {
+			return err
+		}
+		appendRunEv := func(runID, kind string, payload any) error {
+			body, err := json.Marshal(payload)
+			if err != nil {
+				return err
+			}
+			id := runID
+			_, err = tx.Append(event.Event{Kind: kind, ObjectType: "run", ObjectID: &id, Payload: body, At: at})
+			return err
+		}
+		if err := appendRunEv("judge-by-item", RefusalKind, map[string]any{"item_id": "item-open", "step": ReasonEvalFailed}); err != nil {
+			return err
+		}
+		if err := appendRunEv("judge-by-writer", RefusalKind, map[string]any{"writer_run_id": "run-open-w1", "step": ReasonEvalFailed}); err != nil {
+			return err
+		}
+		if err := appendRunEv("judge-req-open", judgeRequestKind, map[string]any{"item_id": "item-open", "writer_run_id": "run-open-w1"}); err != nil {
+			return err
+		}
+		return appendRunEv("judge-closed", RefusalKind, map[string]any{"item_id": "item-closed", "writer_run_id": "run-closed-w1", "step": ReasonEvalFailed})
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.ReadTx(ctx, func(r *store.Reader) error {
+		got, err := readOpenRunIDs(r, []string{"item-open"})
+		if err != nil {
+			return err
+		}
+		have := map[string]bool{}
+		for _, id := range got {
+			have[id] = true
+		}
+		for _, want := range []string{"run-open-w1", "judge-by-item", "judge-by-writer", "judge-req-open"} {
+			if !have[want] {
+				t.Errorf("readOpenRunIDs missing %q: %v", want, got)
+			}
+		}
+		if have["judge-closed"] || have["run-closed-w1"] {
+			t.Errorf("readOpenRunIDs leaked closed item runs: %v", got)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReadPriorRunsWithOutcomesForItemsClassifiesUnsaved(t *testing.T) {
+	ctx := context.Background()
+	s := openDrainScopedTestStore(t)
+	at := time.Date(2026, 11, 28, 12, 0, 0, 0, time.UTC)
+
+	if err := s.WriteTx(ctx, func(tx *store.Tx) error {
+		return applyTerminal(tx, run.Record{
+			RunID:      "run-open-fail",
+			ItemID:     "item-open",
+			LaneID:     "lane-1",
+			Backend:    "pi-design",
+			State:      run.StateFailedToStart,
+			StartedAt:  at.Format(time.RFC3339),
+			FinishedAt: at.Add(time.Second).Format(time.RFC3339),
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.ReadTx(ctx, func(r *store.Reader) error {
+		priors, err := readPriorRunsWithOutcomesForItems(r, []string{"item-open"}, []string{"run-open-fail"}, nil, nil)
+		if err != nil {
+			return err
+		}
+		if len(priors["item-open"]) != 1 || priors["item-open"][0].Class != AttemptInfrastructure {
+			t.Fatalf("priors = %+v, want AttemptInfrastructure for unsaved failed-to-start run", priors["item-open"])
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}

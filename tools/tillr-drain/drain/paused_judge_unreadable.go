@@ -72,35 +72,88 @@ func reopenPausedJudgeUnreadable(r *store.Reader, s *pendingHistoryState) error 
 	return err
 }
 
+func reopenPausedJudgeUnreadableForItems(r *store.Reader, s *pendingHistoryState, itemIDs []string) error {
+	if len(itemIDs) == 0 {
+		return nil
+	}
+	_, _, err := reopenPausedJudgeUnreadableSnapshotForItems(r, s, true, itemIDs)
+	return err
+}
+
 // Before paused mid-node runs were retained on pause, a paused verify or judge
 // run with no eval.output was settled as a judge-unreadable refusal and marked
 // examined. While that paused run is still the item's latest run and held only
 // as judge-unreadable (excluding quota pauses), reopen its pending work so the
 // planner and loop resume it as paused work once a lane is available.
 func reopenPausedJudgeUnreadableSnapshot(r *store.Reader, s *pendingHistoryState, alreadyCloned bool) (*pendingHistoryState, []string, error) {
+	return reopenPausedJudgeUnreadableSnapshotForItems(r, s, alreadyCloned, nil)
+}
+
+func reopenPausedJudgeUnreadableSnapshotForItems(r *store.Reader, s *pendingHistoryState, alreadyCloned bool, scopeItemIDs []string) (*pendingHistoryState, []string, error) {
 	if r == nil || s == nil {
 		return s, nil, nil
 	}
-	rows, err := r.Query(`SELECT DISTINCT item_id FROM runs WHERE state = ? AND item_id IS NOT NULL AND item_id != ''`, run.StatePaused)
 	var candidateItems []string
-	if err != nil {
-		if !isMissingSchemaErr(err) {
-			return s, nil, err
-		}
-	} else {
-		for rows.Next() {
-			var id string
-			if err := rows.Scan(&id); err != nil {
+	if scopeItemIDs == nil {
+		rows, err := r.Query(`SELECT DISTINCT item_id FROM runs WHERE state = ? AND item_id IS NOT NULL AND item_id != ''`, run.StatePaused)
+		if err != nil {
+			if !isMissingSchemaErr(err) {
+				return s, nil, err
+			}
+		} else {
+			for rows.Next() {
+				var id string
+				if err := rows.Scan(&id); err != nil {
+					rows.Close()
+					return s, nil, err
+				}
+				candidateItems = append(candidateItems, id)
+			}
+			if err := rows.Err(); err != nil {
 				rows.Close()
 				return s, nil, err
 			}
-			candidateItems = append(candidateItems, id)
-		}
-		if err := rows.Err(); err != nil {
 			rows.Close()
-			return s, nil, err
 		}
-		rows.Close()
+	} else {
+		seen := map[string]bool{}
+		const chunk = 400
+		for start := 0; start < len(scopeItemIDs); start += chunk {
+			end := start + chunk
+			if end > len(scopeItemIDs) {
+				end = len(scopeItemIDs)
+			}
+			batch := scopeItemIDs[start:end]
+			args := make([]any, 0, 1+len(batch))
+			args = append(args, run.StatePaused)
+			for _, id := range batch {
+				args = append(args, id)
+			}
+			placeholders := strings.TrimSuffix(strings.Repeat("?,", len(batch)), ",")
+			rows, err := r.Query(`SELECT DISTINCT item_id FROM runs WHERE state = ? AND item_id IN (`+placeholders+`)`, args...)
+			if err != nil {
+				if isMissingSchemaErr(err) {
+					break
+				}
+				return s, nil, err
+			}
+			for rows.Next() {
+				var id string
+				if err := rows.Scan(&id); err != nil {
+					rows.Close()
+					return s, nil, err
+				}
+				if !seen[id] {
+					seen[id] = true
+					candidateItems = append(candidateItems, id)
+				}
+			}
+			if err := rows.Err(); err != nil {
+				rows.Close()
+				return s, nil, err
+			}
+			rows.Close()
+		}
 	}
 
 	hadReopened := false

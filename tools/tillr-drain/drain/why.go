@@ -982,6 +982,13 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 				if !slices.Contains(row.WaitingOn, waiting.Waiter) {
 					row.WaitingOn = append(row.WaitingOn, waiting.Waiter)
 				}
+				if depID, ok := strings.CutPrefix(waiting.Waiter, "item:"); ok {
+					if _, known := states[depID]; !known {
+						if err := readMissingItemStates(r, states, []string{depID}); err != nil {
+							return answer, err
+						}
+					}
+				}
 				if waiting.Waiter == "owner" {
 					row.Class = "needs you"
 				} else if depID, ok := strings.CutPrefix(waiting.Waiter, "item:"); ok && (states[depID] == def.Closed || states[depID] == "closed") {

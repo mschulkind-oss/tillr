@@ -159,10 +159,12 @@ func readPendingHistoryForItems(r *store.Reader, itemIDs, runIDs []string) (map[
 	if err != nil {
 		return nil, nil, err
 	}
-	if len(events) == 0 {
-		return state.works, state.byRun, nil
+	if len(events) > 0 {
+		if err := foldPendingHistory(r, 0, state, events); err != nil {
+			return nil, nil, err
+		}
 	}
-	if err := foldPendingHistory(r, 0, state, events); err != nil {
+	if err := reopenPausedJudgeUnreadableForItems(r, state, itemIDs); err != nil {
 		return nil, nil, err
 	}
 	return state.works, state.byRun, nil
